@@ -28,49 +28,22 @@ A feature is not complete until Codex explicitly returns:
 
 STATUS: APPROVED
 
-### Branch & Pull Request Workflow
-
-Antigravity must commit code into an isolated task branch and submit a Pull Request for review:
-
-1. **Branch Naming**:
-   - `agy/<task-id>-<slug>`
-   - Examples:
-     - `agy/task-001-foundation`
-     - `agy/task-002-products`
-     - `agy/task-003-ai-analysis`
-     - `agy/task-004-content-engine`
-
-2. **Commit Convention**:
-   - `feat: implement TASK-<xxx> <description>`
-   - Example:
-     ```bash
-     git add .
-     git commit -m "feat: implement TASK-001 project foundation"
-     ```
-
-3. **Push to Remote**:
-   - `git push -u origin agy/<task-id>-<slug>`
-
-4. **Open Pull Request**:
-   - Open Pull Request targeting `main`: `agy/<task-id>-<slug>` → `main`
-   - **DO NOT MERGE** the Pull Request. Merging requires Codex review and approval (`STATUS: APPROVED`).
-
 ## Codex Responsibilities
 
 Codex owns:
 
-- requirements analysis
-- architecture
-- module boundaries
-- database design
-- API contracts
-- frontend/backend integration design
-- security requirements
-- task decomposition
-- acceptance criteria
-- code review
-- architecture review
-- final approval
+* requirements analysis
+* architecture
+* module boundaries
+* database design
+* API contracts
+* frontend/backend integration design
+* security requirements
+* task decomposition
+* acceptance criteria
+* code review
+* architecture review
+* final approval
 
 Before creating a task, Codex must inspect the current repository and relevant documentation.
 
@@ -82,9 +55,9 @@ Antigravity implements tasks created by Codex.
 
 Before implementation, read:
 
-- AGENTS.md
-- relevant files under /docs
-- the assigned /tasks/TASK-XXX.md
+* AGENTS.md
+* relevant files under /docs
+* the assigned /tasks/TASK-XXX.md
 
 Antigravity must not redesign major architecture unless explicitly requested by Codex.
 
@@ -92,10 +65,10 @@ Antigravity must report deviations from the task specification.
 
 Before declaring implementation ready for review, run all relevant:
 
-- tests
-- type checks
-- lint checks
-- builds
+* tests
+* type checks
+* lint checks
+* builds
 
 ## Source of Truth
 
@@ -118,19 +91,19 @@ Codex creates tasks under:
 
 Each task must contain:
 
-- Objective
-- Context
-- Required implementation
-- Expected files
-- Database changes
-- API changes
-- Frontend changes
-- Backend changes
-- Security requirements
-- Edge cases
-- Acceptance criteria
-- Test plan
-- Out of scope
+* Objective
+* Context
+* Required implementation
+* Expected files
+* Database changes
+* API changes
+* Frontend changes
+* Backend changes
+* Security requirements
+* Edge cases
+* Acceptance criteria
+* Test plan
+* Out of scope
 
 ## Review Rules
 
@@ -144,19 +117,19 @@ ACTUAL IMPLEMENTATION
 
 Review at minimum:
 
-- architecture
-- frontend
-- backend
-- database
-- API contracts
-- validation
-- authentication
-- authorization
-- security
-- error handling
-- concurrency when relevant
-- tests
-- maintainability
+* architecture
+* frontend
+* backend
+* database
+* API contracts
+* validation
+* authentication
+* authorization
+* security
+* error handling
+* concurrency when relevant
+* tests
+* maintainability
 
 Review result must be either:
 
@@ -179,15 +152,15 @@ CRITICAL and HIGH issues must be fixed before approval.
 
 Never:
 
-- hard-code secrets
-- fake successful API responses
-- claim tests passed without running them
-- invent third-party API endpoints
-- bypass platform rate limits
-- implement fake engagement
-- implement account-spam systems
-- bypass platform moderation
-- use unofficial APIs where an appropriate official API is available
+* hard-code secrets
+* fake successful API responses
+* claim tests passed without running them
+* invent third-party API endpoints
+* bypass platform rate limits
+* implement fake engagement
+* implement account-spam systems
+* bypass platform moderation
+* use unofficial APIs where an appropriate official API is available
 
 Use OAuth for social account connections.
 

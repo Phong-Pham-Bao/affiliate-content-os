@@ -6,16 +6,15 @@ import {
   type AppConfig,
   type LogLevel,
   type NodeEnv,
-  type RawEnvironment,
 } from './types.js';
 
 function validateNodeEnv(
-  rawEnv: RawEnvironment,
+  rawEnv: Record<string, unknown>,
   issues: ConfigurationIssue[],
 ): NodeEnv | undefined {
   const value = rawEnv['NODE_ENV'];
 
-  if (value === undefined || value === '') {
+  if (value === undefined || value === '' || (typeof value === 'string' && value.trim() === '')) {
     issues.push({
       field: 'NODE_ENV',
       message: 'NODE_ENV is required and must be development, test, or production',
@@ -23,7 +22,7 @@ function validateNodeEnv(
     return undefined;
   }
 
-  if (!(ALLOWED_NODE_ENVS as readonly string[]).includes(value)) {
+  if (typeof value !== 'string' || !(ALLOWED_NODE_ENVS as readonly string[]).includes(value)) {
     issues.push({
       field: 'NODE_ENV',
       message: 'Must be one of: development, test, production',
@@ -34,14 +33,14 @@ function validateNodeEnv(
   return value as NodeEnv;
 }
 
-function validateLogLevel(rawEnv: RawEnvironment, issues: ConfigurationIssue[]): LogLevel {
+function validateLogLevel(rawEnv: Record<string, unknown>, issues: ConfigurationIssue[]): LogLevel {
   const value = rawEnv['LOG_LEVEL'];
 
   if (value === undefined) {
     return DEFAULT_LOG_LEVEL;
   }
 
-  if (!(ALLOWED_LOG_LEVELS as readonly string[]).includes(value)) {
+  if (typeof value !== 'string' || !(ALLOWED_LOG_LEVELS as readonly string[]).includes(value)) {
     issues.push({
       field: 'LOG_LEVEL',
       message: 'Must be one of: trace, debug, info, warn, error, fatal',
@@ -53,13 +52,21 @@ function validateLogLevel(rawEnv: RawEnvironment, issues: ConfigurationIssue[]):
 }
 
 function validateAppBaseUrl(
-  rawEnv: RawEnvironment,
+  rawEnv: Record<string, unknown>,
   nodeEnv: NodeEnv | undefined,
   issues: ConfigurationIssue[],
 ): string | undefined {
   const value = rawEnv['APP_BASE_URL'];
 
   if (value === undefined) {
+    return undefined;
+  }
+
+  if (typeof value !== 'string' || value.trim() === '' || value !== value.trim()) {
+    issues.push({
+      field: 'APP_BASE_URL',
+      message: 'Must be a valid absolute HTTP or HTTPS URL',
+    });
     return undefined;
   }
 
@@ -120,13 +127,29 @@ function validateAppBaseUrl(
 /**
  * Loads and validates configuration from an injected plain environment record.
  * Never reads process.env directly at import time.
+ * Rejects missing, null, array, and non-record input without leaking supplied values.
  */
-export function loadConfig(rawEnv: RawEnvironment): AppConfig {
+export function loadConfig(rawEnv?: unknown): AppConfig {
+  if (
+    rawEnv === undefined ||
+    rawEnv === null ||
+    typeof rawEnv !== 'object' ||
+    Array.isArray(rawEnv)
+  ) {
+    throw new ConfigurationError([
+      {
+        field: 'environment',
+        message: 'Environment must be a plain object record',
+      },
+    ]);
+  }
+
+  const envRecord = rawEnv as Record<string, unknown>;
   const issues: ConfigurationIssue[] = [];
 
-  const nodeEnv = validateNodeEnv(rawEnv, issues);
-  const logLevel = validateLogLevel(rawEnv, issues);
-  const appBaseUrl = validateAppBaseUrl(rawEnv, nodeEnv, issues);
+  const nodeEnv = validateNodeEnv(envRecord, issues);
+  const logLevel = validateLogLevel(envRecord, issues);
+  const appBaseUrl = validateAppBaseUrl(envRecord, nodeEnv, issues);
 
   if (issues.length > 0 || !nodeEnv) {
     throw new ConfigurationError(issues);

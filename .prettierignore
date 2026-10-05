@@ -4,4 +4,6 @@ coverage/
 pnpm-lock.yaml
 .turbo/
 docs/
-plans/
+AGENTS.md
+.agents/
+.github/pull_request_template.md

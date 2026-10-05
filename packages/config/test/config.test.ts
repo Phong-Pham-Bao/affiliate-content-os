@@ -1,3 +1,4 @@
+import util from 'node:util';
 import { describe, expect, it } from 'vitest';
 import {
   ALLOWED_LOG_LEVELS,
@@ -80,9 +81,69 @@ describe('packages/config - loadConfig', () => {
     }
   });
 
-  it('rejects missing or empty NODE_ENV', () => {
+  it('rejects http://localhost in production mode while allowing it in development and test', () => {
+    expect(() =>
+      loadConfig({
+        NODE_ENV: 'production',
+        APP_BASE_URL: 'http://localhost:3000',
+      }),
+    ).toThrow(ConfigurationError);
+
+    const dev = loadConfig({
+      NODE_ENV: 'development',
+      APP_BASE_URL: 'http://localhost:3000',
+    });
+    expect(dev.appBaseUrl).toBe('http://localhost:3000');
+
+    const test = loadConfig({
+      NODE_ENV: 'test',
+      APP_BASE_URL: 'http://localhost:3000',
+    });
+    expect(test.appBaseUrl).toBe('http://localhost:3000');
+  });
+
+  it('rejects missing, null, array, and non-record input with ConfigurationError', () => {
+    expect(() => loadConfig()).toThrow(ConfigurationError);
+    expect(() => loadConfig(undefined)).toThrow(ConfigurationError);
+    expect(() => loadConfig(null)).toThrow(ConfigurationError);
+    expect(() => loadConfig([])).toThrow(ConfigurationError);
+    expect(() => loadConfig(['NODE_ENV', 'development'])).toThrow(ConfigurationError);
+    expect(() => loadConfig('invalid-string')).toThrow(ConfigurationError);
+    expect(() => loadConfig(12345)).toThrow(ConfigurationError);
+    expect(() => loadConfig(true)).toThrow(ConfigurationError);
+    expect(() => loadConfig(Symbol('env'))).toThrow(ConfigurationError);
+
+    try {
+      loadConfig(null);
+    } catch (err) {
+      expect(err).toBeInstanceOf(ConfigurationError);
+      const cfgErr = err as ConfigurationError;
+      expect(cfgErr.issues).toEqual([
+        {
+          field: 'environment',
+          message: 'Environment must be a plain object record',
+        },
+      ]);
+    }
+  });
+
+  it('rejects non-string values inside the environment record', () => {
+    expect(() => loadConfig({ NODE_ENV: 123 as unknown as string })).toThrow(ConfigurationError);
+    expect(() =>
+      loadConfig({ NODE_ENV: 'test', LOG_LEVEL: ['info'] as unknown as string }),
+    ).toThrow(ConfigurationError);
+    expect(() =>
+      loadConfig({
+        NODE_ENV: 'test',
+        APP_BASE_URL: { url: 'https://example.com' } as unknown as string,
+      }),
+    ).toThrow(ConfigurationError);
+  });
+
+  it('rejects missing, empty, or whitespace-only NODE_ENV', () => {
     expect(() => loadConfig({})).toThrow(ConfigurationError);
     expect(() => loadConfig({ NODE_ENV: '' })).toThrow(ConfigurationError);
+    expect(() => loadConfig({ NODE_ENV: '   ' })).toThrow(ConfigurationError);
   });
 
   it('rejects unsupported NODE_ENV casing and whitespace', () => {
@@ -92,7 +153,9 @@ describe('packages/config - loadConfig', () => {
     expect(() => loadConfig({ NODE_ENV: 'staging' })).toThrow(ConfigurationError);
   });
 
-  it('rejects unsupported LOG_LEVEL casing and whitespace', () => {
+  it('rejects unsupported, empty, or whitespace-only LOG_LEVEL', () => {
+    expect(() => loadConfig({ NODE_ENV: 'test', LOG_LEVEL: '' })).toThrow(ConfigurationError);
+    expect(() => loadConfig({ NODE_ENV: 'test', LOG_LEVEL: '   ' })).toThrow(ConfigurationError);
     expect(() => loadConfig({ NODE_ENV: 'test', LOG_LEVEL: 'INFO' })).toThrow(ConfigurationError);
     expect(() => loadConfig({ NODE_ENV: 'test', LOG_LEVEL: ' info ' })).toThrow(ConfigurationError);
     expect(() => loadConfig({ NODE_ENV: 'test', LOG_LEVEL: 'verbose' })).toThrow(
@@ -109,12 +172,30 @@ describe('packages/config - loadConfig', () => {
     );
   });
 
+  it('rejects empty, whitespace-only, and padded APP_BASE_URL', () => {
+    expect(() => loadConfig({ NODE_ENV: 'development', APP_BASE_URL: '' })).toThrow(
+      ConfigurationError,
+    );
+    expect(() => loadConfig({ NODE_ENV: 'development', APP_BASE_URL: '   ' })).toThrow(
+      ConfigurationError,
+    );
+    expect(() =>
+      loadConfig({ NODE_ENV: 'development', APP_BASE_URL: ' http://localhost:3000 ' }),
+    ).toThrow(ConfigurationError);
+    expect(() =>
+      loadConfig({ NODE_ENV: 'development', APP_BASE_URL: 'https://example.com   ' }),
+    ).toThrow(ConfigurationError);
+  });
+
   it('rejects non-HTTP schemes for APP_BASE_URL', () => {
     expect(() =>
       loadConfig({ NODE_ENV: 'development', APP_BASE_URL: 'ftp://files.example.com' }),
     ).toThrow(ConfigurationError);
     expect(() =>
       loadConfig({ NODE_ENV: 'development', APP_BASE_URL: 'ws://socket.example.com' }),
+    ).toThrow(ConfigurationError);
+    expect(() =>
+      loadConfig({ NODE_ENV: 'development', APP_BASE_URL: 'javascript:alert(1)' }),
     ).toThrow(ConfigurationError);
   });
 
@@ -123,6 +204,20 @@ describe('packages/config - loadConfig', () => {
       loadConfig({
         NODE_ENV: 'development',
         APP_BASE_URL: 'http://user:pass@localhost:3000',
+      }),
+    ).toThrow(ConfigurationError);
+
+    expect(() =>
+      loadConfig({
+        NODE_ENV: 'development',
+        APP_BASE_URL: 'http://user@localhost:3000',
+      }),
+    ).toThrow(ConfigurationError);
+
+    expect(() =>
+      loadConfig({
+        NODE_ENV: 'development',
+        APP_BASE_URL: 'http://:password@localhost:3000',
       }),
     ).toThrow(ConfigurationError);
   });
@@ -141,6 +236,13 @@ describe('packages/config - loadConfig', () => {
         APP_BASE_URL: 'http://localhost:3000#section',
       }),
     ).toThrow(ConfigurationError);
+
+    expect(() =>
+      loadConfig({
+        NODE_ENV: 'development',
+        APP_BASE_URL: 'http://localhost:3000?query=param#section',
+      }),
+    ).toThrow(ConfigurationError);
   });
 
   it('ignores unrelated operating-system environment keys', () => {
@@ -152,8 +254,9 @@ describe('packages/config - loadConfig', () => {
     });
 
     expect(Object.keys(config).sort()).toEqual(['logLevel', 'nodeEnv']);
-    expect((config as Record<string, unknown>)['AWS_SECRET_ACCESS_KEY']).toBeUndefined();
-    expect((config as Record<string, unknown>)['PATH']).toBeUndefined();
+    expect((config as unknown as Record<string, unknown>)['AWS_SECRET_ACCESS_KEY']).toBeUndefined();
+    expect((config as unknown as Record<string, unknown>)['PATH']).toBeUndefined();
+    expect((config as unknown as Record<string, unknown>)['RANDOM_OS_VAR']).toBeUndefined();
   });
 
   it('returns deeply immutable configuration object', () => {
@@ -179,16 +282,21 @@ describe('packages/config - loadConfig', () => {
     expect(second.logLevel).toBe('error');
   });
 
-  it('never echoes raw sentinel values in ConfigurationError message or serialized output', () => {
-    const sentinelSecret = 'SUPER_SECRET_LEAK_CHECK_SENTINEL_123';
-    const sentinelUrl = 'http://sentinel-user:sentinel-pass@insecure.example.com';
+  it('never echoes raw sentinel values in ConfigurationError message, toString, inspect, or serialized output', () => {
+    const SENTINEL_SECRET = 'SUPER_SECRET_LEAK_CHECK_SENTINEL_123';
+    const SENTINEL_USER = 'sentinel_sensitive_username_xyz';
+    const SENTINEL_PASS = 'sentinel_sensitive_password_xyz';
+    const SENTINEL_QUERY = 'sentinel_sensitive_query_xyz';
+    const SENTINEL_HASH = 'sentinel_sensitive_hash_xyz';
+    const SENTINEL_RAW_INPUT = 'sentinel_non_record_raw_string_xyz';
 
+    // Case 1: Invalid fields within record
     let thrownError: ConfigurationError | undefined;
     try {
       loadConfig({
-        NODE_ENV: sentinelSecret,
-        LOG_LEVEL: sentinelSecret,
-        APP_BASE_URL: sentinelUrl,
+        NODE_ENV: SENTINEL_SECRET,
+        LOG_LEVEL: SENTINEL_SECRET,
+        APP_BASE_URL: `http://${SENTINEL_USER}:${SENTINEL_PASS}@insecure.example.com?secret=${SENTINEL_QUERY}#${SENTINEL_HASH}`,
       });
     } catch (err) {
       if (err instanceof ConfigurationError) {
@@ -200,26 +308,68 @@ describe('packages/config - loadConfig', () => {
     if (thrownError) {
       const errorString = thrownError.toString();
       const errorJson = JSON.stringify(thrownError);
+      const toJsonObject = thrownError.toJSON();
+      const toJsonSerialized = JSON.stringify(toJsonObject);
+      const issuesJson = JSON.stringify(thrownError.issues);
+      const inspected = util.inspect(thrownError);
       const message = thrownError.message;
 
-      expect(errorString).not.toContain(sentinelSecret);
-      expect(errorJson).not.toContain(sentinelSecret);
-      expect(message).not.toContain(sentinelSecret);
+      for (const sentinel of [
+        SENTINEL_SECRET,
+        SENTINEL_USER,
+        SENTINEL_PASS,
+        SENTINEL_QUERY,
+        SENTINEL_HASH,
+      ]) {
+        expect(errorString).not.toContain(sentinel);
+        expect(errorJson).not.toContain(sentinel);
+        expect(toJsonSerialized).not.toContain(sentinel);
+        expect(issuesJson).not.toContain(sentinel);
+        expect(inspected).not.toContain(sentinel);
+        expect(message).not.toContain(sentinel);
+      }
 
-      expect(errorString).not.toContain('sentinel-user');
-      expect(errorString).not.toContain('sentinel-pass');
-      expect(errorJson).not.toContain('sentinel-user');
-      expect(errorJson).not.toContain('sentinel-pass');
+      // Check structure of safe serialization
+      expect(toJsonObject.name).toBe('ConfigurationError');
+      expect(toJsonObject.message).toContain('Configuration validation failed');
+      expect(Array.isArray(toJsonObject.issues)).toBe(true);
+    }
+
+    // Case 2: Non-record input
+    let nonRecordError: ConfigurationError | undefined;
+    try {
+      loadConfig(SENTINEL_RAW_INPUT as unknown);
+    } catch (err) {
+      if (err instanceof ConfigurationError) {
+        nonRecordError = err;
+      }
+    }
+
+    expect(nonRecordError).toBeDefined();
+    if (nonRecordError) {
+      const errorString = nonRecordError.toString();
+      const errorJson = JSON.stringify(nonRecordError);
+      const issuesJson = JSON.stringify(nonRecordError.issues);
+      const message = nonRecordError.message;
+
+      expect(errorString).not.toContain(SENTINEL_RAW_INPUT);
+      expect(errorJson).not.toContain(SENTINEL_RAW_INPUT);
+      expect(issuesJson).not.toContain(SENTINEL_RAW_INPUT);
+      expect(message).not.toContain(SENTINEL_RAW_INPUT);
     }
   });
 });
 
 describe('packages/config - getRedactedConfigMetadata', () => {
   it('produces safe metadata without raw sensitive values or URL paths/queries', () => {
+    const SENTINEL_PATH = 'sentinel_deep_path_secret_123';
+    const SENTINEL_QUERY = 'sentinel_secret_param_456';
+    const SENTINEL_FRAGMENT = 'sentinel_fragment_789';
+
     const config: AppConfig = {
       nodeEnv: 'production',
       logLevel: 'info',
-      appBaseUrl: 'https://subdomain.example.com:8443/deep/path?query=secret#fragment',
+      appBaseUrl: `https://subdomain.example.com:8443/${SENTINEL_PATH}?query=${SENTINEL_QUERY}#${SENTINEL_FRAGMENT}`,
     };
 
     const metadata = getRedactedConfigMetadata(config);
@@ -230,9 +380,12 @@ describe('packages/config - getRedactedConfigMetadata', () => {
     expect(metadata.appBaseUrlOrigin).toBe('https://subdomain.example.com:8443');
 
     const serialized = JSON.stringify(metadata);
-    expect(serialized).not.toContain('/deep/path');
-    expect(serialized).not.toContain('query=secret');
-    expect(serialized).not.toContain('fragment');
+    expect(serialized).not.toContain(SENTINEL_PATH);
+    expect(serialized).not.toContain(SENTINEL_QUERY);
+    expect(serialized).not.toContain(SENTINEL_FRAGMENT);
+    expect(metadata.appBaseUrlOrigin).not.toContain(SENTINEL_PATH);
+    expect(metadata.appBaseUrlOrigin).not.toContain(SENTINEL_QUERY);
+    expect(metadata.appBaseUrlOrigin).not.toContain(SENTINEL_FRAGMENT);
     expect(Object.isFrozen(metadata)).toBe(true);
   });
 
@@ -248,5 +401,39 @@ describe('packages/config - getRedactedConfigMetadata', () => {
     expect(metadata.logLevel).toBe('debug');
     expect(metadata.hasAppBaseUrl).toBe(false);
     expect(metadata.appBaseUrlOrigin).toBeUndefined();
+    expect(Object.isFrozen(metadata)).toBe(true);
+  });
+
+  it('never leaks credentials or paths even if raw config has them', () => {
+    const SENTINEL_USER = 'sentinel_malicious_user';
+    const SENTINEL_PASS = 'sentinel_malicious_pass';
+    const SENTINEL_PATH = 'sentinel_malicious_path';
+
+    const configWithCredentials: AppConfig = {
+      nodeEnv: 'production',
+      logLevel: 'warn',
+      appBaseUrl: `https://${SENTINEL_USER}:${SENTINEL_PASS}@example.com/${SENTINEL_PATH}`,
+    };
+
+    const metadata = getRedactedConfigMetadata(configWithCredentials);
+    expect(metadata.appBaseUrlOrigin).toBe('https://example.com');
+    const serialized = JSON.stringify(metadata);
+    expect(serialized).not.toContain(SENTINEL_USER);
+    expect(serialized).not.toContain(SENTINEL_PASS);
+    expect(serialized).not.toContain(SENTINEL_PATH);
+  });
+
+  it('returns deeply immutable metadata object', () => {
+    const metadata = getRedactedConfigMetadata({
+      nodeEnv: 'test',
+      logLevel: 'info',
+      appBaseUrl: 'https://example.com',
+    });
+
+    expect(Object.isFrozen(metadata)).toBe(true);
+    expect(() => {
+      // @ts-expect-error Attempting mutation on readonly property
+      metadata.nodeEnv = 'production';
+    }).toThrow();
   });
 });

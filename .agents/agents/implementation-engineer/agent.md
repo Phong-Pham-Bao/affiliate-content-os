@@ -23,14 +23,10 @@ Do not silently change API contracts or database architecture.
 
 When implementation is complete:
 
-- checkout isolated branch: `agy/<task-id>-<slug>`
-- run relevant tests
-- run typecheck
-- run lint
-- run build
-- commit using `feat: implement TASK-<xxx> <description>`
-- push to origin `agy/<task-id>-<slug>`
-- open Pull Request to `main` without merging (await Codex review)
+* run relevant tests
+* run typecheck
+* run lint
+* run build
 
 Then report:
 

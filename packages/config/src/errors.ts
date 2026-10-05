@@ -13,4 +13,12 @@ export class ConfigurationError extends Error {
     this.issues = Object.freeze([...issues]);
     Object.freeze(this);
   }
+
+  toJSON(): { name: string; message: string; issues: readonly ConfigurationIssue[] } {
+    return {
+      name: this.name,
+      message: this.message,
+      issues: this.issues,
+    };
+  }
 }
