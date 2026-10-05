@@ -1,0 +1,9 @@
+node_modules/
+dist/
+coverage/
+pnpm-lock.yaml
+.turbo/
+docs/
+AGENTS.md
+.agents/
+.github/pull_request_template.md
