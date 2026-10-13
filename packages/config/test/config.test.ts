@@ -4,6 +4,8 @@ import {
   ALLOWED_LOG_LEVELS,
   ALLOWED_NODE_ENVS,
   ConfigurationError,
+  DEFAULT_API_HOST,
+  DEFAULT_API_PORT,
   DEFAULT_LOG_LEVEL,
   getRedactedConfigMetadata,
   loadConfig,
@@ -16,6 +18,8 @@ describe('packages/config - loadConfig', () => {
     expect(config.nodeEnv).toBe('development');
     expect(config.logLevel).toBe(DEFAULT_LOG_LEVEL);
     expect(config.appBaseUrl).toBeUndefined();
+    expect(config.apiHost).toBe(DEFAULT_API_HOST);
+    expect(config.apiPort).toBe(DEFAULT_API_PORT);
   });
 
   it('parses each allowed NODE_ENV', () => {
@@ -253,7 +257,7 @@ describe('packages/config - loadConfig', () => {
       RANDOM_OS_VAR: 'random-val',
     });
 
-    expect(Object.keys(config).sort()).toEqual(['logLevel', 'nodeEnv']);
+    expect(Object.keys(config).sort()).toEqual(['apiHost', 'apiPort', 'logLevel', 'nodeEnv']);
     expect((config as unknown as Record<string, unknown>)['AWS_SECRET_ACCESS_KEY']).toBeUndefined();
     expect((config as unknown as Record<string, unknown>)['PATH']).toBeUndefined();
     expect((config as unknown as Record<string, unknown>)['RANDOM_OS_VAR']).toBeUndefined();
@@ -370,6 +374,8 @@ describe('packages/config - getRedactedConfigMetadata', () => {
       nodeEnv: 'production',
       logLevel: 'info',
       appBaseUrl: `https://subdomain.example.com:8443/${SENTINEL_PATH}?query=${SENTINEL_QUERY}#${SENTINEL_FRAGMENT}`,
+      apiHost: '127.0.0.1',
+      apiPort: 3001,
     };
 
     const metadata = getRedactedConfigMetadata(config);
@@ -378,6 +384,8 @@ describe('packages/config - getRedactedConfigMetadata', () => {
     expect(metadata.logLevel).toBe('info');
     expect(metadata.hasAppBaseUrl).toBe(true);
     expect(metadata.appBaseUrlOrigin).toBe('https://subdomain.example.com:8443');
+    expect(metadata.apiHost).toBe('127.0.0.1');
+    expect(metadata.apiPort).toBe(3001);
 
     const serialized = JSON.stringify(metadata);
     expect(serialized).not.toContain(SENTINEL_PATH);
@@ -393,6 +401,8 @@ describe('packages/config - getRedactedConfigMetadata', () => {
     const config: AppConfig = {
       nodeEnv: 'development',
       logLevel: 'debug',
+      apiHost: '127.0.0.1',
+      apiPort: 3001,
     };
 
     const metadata = getRedactedConfigMetadata(config);
@@ -401,6 +411,8 @@ describe('packages/config - getRedactedConfigMetadata', () => {
     expect(metadata.logLevel).toBe('debug');
     expect(metadata.hasAppBaseUrl).toBe(false);
     expect(metadata.appBaseUrlOrigin).toBeUndefined();
+    expect(metadata.apiHost).toBe('127.0.0.1');
+    expect(metadata.apiPort).toBe(3001);
     expect(Object.isFrozen(metadata)).toBe(true);
   });
 
@@ -413,6 +425,8 @@ describe('packages/config - getRedactedConfigMetadata', () => {
       nodeEnv: 'production',
       logLevel: 'warn',
       appBaseUrl: `https://${SENTINEL_USER}:${SENTINEL_PASS}@example.com/${SENTINEL_PATH}`,
+      apiHost: '127.0.0.1',
+      apiPort: 3001,
     };
 
     const metadata = getRedactedConfigMetadata(configWithCredentials);
@@ -428,6 +442,8 @@ describe('packages/config - getRedactedConfigMetadata', () => {
       nodeEnv: 'test',
       logLevel: 'info',
       appBaseUrl: 'https://example.com',
+      apiHost: '127.0.0.1',
+      apiPort: 3001,
     });
 
     expect(Object.isFrozen(metadata)).toBe(true);

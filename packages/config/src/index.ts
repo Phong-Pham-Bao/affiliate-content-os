@@ -3,6 +3,8 @@ export { getRedactedConfigMetadata } from './redact.js';
 export {
   ALLOWED_LOG_LEVELS,
   ALLOWED_NODE_ENVS,
+  DEFAULT_API_HOST,
+  DEFAULT_API_PORT,
   DEFAULT_LOG_LEVEL,
   type AppConfig,
   type LogLevel,

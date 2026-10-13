@@ -7,6 +7,7 @@ import {
   type LogLevel,
   type NodeEnv,
 } from './types.js';
+import { validateApiHost, validateApiPort } from './validate-api.js';
 
 function validateNodeEnv(
   rawEnv: Record<string, unknown>,
@@ -150,6 +151,8 @@ export function loadConfig(rawEnv?: unknown): AppConfig {
   const nodeEnv = validateNodeEnv(envRecord, issues);
   const logLevel = validateLogLevel(envRecord, issues);
   const appBaseUrl = validateAppBaseUrl(envRecord, nodeEnv, issues);
+  const apiHost = validateApiHost(envRecord, issues);
+  const apiPort = validateApiPort(envRecord, issues);
 
   if (issues.length > 0 || !nodeEnv) {
     throw new ConfigurationError(issues);
@@ -159,6 +162,8 @@ export function loadConfig(rawEnv?: unknown): AppConfig {
     nodeEnv,
     logLevel,
     ...(appBaseUrl ? { appBaseUrl } : {}),
+    apiHost,
+    apiPort,
   };
 
   return Object.freeze(config);

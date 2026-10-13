@@ -22,6 +22,8 @@ export function getRedactedConfigMetadata(config: AppConfig): RedactedConfigMeta
     logLevel: config.logLevel,
     hasAppBaseUrl: Boolean(config.appBaseUrl),
     ...(appBaseUrlOrigin ? { appBaseUrlOrigin } : {}),
+    apiHost: config.apiHost,
+    apiPort: config.apiPort,
   };
 
   return Object.freeze(result);
