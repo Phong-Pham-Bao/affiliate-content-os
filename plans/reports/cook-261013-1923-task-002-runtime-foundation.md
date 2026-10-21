@@ -2,11 +2,12 @@
 
 **Date:** 2026-10-13  
 **Branch:** `agy/task-002-runtime-foundation`  
-**Status:** READY FOR CODEX REVIEW  
+**Status:** READY FOR CODEX REVIEW
 
 ## 1. Summary of Changes
 
 Implemented TASK-002 following the approved architecture and task specification:
+
 - **Git Line Ending Policy:** Added `.gitattributes` to normalize text files to LF, ensuring deterministic formatting and cross-platform consistency.
 - **Config Package Extension:** Extended `@affiliate-content-os/config` with `API_HOST` (default: `'127.0.0.1'`) and `API_PORT` (default: `3001`), maintaining full immutability, safe redaction, unknown-key filtering, and modular code (<200 lines).
 - **Runtime Process Shells:**
@@ -19,6 +20,7 @@ Implemented TASK-002 following the approved architecture and task specification:
 ## 2. Files Created, Modified, and Deleted
 
 ### Created (37 files)
+
 - `.dependency-cruiser.js`
 - `.env.example`
 - `.gitattributes`
@@ -63,6 +65,7 @@ Implemented TASK-002 following the approved architecture and task specification:
 - `test/fixtures/boundaries/web-to-infra/apps/web/src/index.ts`
 
 ### Modified (13 files)
+
 - `.gitignore`
 - `README.md`
 - `eslint.config.mjs`
@@ -77,11 +80,13 @@ Implemented TASK-002 following the approved architecture and task specification:
 - `vitest.config.ts`
 
 ### Deleted (0 files)
+
 - None.
 
 ## 3. Tests Executed & Results
 
 Vitest ran 64 unit and boundary tests across 8 test suites:
+
 - `apps/web/test/boundary.test.ts` (3 tests passed)
 - `apps/web/test/bootstrap.test.ts` (2 tests passed)
 - `apps/web/test/page.test.tsx` (1 test passed)

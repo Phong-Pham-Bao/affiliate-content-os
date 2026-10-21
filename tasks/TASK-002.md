@@ -1,6 +1,6 @@
 # TASK-002 - Runtime Process Shells and Architecture Boundaries
 
-Status: Proposed for Product Owner approval
+Status: Approved by Product Owner; Ready for Codex Review
 
 Sprint: 1 - Foundation
 
