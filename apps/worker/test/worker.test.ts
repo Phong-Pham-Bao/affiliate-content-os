@@ -134,8 +134,10 @@ describe('apps/worker - startWorker lifecycle', () => {
     const { spawn } = await import('node:child_process');
     const path = await import('node:path');
 
-    const workerScript = path.resolve(__dirname, '../src/main.ts');
+    const workerDir = path.resolve(__dirname, '..');
+    const workerScript = path.resolve(workerDir, 'src/main.ts');
     const child = spawn(process.execPath, ['--import', 'tsx', workerScript], {
+      cwd: workerDir,
       env: {
         ...process.env,
         NODE_ENV: 'test',
@@ -146,6 +148,9 @@ describe('apps/worker - startWorker lifecycle', () => {
 
     let output = '';
     child.stdout.on('data', (d) => {
+      output += d.toString();
+    });
+    child.stderr.on('data', (d) => {
       output += d.toString();
     });
 
