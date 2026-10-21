@@ -1,4 +1,8 @@
-import { getRedactedConfigMetadata } from '@affiliate-content-os/config';
+import {
+  loadConfig,
+  getRedactedConfigMetadata,
+  type AppConfig,
+} from '@affiliate-content-os/config';
 import { startApiServer } from './server.js';
 
 try {
@@ -11,13 +15,18 @@ try {
   }
 }
 
-if (!process.env.NODE_ENV) {
-  process.env.NODE_ENV = 'development';
-}
-
 async function main(): Promise<void> {
+  let config: AppConfig;
   try {
-    const { config } = await startApiServer();
+    config = loadConfig(process.env);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown configuration error';
+    console.error(`API process startup failed: ${message}`);
+    process.exit(1);
+  }
+
+  try {
+    await startApiServer({ config });
     const metadata = getRedactedConfigMetadata(config);
     console.log(
       `API process started on http://${metadata.apiHost}:${metadata.apiPort} (nodeEnv: ${metadata.nodeEnv})`,

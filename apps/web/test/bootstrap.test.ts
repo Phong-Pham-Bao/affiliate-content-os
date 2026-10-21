@@ -3,7 +3,8 @@ import { ConfigurationError } from '@affiliate-content-os/config';
 
 vi.mock('server-only', () => ({}));
 
-import { bootstrapWebServer } from '../src/server/bootstrap';
+import { bootstrapWebServer } from '../src/server/bootstrap.js';
+import { register } from '../instrumentation.js';
 
 describe('apps/web - bootstrapWebServer', () => {
   it('loads and validates configuration with injected environment record', () => {
@@ -36,5 +37,20 @@ describe('apps/web - bootstrapWebServer', () => {
       expect(cfgErr.message).not.toContain(SENTINEL_SECRET);
       expect(JSON.stringify(cfgErr)).not.toContain(SENTINEL_SECRET);
     }
+  });
+
+  it('validates configuration during runtime startup in register hook', async () => {
+    vi.stubEnv('NEXT_RUNTIME', 'nodejs');
+    vi.stubEnv('NODE_ENV', 'test');
+
+    await expect(register()).resolves.toBeUndefined();
+
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {}) as never);
+    vi.stubEnv('NODE_ENV', 'invalid-env-runtime');
+    await register();
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    exitSpy.mockRestore();
+
+    vi.unstubAllEnvs();
   });
 });

@@ -1,8 +1,10 @@
 import { bootstrapWebServer } from '../src/server/bootstrap';
 
+export const dynamic = 'force-dynamic';
+
 export default function RootPage() {
   // Validate environment at server bootstrap boundary
-  bootstrapWebServer();
+  bootstrapWebServer(process.env);
 
   return (
     <main className="shell-container">

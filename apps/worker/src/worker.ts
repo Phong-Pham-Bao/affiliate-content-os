@@ -24,7 +24,11 @@ export async function runWorker(deps: WorkerDependencies): Promise<void> {
       return;
     }
 
+    // Keep Node.js libuv event loop active in idle state without polling or periodic work
+    const keepAlive = setInterval(() => {}, 1 << 30);
+
     const onAbort = (): void => {
+      clearInterval(keepAlive);
       deps.signal.removeEventListener('abort', onAbort);
       resolve();
     };

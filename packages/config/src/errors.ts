@@ -11,7 +11,6 @@ export class ConfigurationError extends Error {
     super(`Configuration validation failed: ${summary}`);
     this.name = 'ConfigurationError';
     this.issues = Object.freeze([...issues]);
-    Object.freeze(this);
   }
 
   toJSON(): { name: string; message: string; issues: readonly ConfigurationIssue[] } {

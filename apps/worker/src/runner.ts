@@ -1,23 +1,19 @@
-import {
-  getRedactedConfigMetadata,
-  loadConfig,
-  type RawEnvironment,
-} from '@affiliate-content-os/config';
+import { getRedactedConfigMetadata, type AppConfig } from '@affiliate-content-os/config';
 import { runWorker } from './worker.js';
 
 export interface StartWorkerOptions {
-  readonly rawEnv?: RawEnvironment;
+  readonly config: AppConfig;
   readonly abortController?: AbortController;
   readonly installSignalHandlers?: boolean;
   readonly onStarted?: () => void;
 }
 
 /**
- * Initializes and executes the worker process with signal handling and safe config loading.
+ * Initializes and executes the worker process with signal handling and injected validated config.
  */
-export async function startWorker(options?: StartWorkerOptions): Promise<void> {
-  const config = loadConfig(options?.rawEnv ?? process.env);
-  const controller = options?.abortController ?? new AbortController();
+export async function startWorker(options: StartWorkerOptions): Promise<void> {
+  const { config } = options;
+  const controller = options.abortController ?? new AbortController();
 
   let isStopping = false;
 
@@ -29,7 +25,7 @@ export async function startWorker(options?: StartWorkerOptions): Promise<void> {
     controller.abort();
   };
 
-  if (options?.installSignalHandlers !== false) {
+  if (options.installSignalHandlers !== false) {
     process.once('SIGINT', handleSignal);
     process.once('SIGTERM', handleSignal);
   }
@@ -39,7 +35,7 @@ export async function startWorker(options?: StartWorkerOptions): Promise<void> {
     console.log(
       `Worker process started and entering idle state (nodeEnv: ${metadata.nodeEnv}, logLevel: ${metadata.logLevel})`,
     );
-    options?.onStarted?.();
+    options.onStarted?.();
   };
 
   try {
@@ -49,7 +45,7 @@ export async function startWorker(options?: StartWorkerOptions): Promise<void> {
       onStarted: handleStarted,
     });
   } finally {
-    if (options?.installSignalHandlers !== false) {
+    if (options.installSignalHandlers !== false) {
       process.removeListener('SIGINT', handleSignal);
       process.removeListener('SIGTERM', handleSignal);
     }

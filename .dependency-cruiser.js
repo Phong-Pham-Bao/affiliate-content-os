@@ -29,7 +29,7 @@ export default {
         path: '(^|/)apps/([^/]+)/',
       },
       to: {
-        path: '(^|/)apps/(?!$2)[^/]+/',
+        path: '(^|/)apps/(?!$2(/|$))[^/]+/',
       },
     },
     {
@@ -53,62 +53,88 @@ export default {
         path: '(^|/)(apps|packages)/([^/]+)/',
       },
       to: {
-        path: '(^|/)(apps|packages)/(?!$3)[^/]+/src/',
+        path: '(^|/)(apps|packages)/(?!$3(/|$))[^/]+/(src|test)/',
       },
     },
     {
       name: 'domain-boundary',
       severity: 'error',
-      comment: 'packages/domain may not depend on any internal package',
+      comment: 'packages/domain may not depend on any internal package except packages/domain',
       from: {
         path: '(^|/)packages/domain/',
       },
       to: {
-        path: '(^|/)(packages|apps)/',
+        path: '(^|/)(packages/(?!domain(/|$))|apps/)',
       },
     },
     {
       name: 'application-boundary',
       severity: 'error',
-      comment: 'packages/application may only depend on packages/domain',
+      comment: 'packages/application may only depend on packages/domain and packages/application',
       from: {
         path: '(^|/)packages/application/',
       },
       to: {
-        path: '(^|/)(packages/(?!domain)|apps/)',
+        path: '(^|/)(packages/(?!(domain|application)(/|$))|apps/)',
       },
     },
     {
       name: 'contracts-boundary',
       severity: 'error',
-      comment: 'packages/contracts may not depend on any internal package',
+      comment:
+        'packages/contracts may not depend on any internal package except packages/contracts',
       from: {
         path: '(^|/)packages/contracts/',
       },
       to: {
-        path: '(^|/)(packages|apps)/',
+        path: '(^|/)(packages/(?!contracts(/|$))|apps/)',
       },
     },
     {
       name: 'config-boundary',
       severity: 'error',
-      comment: 'packages/config may not depend on any internal package',
+      comment: 'packages/config may not depend on any internal package except packages/config',
       from: {
         path: '(^|/)packages/config/',
       },
       to: {
-        path: '(^|/)(packages/(?!config)|apps/)',
+        path: '(^|/)(packages/(?!config(/|$))|apps/)',
       },
     },
     {
       name: 'observability-boundary',
       severity: 'error',
-      comment: 'packages/observability may only depend on packages/config',
+      comment:
+        'packages/observability may only depend on packages/config and packages/observability',
       from: {
         path: '(^|/)packages/observability/',
       },
       to: {
-        path: '(^|/)(packages/(?!config)|apps/)',
+        path: '(^|/)(packages/(?!(config|observability)(/|$))|apps/)',
+      },
+    },
+    {
+      name: 'infrastructure-boundary',
+      severity: 'error',
+      comment:
+        'packages/infrastructure may only depend on domain, application, contracts, config, observability, and infrastructure',
+      from: {
+        path: '(^|/)packages/infrastructure/',
+      },
+      to: {
+        path: '(^|/)(packages/(?!(domain|application|contracts|config|observability|infrastructure)(/|$))|apps/)',
+      },
+    },
+    {
+      name: 'web-boundary',
+      severity: 'error',
+      comment:
+        'apps/web may only depend on packages/contracts, packages/config, packages/observability, and apps/web',
+      from: {
+        path: '(^|/)apps/web/',
+      },
+      to: {
+        path: '(^|/)(packages/(?!(contracts|config|observability)(/|$))|apps/(?!web(/|$)))',
       },
     },
     {
@@ -121,6 +147,28 @@ export default {
       },
       to: {
         path: '(^|/)packages/(domain|application|infrastructure)/',
+      },
+    },
+    {
+      name: 'api-boundary',
+      severity: 'error',
+      comment: 'apps/api may not import packages/test-support or other apps',
+      from: {
+        path: '(^|/)apps/api/',
+      },
+      to: {
+        path: '(^|/)(packages/test-support/|apps/(?!api(/|$)))',
+      },
+    },
+    {
+      name: 'worker-boundary',
+      severity: 'error',
+      comment: 'apps/worker may not import packages/test-support or other apps',
+      from: {
+        path: '(^|/)apps/worker/',
+      },
+      to: {
+        path: '(^|/)(packages/test-support/|apps/(?!worker(/|$)))',
       },
     },
     {

@@ -45,6 +45,21 @@ describe('Architecture dependency direction boundaries', { timeout: 30000 }, () 
     expect(violations).toEqual([]);
   });
 
+  it('allows valid same-package imports within the same package', async () => {
+    const fixturePath = path.relative(
+      rootDir,
+      path.join(__dirname, 'fixtures/boundaries/same-package/packages/domain/src/entity.ts'),
+    );
+    const violations = await cruiseFiles([fixturePath]);
+    expect(violations).toEqual([]);
+  });
+
+  it('allows valid package-name alias and relative imports in composition roots', async () => {
+    const apiServerPath = path.relative(rootDir, path.join(rootDir, 'apps/api/src/server.ts'));
+    const violations = await cruiseFiles([apiServerPath]);
+    expect(violations).toEqual([]);
+  });
+
   it('rejects package-to-app imports with no-package-to-app rule', async () => {
     const fixturePath = path.relative(
       rootDir,
@@ -74,7 +89,48 @@ describe('Architecture dependency direction boundaries', { timeout: 30000 }, () 
     );
     const violations = await cruiseFiles([fixturePath]);
 
-    const matching = violations.filter((v) => v.rule.name === 'web-no-backend-internal');
+    const matching = violations.filter(
+      (v) => v.rule.name === 'web-no-backend-internal' || v.rule.name === 'web-boundary',
+    );
+    expect(matching.length).toBeGreaterThan(0);
+  });
+
+  it('rejects web-to-domain imports violating web allowlist', async () => {
+    const fixturePath = path.relative(
+      rootDir,
+      path.join(__dirname, 'fixtures/boundaries/web-to-domain/apps/web/src/index.ts'),
+    );
+    const violations = await cruiseFiles([fixturePath]);
+
+    const matching = violations.filter(
+      (v) => v.rule.name === 'web-boundary' || v.rule.name === 'web-no-backend-internal',
+    );
+    expect(matching.length).toBeGreaterThan(0);
+  });
+
+  it('rejects type-only forbidden imports with boundary rules', async () => {
+    const fixturePath = path.relative(
+      rootDir,
+      path.join(__dirname, 'fixtures/boundaries/type-only/apps/web/src/index.ts'),
+    );
+    const violations = await cruiseFiles([fixturePath]);
+
+    const matching = violations.filter(
+      (v) => v.rule.name === 'web-boundary' || v.rule.name === 'web-no-backend-internal',
+    );
+    expect(matching.length).toBeGreaterThan(0);
+  });
+
+  it('rejects dynamic forbidden imports with boundary rules', async () => {
+    const fixturePath = path.relative(
+      rootDir,
+      path.join(__dirname, 'fixtures/boundaries/dynamic-import/apps/web/src/index.ts'),
+    );
+    const violations = await cruiseFiles([fixturePath]);
+
+    const matching = violations.filter(
+      (v) => v.rule.name === 'web-boundary' || v.rule.name === 'web-no-backend-internal',
+    );
     expect(matching.length).toBeGreaterThan(0);
   });
 
@@ -86,6 +142,19 @@ describe('Architecture dependency direction boundaries', { timeout: 30000 }, () 
     const violations = await cruiseFiles([fixturePath]);
 
     const matching = violations.filter((v) => v.rule.name === 'application-boundary');
+    expect(matching.length).toBeGreaterThan(0);
+  });
+
+  it('rejects infrastructure-to-app imports with boundary rules', async () => {
+    const fixturePath = path.relative(
+      rootDir,
+      path.join(__dirname, 'fixtures/boundaries/infra-to-app/packages/infrastructure/src/index.ts'),
+    );
+    const violations = await cruiseFiles([fixturePath]);
+
+    const matching = violations.filter(
+      (v) => v.rule.name === 'infrastructure-boundary' || v.rule.name === 'no-package-to-app',
+    );
     expect(matching.length).toBeGreaterThan(0);
   });
 

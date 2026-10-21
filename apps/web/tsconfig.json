@@ -2,7 +2,9 @@
   "$schema": "https://json.schemastore.org/tsconfig",
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "rootDir": ".",
+    "paths": {
+      "@affiliate-content-os/config": ["../../packages/config/src/index.ts"]
+    },
     "module": "esnext",
     "moduleResolution": "bundler",
     "jsx": "preserve",
@@ -19,6 +21,13 @@
     "resolveJsonModule": true,
     "isolatedModules": true
   },
-  "include": ["next-env.d.ts", "src/**/*", "app/**/*", "test/**/*", ".next/types/**/*.ts"],
+  "include": [
+    "next-env.d.ts",
+    "instrumentation.ts",
+    "src/**/*",
+    "app/**/*",
+    "test/**/*",
+    ".next/types/**/*.ts"
+  ],
   "exclude": ["node_modules"]
 }

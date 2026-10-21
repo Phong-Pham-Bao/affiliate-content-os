@@ -3,3 +3,6 @@ packages:
   - 'packages/*'
 allowBuilds:
   esbuild: true
+overrides:
+  postcss: '>=8.5.18'
+  vite: '>=8.3.3'

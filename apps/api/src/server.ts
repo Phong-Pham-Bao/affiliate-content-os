@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { loadConfig, type AppConfig, type RawEnvironment } from '@affiliate-content-os/config';
+import type { AppConfig } from '@affiliate-content-os/config';
 import { createApp } from './app.js';
 
 export interface ApiServerHandle {
@@ -9,71 +9,117 @@ export interface ApiServerHandle {
 }
 
 export interface StartServerOptions {
-  readonly rawEnv?: RawEnvironment;
+  readonly config: AppConfig;
   readonly app?: FastifyInstance;
   readonly installSignalHandlers?: boolean;
+  readonly shutdownTimeoutMs?: number;
+  readonly listener?: (app: FastifyInstance, config: AppConfig) => Promise<void>;
 }
 
 /**
  * Starts the API HTTP server with validated configuration and bounded signal handling.
  */
-export async function startApiServer(options?: StartServerOptions): Promise<ApiServerHandle> {
-  const config = loadConfig(options?.rawEnv ?? process.env);
-  const app = options?.app ?? createApp({ config });
+export async function startApiServer(options: StartServerOptions): Promise<ApiServerHandle> {
+  const { config } = options;
+  const app = options.app ?? createApp({ config });
+  const timeoutMs = options.shutdownTimeoutMs ?? 5000;
 
-  let isClosing = false;
+  type ServerState = 'starting' | 'running' | 'closing' | 'closed';
+  let state: ServerState = 'starting';
   let closePromise: Promise<void> | undefined;
+  let closeRequestedDuringStartup = false;
 
-  const close = async (): Promise<void> => {
-    if (closePromise) {
-      return closePromise;
-    }
-
-    isClosing = true;
-
-    // Remove installed signal handlers
-    if (options?.installSignalHandlers !== false) {
+  const removeSignalHandlers = (): void => {
+    if (options.installSignalHandlers !== false) {
       process.removeListener('SIGINT', handleSigint);
       process.removeListener('SIGTERM', handleSigterm);
     }
+  };
 
-    closePromise = (async () => {
-      try {
-        await app.close();
-      } catch {
-        // Bounded idempotent close fallback
+  const executeClose = async (): Promise<void> => {
+    removeSignalHandlers();
+    state = 'closing';
+
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([
+        app.close(),
+        new Promise<void>((_, reject) => {
+          timer = setTimeout(() => {
+            reject(new Error(`API server graceful shutdown timed out after ${timeoutMs}ms`));
+          }, timeoutMs);
+        }),
+      ]);
+      state = 'closed';
+    } finally {
+      if (timer) {
+        clearTimeout(timer);
       }
-    })();
+    }
+  };
 
+  const close = (): Promise<void> => {
+    if (state === 'closed') {
+      return Promise.resolve();
+    }
+    if (closePromise) {
+      return closePromise;
+    }
+    if (state === 'starting') {
+      closeRequestedDuringStartup = true;
+      closePromise = (async () => {
+        try {
+          await startupPromise;
+        } catch {
+          removeSignalHandlers();
+          state = 'closed';
+          return;
+        }
+        await executeClose();
+      })();
+      return closePromise;
+    }
+
+    closePromise = executeClose();
     return closePromise;
   };
 
-  const handleSignal = (_signal: 'SIGINT' | 'SIGTERM'): void => {
-    if (isClosing) {
-      return;
-    }
-    void close();
+  const handleSignal = (): void => {
+    void close().catch((err) => {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      console.error(`API shutdown error: ${message}`);
+    });
   };
 
-  const handleSigint = (): void => handleSignal('SIGINT');
-  const handleSigterm = (): void => handleSignal('SIGTERM');
+  const handleSigint = (): void => handleSignal();
+  const handleSigterm = (): void => handleSignal();
 
-  if (options?.installSignalHandlers !== false) {
+  if (options.installSignalHandlers !== false) {
     process.on('SIGINT', handleSigint);
     process.on('SIGTERM', handleSigterm);
   }
 
-  try {
-    await app.listen({
-      host: config.apiHost,
-      port: config.apiPort,
+  const defaultListener = async (fastifyApp: FastifyInstance, cfg: AppConfig): Promise<void> => {
+    await fastifyApp.listen({
+      host: cfg.apiHost,
+      port: cfg.apiPort,
     });
+  };
+
+  const listener = options.listener ?? defaultListener;
+  const startupPromise = listener(app, config);
+
+  try {
+    await startupPromise;
+    state = 'running';
   } catch (err) {
-    if (options?.installSignalHandlers !== false) {
-      process.removeListener('SIGINT', handleSigint);
-      process.removeListener('SIGTERM', handleSigterm);
-    }
+    removeSignalHandlers();
+    state = 'closed';
     throw err;
+  }
+
+  if (closeRequestedDuringStartup) {
+    await close();
   }
 
   return {

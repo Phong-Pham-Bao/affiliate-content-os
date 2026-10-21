@@ -2,7 +2,9 @@
   "$schema": "https://json.schemastore.org/tsconfig",
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "rootDir": "."
+    "paths": {
+      "@affiliate-content-os/config": ["../../packages/config/src/index.ts"]
+    }
   },
   "include": ["src/**/*", "test/**/*"]
 }

@@ -1,3 +1,4 @@
+import { loadConfig, type AppConfig } from '@affiliate-content-os/config';
 import { startWorker } from './runner.js';
 
 try {
@@ -10,13 +11,18 @@ try {
   }
 }
 
-if (!process.env.NODE_ENV) {
-  process.env.NODE_ENV = 'development';
-}
-
 async function main(): Promise<void> {
+  let config: AppConfig;
   try {
-    await startWorker();
+    config = loadConfig(process.env);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown configuration error';
+    console.error(`Worker process startup failed: ${message}`);
+    process.exit(1);
+  }
+
+  try {
+    await startWorker({ config });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     console.error(`Worker process startup failed: ${message}`);
