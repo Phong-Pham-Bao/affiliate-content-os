@@ -1,4 +1,9 @@
-import type { AppConfig, RedactedConfigMetadata } from './types.js';
+import type {
+  AppConfig,
+  DatabaseConfig,
+  RedactedConfigMetadata,
+  RedactedDatabaseMetadata,
+} from './types.js';
 
 /**
  * Returns redacted configuration metadata suitable for startup diagnostics and logging.
@@ -24,6 +29,24 @@ export function getRedactedConfigMetadata(config: AppConfig): RedactedConfigMeta
     ...(appBaseUrlOrigin ? { appBaseUrlOrigin } : {}),
     apiHost: config.apiHost,
     apiPort: config.apiPort,
+  };
+
+  return Object.freeze(result);
+}
+
+/**
+ * Returns redacted database configuration metadata for startup diagnostics.
+ * Never serializes database URL, credentials, origin, or sensitive paths.
+ */
+export function getRedactedDatabaseMetadata(config: DatabaseConfig): RedactedDatabaseMetadata {
+  const result: RedactedDatabaseMetadata = {
+    hasDatabaseUrl: Boolean(config.databaseUrl),
+    poolMax: config.poolMax,
+    connectionTimeoutMs: config.connectionTimeoutMs,
+    idleTimeoutMs: config.idleTimeoutMs,
+    statementTimeoutMs: config.statementTimeoutMs,
+    sslMode: config.sslMode,
+    hasSslCaFile: Boolean(config.sslCaFile),
   };
 
   return Object.freeze(result);

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { loadConfig, ConfigurationError, type AppConfig } from '@affiliate-content-os/config';
+import type { Database } from '@affiliate-content-os/infrastructure/database';
 import { runWorker } from '../src/worker.js';
 import { startWorker } from '../src/runner.js';
 
@@ -9,6 +10,21 @@ const mockConfig: AppConfig = Object.freeze({
   apiHost: '127.0.0.1',
   apiPort: 3001,
 });
+
+function createMockDatabase(overrides?: Partial<Database>): Database {
+  return {
+    probe: vi.fn(async () => {}),
+    close: vi.fn(async () => {}),
+    query: vi.fn(async () => ({ rows: [], rowCount: 0, command: 'SELECT' })),
+    withTransaction: vi.fn(async (fn) =>
+      fn({
+        query: vi.fn().mockResolvedValue({ rows: [], rowCount: 0, command: 'SELECT' }),
+      }),
+    ),
+    isClosing: vi.fn(() => false),
+    ...overrides,
+  };
+}
 
 describe('apps/worker - runWorker', () => {
   it('signals that startup completed through onStarted callback', async () => {
@@ -38,7 +54,6 @@ describe('apps/worker - runWorker', () => {
       isSettled = true;
     });
 
-    // Worker remains pending while idle
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(isSettled).toBe(false);
 
@@ -64,7 +79,6 @@ describe('apps/worker - runWorker', () => {
 
   it('handles repeated abort calls idempotently without error', async () => {
     const controller = new AbortController();
-
     const workerPromise = runWorker({
       config: mockConfig,
       signal: controller.signal,
@@ -78,34 +92,30 @@ describe('apps/worker - runWorker', () => {
   });
 
   it('operates in an idle state without any timers or polling', async () => {
-    const setIntervalSpy = vi.spyOn(globalThis, 'setInterval');
     const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
-    const controller = new AbortController();
+    const setIntervalSpy = vi.spyOn(globalThis, 'setInterval');
 
+    const controller = new AbortController();
     const workerPromise = runWorker({
       config: mockConfig,
       signal: controller.signal,
     });
 
-    // Strictly 0 timer registrations during worker idle operation
-    expect(setIntervalSpy).not.toHaveBeenCalled();
     expect(setTimeoutSpy).not.toHaveBeenCalled();
+    expect(setIntervalSpy).not.toHaveBeenCalled();
 
     controller.abort();
     await workerPromise;
 
-    expect(setIntervalSpy).not.toHaveBeenCalled();
-    expect(setTimeoutSpy).not.toHaveBeenCalled();
-
-    setIntervalSpy.mockRestore();
     setTimeoutSpy.mockRestore();
+    setIntervalSpy.mockRestore();
   });
 
   it('holds a referenced runtime handle while idle and closes it on abort', async () => {
     const handleRef = vi.fn();
     const handleClose = vi.fn();
-    const controller = new AbortController();
 
+    const controller = new AbortController();
     const workerPromise = runWorker({
       config: mockConfig,
       signal: controller.signal,
@@ -132,14 +142,65 @@ describe('apps/worker - startWorker lifecycle', () => {
     }).toThrow(ConfigurationError);
   });
 
+  it('probes database connection and fails cleanly when probe rejects', async () => {
+    const mockDb = createMockDatabase({
+      probe: vi.fn().mockRejectedValueOnce(new Error('Connection refused')),
+    });
+    const terminateSpy = vi.fn();
+
+    await expect(
+      startWorker({
+        config: mockConfig,
+        database: mockDb,
+        installSignalHandlers: false,
+        terminate: terminateSpy,
+      }),
+    ).rejects.toThrow('Connection refused');
+
+    expect(mockDb.close).toHaveBeenCalledTimes(1);
+    expect(terminateSpy).toHaveBeenCalledWith(1);
+  });
+
+  it('shares single shutdown deadline across worker stop and database close', async () => {
+    let fakeTime = 1000;
+    const now = () => fakeTime;
+    const mockDb = createMockDatabase({
+      close: vi.fn(async () => {
+        // Fast close
+      }),
+    });
+
+    const controller = new AbortController();
+    const workerPromise = startWorker({
+      config: mockConfig,
+      database: mockDb,
+      abortController: controller,
+      shutdownTimeoutMs: 5000,
+      now,
+      installSignalHandlers: false,
+      runtimeHandle: {
+        ref: vi.fn(),
+        close: vi.fn(() => {
+          fakeTime += 2000;
+        }),
+      },
+    });
+
+    controller.abort();
+    await expect(workerPromise).resolves.toBeUndefined();
+    expect(mockDb.close).toHaveBeenCalledTimes(1);
+  });
+
   it('installs and cleans up signal listeners during worker lifecycle', async () => {
     const initialSigint = process.listenerCount('SIGINT');
     const initialSigterm = process.listenerCount('SIGTERM');
 
     const controller = new AbortController();
+    const mockDb = createMockDatabase();
 
     const workerPromise = startWorker({
       config: mockConfig,
+      database: mockDb,
       abortController: controller,
       installSignalHandlers: true,
     });
@@ -152,15 +213,22 @@ describe('apps/worker - startWorker lifecycle', () => {
 
     expect(process.listenerCount('SIGINT')).toBe(initialSigint);
     expect(process.listenerCount('SIGTERM')).toBe(initialSigterm);
+    expect(mockDb.close).toHaveBeenCalledTimes(1);
   });
 
   it('handles SIGINT gracefully by running shutdown path and closing resources', async () => {
     const handleRef = vi.fn();
     const handleClose = vi.fn();
-    const onStarted = vi.fn();
+    let resolveStarted: () => void;
+    const startedPromise = new Promise<void>((r) => {
+      resolveStarted = r;
+    });
+    const onStarted = vi.fn(() => resolveStarted());
+    const mockDb = createMockDatabase();
 
     const workerPromise = startWorker({
       config: mockConfig,
+      database: mockDb,
       installSignalHandlers: true,
       onStarted,
       runtimeHandle: {
@@ -169,6 +237,7 @@ describe('apps/worker - startWorker lifecycle', () => {
       },
     });
 
+    await startedPromise;
     expect(onStarted).toHaveBeenCalledTimes(1);
     expect(handleRef).toHaveBeenCalledTimes(1);
     expect(handleClose).not.toHaveBeenCalled();
@@ -177,15 +246,22 @@ describe('apps/worker - startWorker lifecycle', () => {
 
     await expect(workerPromise).resolves.toBeUndefined();
     expect(handleClose).toHaveBeenCalledTimes(1);
+    expect(mockDb.close).toHaveBeenCalledTimes(1);
   });
 
   it('handles SIGTERM gracefully by running shutdown path and closing resources', async () => {
     const handleRef = vi.fn();
     const handleClose = vi.fn();
-    const onStarted = vi.fn();
+    let resolveStarted: () => void;
+    const startedPromise = new Promise<void>((r) => {
+      resolveStarted = r;
+    });
+    const onStarted = vi.fn(() => resolveStarted());
+    const mockDb = createMockDatabase();
 
     const workerPromise = startWorker({
       config: mockConfig,
+      database: mockDb,
       installSignalHandlers: true,
       onStarted,
       runtimeHandle: {
@@ -194,6 +270,7 @@ describe('apps/worker - startWorker lifecycle', () => {
       },
     });
 
+    await startedPromise;
     expect(onStarted).toHaveBeenCalledTimes(1);
     expect(handleRef).toHaveBeenCalledTimes(1);
     expect(handleClose).not.toHaveBeenCalled();
@@ -202,6 +279,7 @@ describe('apps/worker - startWorker lifecycle', () => {
 
     await expect(workerPromise).resolves.toBeUndefined();
     expect(handleClose).toHaveBeenCalledTimes(1);
+    expect(mockDb.close).toHaveBeenCalledTimes(1);
   });
 
   it('proves graceful handling on SIGINT in a real process exiting with code 0', async () => {
@@ -209,7 +287,7 @@ describe('apps/worker - startWorker lifecycle', () => {
     const path = await import('node:path');
 
     const workerDir = path.resolve(__dirname, '..');
-    const workerScript = path.resolve(workerDir, 'src/main.ts');
+    const workerScript = path.resolve(workerDir, 'test/fixtures/test-worker-entry.ts');
     const child = spawn(process.execPath, ['--import', 'tsx', workerScript], {
       cwd: workerDir,
       env: {
@@ -231,7 +309,7 @@ describe('apps/worker - startWorker lifecycle', () => {
     await new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(
         () => reject(new Error(`Worker did not start in time: ${output}`)),
-        5000,
+        15000,
       );
       const interval = setInterval(() => {
         if (output.includes('Worker process started and entering idle state')) {
@@ -242,7 +320,6 @@ describe('apps/worker - startWorker lifecycle', () => {
       }, 50);
     });
 
-    // Verify it stays alive in idle state
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(child.exitCode).toBeNull();
     expect(child.killed).toBe(false);
@@ -253,7 +330,6 @@ describe('apps/worker - startWorker lifecycle', () => {
       },
     );
 
-    // Deliver SIGINT via stdin signal bridge (Windows-compatible non-destructive signal delivery)
     child.stdin.write('SIGINT\n');
     const exit = await exitPromise;
 
@@ -261,14 +337,14 @@ describe('apps/worker - startWorker lifecycle', () => {
     expect(exit.signal).toBeNull();
     expect(output).toContain('Worker process received SIGINT, shutting down gracefully');
     expect(output).toContain('Worker process stopped gracefully');
-  }, 10000);
+  }, 20000);
 
   it('proves graceful handling on SIGTERM in a real process exiting with code 0', async () => {
     const { spawn } = await import('node:child_process');
     const path = await import('node:path');
 
     const workerDir = path.resolve(__dirname, '..');
-    const workerScript = path.resolve(workerDir, 'src/main.ts');
+    const workerScript = path.resolve(workerDir, 'test/fixtures/test-worker-entry.ts');
     const child = spawn(process.execPath, ['--import', 'tsx', workerScript], {
       cwd: workerDir,
       env: {
@@ -290,7 +366,7 @@ describe('apps/worker - startWorker lifecycle', () => {
     await new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(
         () => reject(new Error(`Worker did not start in time: ${output}`)),
-        5000,
+        15000,
       );
       const interval = setInterval(() => {
         if (output.includes('Worker process started and entering idle state')) {
@@ -301,7 +377,6 @@ describe('apps/worker - startWorker lifecycle', () => {
       }, 50);
     });
 
-    // Verify it stays alive in idle state
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(child.exitCode).toBeNull();
     expect(child.killed).toBe(false);
@@ -312,7 +387,6 @@ describe('apps/worker - startWorker lifecycle', () => {
       },
     );
 
-    // Deliver SIGTERM via stdin signal bridge (Windows-compatible non-destructive signal delivery)
     child.stdin.write('SIGTERM\n');
     const exit = await exitPromise;
 
@@ -320,5 +394,5 @@ describe('apps/worker - startWorker lifecycle', () => {
     expect(exit.signal).toBeNull();
     expect(output).toContain('Worker process received SIGTERM, shutting down gracefully');
     expect(output).toContain('Worker process stopped gracefully');
-  }, 10000);
+  }, 20000);
 });

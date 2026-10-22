@@ -28,4 +28,19 @@ export default tseslint.config(
       ],
     },
   },
+  {
+    files: ['scripts/**/*.mjs', '*.mjs', '*.js'],
+    languageOptions: {
+      globals: {
+        process: 'readonly',
+        console: 'readonly',
+        performance: 'readonly',
+        Buffer: 'readonly',
+        setTimeout: 'readonly',
+        clearTimeout: 'readonly',
+        setInterval: 'readonly',
+        clearInterval: 'readonly',
+      },
+    },
+  },
 );

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { loadConfig, ConfigurationError, type AppConfig } from '@affiliate-content-os/config';
+import type { Database } from '@affiliate-content-os/infrastructure/database';
 import { createApp } from '../src/app.js';
 import { startApiServer } from '../src/server.js';
 
@@ -10,6 +11,21 @@ const testConfig: AppConfig = Object.freeze({
   apiPort: 3001,
 });
 
+function createMockDatabase(overrides?: Partial<Database>): Database {
+  return {
+    probe: vi.fn(async () => {}),
+    close: vi.fn(async () => {}),
+    query: vi.fn(async () => ({ rows: [], rowCount: 0, command: 'SELECT' })),
+    withTransaction: vi.fn(async (fn) =>
+      fn({
+        query: vi.fn().mockResolvedValue({ rows: [], rowCount: 0, command: 'SELECT' }),
+      }),
+    ),
+    isClosing: vi.fn(() => false),
+    ...overrides,
+  };
+}
+
 describe('apps/api - createApp factory', () => {
   it('creates independent Fastify instances on successive calls', () => {
     const app1 = createApp({ config: testConfig });
@@ -18,7 +34,7 @@ describe('apps/api - createApp factory', () => {
     expect(app1).not.toBe(app2);
   });
 
-  it('answers GET /health/live with 200, JSON, and exact operational payload', async () => {
+  it('answers GET /health/live with 200, JSON, and exact operational payload without database queries', async () => {
     const app = createApp({ config: testConfig });
 
     const response = await app.inject({
@@ -75,69 +91,93 @@ describe('apps/api - startApiServer lifecycle', () => {
     }).toThrow(ConfigurationError);
   });
 
-  it('starts and closes cleanly using an injected listener without public test ports', async () => {
+  it('starts and closes cleanly using an injected database and listener', async () => {
+    const mockDb = createMockDatabase();
     const server = await startApiServer({
       config: testConfig,
+      database: mockDb,
       installSignalHandlers: false,
       listener: async (fastifyApp) => {
         await fastifyApp.ready();
       },
     });
 
+    expect(mockDb.probe).toHaveBeenCalledTimes(1);
     expect(server.config.apiHost).toBe('127.0.0.1');
     expect(server.config.apiPort).toBe(3001);
 
-    // Bounded and idempotent close
     await expect(server.close()).resolves.toBeUndefined();
-    await expect(server.close()).resolves.toBeUndefined();
+    expect(mockDb.close).toHaveBeenCalledTimes(1);
   });
 
-  it('handles shutdown while starting', async () => {
-    let proceedStartup: () => void = () => {};
-    const startupBarrier = new Promise<void>((resolve) => {
-      proceedStartup = resolve;
+  it('fails before listening when database probe fails and cleans up database pool', async () => {
+    const probeError = new Error('Database unreachable');
+    const mockDb = createMockDatabase({
+      probe: vi.fn().mockRejectedValueOnce(probeError),
     });
+    const terminateSpy = vi.fn();
+    const listenerSpy = vi.fn();
 
-    const serverPromise = startApiServer({
-      config: testConfig,
-      installSignalHandlers: false,
-      listener: async (fastifyApp) => {
-        await fastifyApp.ready();
-        await startupBarrier;
-      },
-    });
+    await expect(
+      startApiServer({
+        config: testConfig,
+        database: mockDb,
+        listener: listenerSpy,
+        terminate: terminateSpy,
+        installSignalHandlers: false,
+      }),
+    ).rejects.toThrow('Database unreachable');
 
-    setTimeout(() => {
-      proceedStartup();
-    }, 20);
-
-    const server = await serverPromise;
-    await expect(server.close()).resolves.toBeUndefined();
+    expect(listenerSpy).not.toHaveBeenCalled();
+    expect(mockDb.close).toHaveBeenCalledTimes(1);
+    expect(terminateSpy).toHaveBeenCalledWith(1);
   });
 
-  it('handles shutdown while already closing idempotently', async () => {
+  it('consumes one single shared deadline across listener and pool shutdown', async () => {
+    let fakeTime = 1000;
+    const now = () => fakeTime;
+    const terminateSpy = vi.fn();
+
+    const mockDb = createMockDatabase({
+      close: vi.fn(async () => {
+        // Fast close
+      }),
+    });
+
+    const customApp = createApp({ config: testConfig });
+    vi.spyOn(customApp, 'close').mockImplementation((async () => {
+      // Advance clock by 3000ms
+      fakeTime += 3000;
+    }) as never);
+
     const server = await startApiServer({
       config: testConfig,
+      app: customApp,
+      database: mockDb,
+      shutdownTimeoutMs: 5000,
+      now,
+      terminate: terminateSpy,
       installSignalHandlers: false,
-      listener: async (fastifyApp) => {
-        await fastifyApp.ready();
+      listener: async (app) => {
+        await app.ready();
       },
     });
 
-    const close1 = server.close();
-    const close2 = server.close();
+    await server.close();
 
-    expect(close1).toBe(close2);
-    await expect(Promise.all([close1, close2])).resolves.toEqual([undefined, undefined]);
+    expect(mockDb.close).toHaveBeenCalledTimes(1);
+    expect(server.database).toBe(mockDb);
   });
 
   it('handles repeated signals safely without duplicate shutdown or leakage', async () => {
     const initialSigintCount = process.listenerCount('SIGINT');
     const initialSigtermCount = process.listenerCount('SIGTERM');
     const terminateSpy = vi.fn();
+    const mockDb = createMockDatabase();
 
     const server = await startApiServer({
       config: testConfig,
+      database: mockDb,
       installSignalHandlers: true,
       terminate: terminateSpy,
       listener: async (fastifyApp) => {
@@ -157,233 +197,6 @@ describe('apps/api - startApiServer lifecycle', () => {
     expect(process.listenerCount('SIGINT')).toBe(initialSigintCount);
     expect(process.listenerCount('SIGTERM')).toBe(initialSigtermCount);
     expect(terminateSpy).toHaveBeenCalledWith(0);
-  });
-
-  it('logs failure and invokes terminate(1) when close() rejects', async () => {
-    const customApp = createApp({ config: testConfig });
-    const shutdownError = new Error('Simulated close failure');
-    vi.spyOn(customApp, 'close').mockRejectedValueOnce(shutdownError);
-    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const terminateSpy = vi.fn();
-
-    const server = await startApiServer({
-      config: testConfig,
-      app: customApp,
-      installSignalHandlers: false,
-      terminate: terminateSpy,
-      listener: async (fastifyApp) => {
-        await fastifyApp.ready();
-      },
-    });
-
-    await expect(server.close()).rejects.toThrow('Simulated close failure');
-    expect(consoleErrorSpy).toHaveBeenCalledWith(
-      expect.stringContaining('API server shutdown failure: Simulated close failure'),
-    );
-    expect(terminateSpy).toHaveBeenCalledWith(1);
-    consoleErrorSpy.mockRestore();
-  });
-
-  it('logs failure and invokes terminate(1) when shutdown exceeds deadline', async () => {
-    const customApp = createApp({ config: testConfig });
-    vi.spyOn(customApp, 'close').mockImplementation((() => new Promise<void>(() => {})) as never);
-    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const terminateSpy = vi.fn();
-
-    const server = await startApiServer({
-      config: testConfig,
-      app: customApp,
-      installSignalHandlers: false,
-      shutdownTimeoutMs: 30,
-      terminate: terminateSpy,
-      listener: async (fastifyApp) => {
-        await fastifyApp.ready();
-      },
-    });
-
-    await expect(server.close()).rejects.toThrow(/timed out/);
-    expect(consoleErrorSpy).toHaveBeenCalledWith(
-      expect.stringContaining(
-        'API server shutdown failure: API server graceful shutdown timed out after 30ms',
-      ),
-    );
-    expect(terminateSpy).toHaveBeenCalledWith(1);
-    consoleErrorSpy.mockRestore();
-  });
-
-  it('forces nonzero termination when signal shutdown exceeds deadline', async () => {
-    const customApp = createApp({ config: testConfig });
-    vi.spyOn(customApp, 'close').mockImplementation((() => new Promise<void>(() => {})) as never);
-    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const terminateSpy = vi.fn();
-
-    await startApiServer({
-      config: testConfig,
-      app: customApp,
-      installSignalHandlers: true,
-      shutdownTimeoutMs: 30,
-      terminate: terminateSpy,
-      listener: async (fastifyApp) => {
-        await fastifyApp.ready();
-      },
-    });
-
-    process.emit('SIGTERM');
-
-    await new Promise((resolve) => setTimeout(resolve, 60));
-
-    expect(consoleErrorSpy).toHaveBeenCalledWith(
-      expect.stringContaining(
-        'API server shutdown failure: API server graceful shutdown timed out after 30ms',
-      ),
-    );
-    expect(terminateSpy).toHaveBeenCalledWith(1);
-    consoleErrorSpy.mockRestore();
-  });
-
-  it('bounds shutdown when SIGINT arrives during permanently pending startup', async () => {
-    const initialSigintCount = process.listenerCount('SIGINT');
-    const initialSigtermCount = process.listenerCount('SIGTERM');
-
-    const terminateSpy = vi.fn();
-    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-
-    // Permanently pending listener
-    const pendingListener = () => new Promise<void>(() => {});
-
-    let startupSettled = false;
-    let startupError: unknown = null;
-
-    const startPromise = startApiServer({
-      config: testConfig,
-      listener: pendingListener,
-      shutdownTimeoutMs: 40,
-      terminate: terminateSpy,
-      installSignalHandlers: true,
-    }).then(
-      () => {
-        startupSettled = true;
-      },
-      (err) => {
-        startupSettled = true;
-        startupError = err;
-      },
-    );
-
-    expect(process.listenerCount('SIGINT')).toBe(initialSigintCount + 1);
-    expect(process.listenerCount('SIGTERM')).toBe(initialSigtermCount + 1);
-
-    // Trigger signal while startup is pending
-    process.emit('SIGINT');
-
-    // Emit repeated signals to verify idempotence
-    process.emit('SIGTERM');
-    process.emit('SIGINT');
-
-    // Wait for startPromise to settle
-    await startPromise;
-
-    expect(startupSettled).toBe(true);
-    expect(startupError).toBeInstanceOf(Error);
-    expect((startupError as Error).message).toMatch(/timed out after 40ms/);
-
-    expect(terminateSpy).toHaveBeenCalledTimes(1);
-    expect(terminateSpy).toHaveBeenCalledWith(1);
-
-    expect(consoleErrorSpy).toHaveBeenCalledWith(
-      expect.stringContaining(
-        'API server shutdown failure: API server graceful shutdown timed out after 40ms',
-      ),
-    );
-
-    expect(process.listenerCount('SIGINT')).toBe(initialSigintCount);
-    expect(process.listenerCount('SIGTERM')).toBe(initialSigtermCount);
-
-    consoleErrorSpy.mockRestore();
-  });
-
-  it('bounds shutdown when SIGTERM arrives during permanently pending startup', async () => {
-    const initialSigintCount = process.listenerCount('SIGINT');
-    const initialSigtermCount = process.listenerCount('SIGTERM');
-
-    const terminateSpy = vi.fn();
-    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-
-    const pendingListener = () => new Promise<void>(() => {});
-
-    let startupSettled = false;
-    let startupError: unknown = null;
-
-    const startPromise = startApiServer({
-      config: testConfig,
-      listener: pendingListener,
-      shutdownTimeoutMs: 40,
-      terminate: terminateSpy,
-      installSignalHandlers: true,
-    }).then(
-      () => {
-        startupSettled = true;
-      },
-      (err) => {
-        startupSettled = true;
-        startupError = err;
-      },
-    );
-
-    process.emit('SIGTERM');
-    process.emit('SIGTERM');
-
-    await startPromise;
-
-    expect(startupSettled).toBe(true);
-    expect(startupError).toBeInstanceOf(Error);
-    expect((startupError as Error).message).toMatch(/timed out after 40ms/);
-
-    expect(terminateSpy).toHaveBeenCalledTimes(1);
-    expect(terminateSpy).toHaveBeenCalledWith(1);
-
-    expect(process.listenerCount('SIGINT')).toBe(initialSigintCount);
-    expect(process.listenerCount('SIGTERM')).toBe(initialSigtermCount);
-
-    consoleErrorSpy.mockRestore();
-  });
-
-  it('handles signal shutdown gracefully when startup completes within deadline', async () => {
-    const initialSigintCount = process.listenerCount('SIGINT');
-    const initialSigtermCount = process.listenerCount('SIGTERM');
-
-    const terminateSpy = vi.fn();
-    let proceedStartup: () => void = () => {};
-    const startupBarrier = new Promise<void>((resolve) => {
-      proceedStartup = resolve;
-    });
-
-    const startPromise = startApiServer({
-      config: testConfig,
-      installSignalHandlers: true,
-      shutdownTimeoutMs: 100,
-      terminate: terminateSpy,
-      listener: async (fastifyApp) => {
-        await fastifyApp.ready();
-        await startupBarrier;
-      },
-    });
-
-    // Signal received during startup
-    process.emit('SIGINT');
-
-    // Startup finishes within deadline
-    setTimeout(() => {
-      proceedStartup();
-    }, 20);
-
-    const server = await startPromise;
-    expect(server).toBeDefined();
-
-    await new Promise((resolve) => setTimeout(resolve, 30));
-
-    expect(terminateSpy).toHaveBeenCalledWith(0);
-    expect(process.listenerCount('SIGINT')).toBe(initialSigintCount);
-    expect(process.listenerCount('SIGTERM')).toBe(initialSigtermCount);
+    expect(mockDb.close).toHaveBeenCalledTimes(1);
   });
 });

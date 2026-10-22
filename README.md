@@ -8,8 +8,9 @@ Deterministic development foundation, runtime process shells, and architecture b
 
 - **Node.js**: `24.14.0` (Active LTS pinned in `.nvmrc`, engines range `>=24.14.0 <25.0.0`)
 - **pnpm**: `12.4.2` (pinned via `packageManager` and engines in `package.json`)
+- **Docker & Docker Compose**: Docker Compose v2+ for running local PostgreSQL 18.6 infrastructure
 
-## Setup
+## Setup & Environment
 
 Enable Corepack or use installed `pnpm`:
 
@@ -17,6 +18,45 @@ Enable Corepack or use installed `pnpm`:
 corepack enable
 corepack pnpm install --frozen-lockfile
 ```
+
+Initialize your local environment file (`.env`):
+
+```bash
+corepack pnpm env:local
+```
+
+> [!NOTE]
+> `.env` is git-ignored and never committed. `corepack pnpm env:local` safely copies `.env.example` without overwriting existing `.env` files.
+
+Verify that local infrastructure and CI container image pins are identical:
+
+```bash
+corepack pnpm verify:infrastructure-pins
+```
+
+## Local PostgreSQL Infrastructure
+
+Local persistence runs on PostgreSQL `18.6-bookworm` pinned by multi-platform image manifest digest (`sha256:bbf83594798e144bff365a9c191c5d779f181fb3135902064ab8ff11918020fc`).
+
+| Command                     | Description                                                                         |
+| --------------------------- | ----------------------------------------------------------------------------------- |
+| `corepack pnpm infra:up`    | Start PostgreSQL container in background and wait for health check to pass          |
+| `corepack pnpm infra:down`  | Stop and remove container, preserving local database volume (`acos_postgres_data`)  |
+| `corepack pnpm infra:logs`  | View live container logs for PostgreSQL                                             |
+| `corepack pnpm infra:reset` | Stop container and delete local database volume (recreates a fresh, blank database) |
+
+## Database Migrations
+
+Database schema evolution is strictly forward-only and managed via SQL files in `packages/infrastructure/migrations/`.
+
+| Command                             | Description                                                                            |
+| ----------------------------------- | -------------------------------------------------------------------------------------- |
+| `corepack pnpm db:migrate`          | Apply all unapplied forward migrations within a transaction with advisory locking      |
+| `corepack pnpm db:migrate:status`   | Display current migration state, recorded checksums, and execution timestamps          |
+| `corepack pnpm db:migrate:validate` | Validate migration sequence integrity, gap-freedom, and SHA-256 checksums in isolation |
+
+> [!IMPORTANT]
+> The migration engine uses forward-only migrations. Down migrations are prohibited. Rollbacks are performed by creating a new forward migration. Migrations run as explicit pre-deployment CLI steps and are never automatically run on application process startup.
 
 ## Runtime Process Shells
 
@@ -71,16 +111,18 @@ An unknown route returns standard Fastify `404 Not Found`.
 
 The workspace enforces strict verification commands:
 
-| Command                | Description                                                                              |
-| ---------------------- | ---------------------------------------------------------------------------------------- |
-| `pnpm format:check`    | Check code formatting via Prettier                                                       |
-| `pnpm format`          | Auto-format files via Prettier                                                           |
-| `pnpm lint`            | Lint codebase with ESLint and run architecture boundary checks                           |
-| `pnpm lint:boundaries` | Enforce architecture layer and dependency direction rules via dependency-cruiser         |
-| `pnpm typecheck`       | Run strict TypeScript type checking across source and tests for all packages and apps    |
-| `pnpm test`            | Run unit and boundary tests with Vitest                                                  |
-| `pnpm build`           | Compile package source and build production artifacts                                    |
-| `pnpm check`           | Run all quality gates in sequence (`format:check`, `lint`, `typecheck`, `test`, `build`) |
+| Command                           | Description                                                                              |
+| --------------------------------- | ---------------------------------------------------------------------------------------- |
+| `pnpm format:check`               | Check code formatting via Prettier                                                       |
+| `pnpm format`                     | Auto-format files via Prettier                                                           |
+| `pnpm lint`                       | Lint codebase with ESLint and run architecture boundary checks                           |
+| `pnpm lint:boundaries`            | Enforce architecture layer and dependency direction rules via dependency-cruiser         |
+| `pnpm typecheck`                  | Run strict TypeScript type checking across source and tests for all packages and apps    |
+| `pnpm test`                       | Run unit and boundary tests with Vitest                                                  |
+| `pnpm test:integration`           | Run isolated PostgreSQL integration tests with Vitest                                    |
+| `pnpm verify:infrastructure-pins` | Verify Docker Compose and CI image digest pins against remote registry                   |
+| `pnpm build`                      | Compile package source and build production artifacts                                    |
+| `pnpm check`                      | Run all quality gates in sequence (`format:check`, `lint`, `typecheck`, `test`, `build`) |
 
 ## Architecture Boundaries
 
@@ -121,12 +163,19 @@ affiliate-content-os/
 │       └── package.json
 ├── docs/                        # Architectural specifications & decision records
 ├── packages/
-│   └── config/                  # Environment configuration boundary & redaction helper
-│       ├── src/                 # Configuration validation, redaction, and types
-│       ├── test/                # Configuration unit & security tests
+│   ├── config/                  # Environment configuration boundary & redaction helper
+│   │   ├── src/                 # Configuration validation, redaction, and types
+│   │   ├── test/                # Configuration unit & security tests
+│   │   └── package.json
+│   └── infrastructure/          # Persistence foundation and database migration engine
+│       ├── migrations/          # Contiguous, forward-only SQL migration scripts
+│       ├── src/                 # Connection pooling, transaction runner, and health probe
+│       ├── test/                # Unit and isolated PostgreSQL integration tests
 │       └── package.json
+├── scripts/                     # Cross-platform environment and infrastructure pin scripts
 ├── test/
 │   ├── boundaries.test.ts       # Architecture boundary verification test suite
+│   ├── scripts.test.ts          # Scripts unit test suite
 │   └── fixtures/boundaries/     # Fixtures for verifying forbidden dependency directions
 ├── tasks/                       # Task specifications (Codex)
 ├── .dependency-cruiser.js       # Dependency-cruiser architecture boundary rules
@@ -134,12 +183,14 @@ affiliate-content-os/
 ├── .gitattributes               # LF line-ending normalization
 ├── .gitignore
 ├── .nvmrc                       # Pinned Node.js version (24.14.0)
+├── compose.yaml                 # Pinned local PostgreSQL 18.6 service definition
 ├── eslint.config.mjs            # Flat ESLint configuration with boundary checks
 ├── package.json                 # Root workspace manifest & quality scripts
 ├── pnpm-lock.yaml               # Pinned dependency lockfile
 ├── pnpm-workspace.yaml          # Workspace package patterns (apps/*, packages/*)
 ├── tsconfig.base.json           # Strict TypeScript compiler options
-└── vitest.config.ts             # Vitest test runner configuration
+├── vitest.config.ts             # Vitest unit test runner configuration
+└── vitest.integration.config.ts # Vitest isolated integration test runner configuration
 ```
 
 ## Public Configuration Contract (`@affiliate-content-os/config`)
@@ -188,3 +239,55 @@ import {
 - `loadConfig(rawEnv?: unknown): AppConfig`: Validates and returns an immutable `AppConfig` object `{ nodeEnv, logLevel, appBaseUrl?, apiHost, apiPort }`. Throws `ConfigurationError` on any validation failure.
 - `getRedactedConfigMetadata(config: AppConfig): RedactedConfigMetadata`: Generates startup-safe diagnostic metadata `{ nodeEnv, logLevel, hasAppBaseUrl, appBaseUrlOrigin?, apiHost, apiPort }`. The `appBaseUrlOrigin` is reduced strictly to scheme, host, and port (e.g. `https://example.com:8443`), stripping any path, query, or fragment.
 - `ConfigurationError`: Subclass of `Error` containing a frozen `issues: readonly ConfigurationIssue[]` list and a safe `toJSON()` implementation.
+
+### Database Environment Variables
+
+| Variable                           | Required | Type / Allowed Values                          | Default       | Rules & Constraints                                                                                                    |
+| ---------------------------------- | -------- | ---------------------------------------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`                     | Yes      | `string` (`postgres://` or `postgresql://`)    | None          | Valid database connection URL without query parameters or hash fragments. Must be local loopback when SSL is disabled. |
+| `DATABASE_POOL_MIN`                | No       | `integer` (`0` - `100`)                        | `2`           | Minimum idle pool connections. Must be $\le$ `DATABASE_POOL_MAX`.                                                      |
+| `DATABASE_POOL_MAX`                | No       | `integer` (`1` - `100`)                        | `10`          | Maximum pool connections. Must be $\ge$ `DATABASE_POOL_MIN`.                                                           |
+| `DATABASE_CONNECTION_TIMEOUT_MS`   | No       | `integer` (`100` - `60000`)                    | `5000`        | Connection acquisition timeout in milliseconds.                                                                        |
+| `DATABASE_IDLE_TIMEOUT_MS`         | No       | `integer` (`1000` - `300000`)                  | `30000`       | Idle client eviction timeout in milliseconds.                                                                          |
+| `DATABASE_STATEMENT_TIMEOUT_MS`    | No       | `integer` (`100` - `300000`)                   | `10000`       | Statement execution timeout in milliseconds. Set on every acquired client session.                                     |
+| `DATABASE_SSL_MODE`                | No       | `'disable'` \| `'require'` \| `'verify-full'`  | `'disable'`   | SSL mode. In `production`, `'disable'` is strictly forbidden.                                                          |
+| `DATABASE_SSL_REJECT_UNAUTHORIZED` | No       | `'true'` \| `'false'`                          | Mode-derived  | TLS certificate verification override. Set to `true` for `verify-full`.                                                |
+| `DATABASE_SSL_CA`                  | No       | `string`                                       | None          | Custom PEM Certificate Authority content.                                                                              |
+| `MIGRATIONS_DIR`                   | No       | `string` (relative or absolute directory path) | Relative path | Directory containing forward migration SQL scripts. Defaults to `packages/infrastructure/migrations`.                  |
+| `TEST_DATABASE_ADMIN_URL`          | No       | `string` (`postgres://` or `postgresql://`)    | None          | Optional administrative connection URL for creating/dropping isolated test databases during integration testing.       |
+
+## Public Persistence Contract (`@affiliate-content-os/infrastructure/database`)
+
+The persistence module provides connection pooling, health checks, transaction execution, and forward-only database migrations.
+
+### Architectural Separation
+
+1. **Domain Isolation**: `packages/domain` contains enterprise entities and pure business rules. It has zero dependencies on PostgreSQL, SQL drivers, or I/O.
+2. **Infrastructure Boundary**: `packages/infrastructure` implements data persistence adapters, connection pools, and migration runners. Domain logic never accesses raw SQL or database connections directly.
+
+### Exported Persistence API
+
+```ts
+import {
+  createDatabasePool,
+  probeDatabase,
+  withTransaction,
+  DatabaseError,
+  type DatabasePool,
+  type Queryable,
+} from '@affiliate-content-os/infrastructure/database';
+```
+
+- `createDatabasePool(config: DatabaseConfig): DatabasePool`: Creates a configured `pg.Pool` instance configured with statement timeout and error sanitization.
+- `probeDatabase(pool: DatabasePool): Promise<void>`: Executes a health check probe (`SELECT 1`) to verify database connectivity.
+- `withTransaction<T>(pool: DatabasePool, fn: (client: PoolClient) => Promise<T>): Promise<T>`: Executes an async callback inside an atomic `BEGIN` / `COMMIT` / `ROLLBACK` transaction.
+
+## Process Lifecycle & Graceful Shutdown
+
+Both `apps/api` and `apps/worker` enforce strict operational shutdown guarantees:
+
+1. **Database Probe on Startup**: Before listening for HTTP traffic or entering the worker loop, the application verifies database connectivity via `probeDatabase(pool)`.
+2. **Shared Shutdown Deadline**: A single monotonic 5000ms deadline bounds the entire graceful shutdown sequence:
+   - For `apps/api`: Closes the Fastify HTTP listener and closes the database connection pool concurrently.
+   - For `apps/worker`: Signals the worker runner to stop and closes the database connection pool concurrently.
+3. **Forced Nonzero Exit**: If any step in the shutdown sequence fails or the 5000ms deadline expires, the process forcefully terminates with exit code 1 to prevent zombie processes.
