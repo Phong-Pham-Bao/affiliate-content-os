@@ -23,8 +23,8 @@ corepack pnpm install --frozen-lockfile
 The repository defines three independent runtime processes:
 
 1. **Web Application Shell (`apps/web`)**: Next.js App Router application providing the root layout and landing page. It enforces server-only configuration boundaries and contains no application forms, dashboards, or external client-side calls.
-2. **API Server Shell (`apps/api`)**: Fastify-based HTTP application exposing an operational `GET /health/live` liveness endpoint. It provides an import-safe application factory (`createApp`), loads validated configuration before binding, and handles graceful shutdown via `SIGINT` and `SIGTERM`.
-3. **Worker Runtime Shell (`apps/worker`)**: Pure event-driven Node.js worker runtime. It initializes with validated configuration, reports startup via lifecycle callbacks, and remains in an idle state without polling, timers, or CPU spin until receiving cancellation via `AbortSignal` or termination signals.
+2. **API Server Shell (`apps/api`)**: Fastify-based HTTP application exposing an operational `GET /health/live` liveness endpoint. It provides an import-safe application factory (`createApp`), loads validated configuration before binding, and enforces genuinely bounded graceful shutdown via `SIGINT` and `SIGTERM` with deadline enforcement, error logging, and forced nonzero termination on close failure or timeout.
+3. **Worker Runtime Shell (`apps/worker`)**: Pure event-driven Node.js worker runtime. It initializes with validated configuration, reports startup via lifecycle callbacks, and remains in an idle state using a real referenced runtime handle without polling, timers, or CPU spin until receiving cancellation via `AbortSignal` or termination signals (`SIGINT`, `SIGTERM`), exiting cleanly with code 0.
 
 ### Development Commands
 

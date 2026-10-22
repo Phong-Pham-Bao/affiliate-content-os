@@ -10,10 +10,11 @@ export interface ApiServerHandle {
 
 export interface StartServerOptions {
   readonly config: AppConfig;
-  readonly app?: FastifyInstance;
-  readonly installSignalHandlers?: boolean;
-  readonly shutdownTimeoutMs?: number;
-  readonly listener?: (app: FastifyInstance, config: AppConfig) => Promise<void>;
+  readonly app?: FastifyInstance | undefined;
+  readonly installSignalHandlers?: boolean | undefined;
+  readonly shutdownTimeoutMs?: number | undefined;
+  readonly listener?: ((app: FastifyInstance, config: AppConfig) => Promise<void>) | undefined;
+  readonly terminate?: ((exitCode: number) => void) | undefined;
 }
 
 /**
@@ -23,6 +24,7 @@ export async function startApiServer(options: StartServerOptions): Promise<ApiSe
   const { config } = options;
   const app = options.app ?? createApp({ config });
   const timeoutMs = options.shutdownTimeoutMs ?? 5000;
+  const terminate = options.terminate ?? ((exitCode: number): void => process.exit(exitCode));
 
   type ServerState = 'starting' | 'running' | 'closing' | 'closed';
   let state: ServerState = 'starting';
@@ -51,6 +53,12 @@ export async function startApiServer(options: StartServerOptions): Promise<ApiSe
         }),
       ]);
       state = 'closed';
+    } catch (err) {
+      state = 'closed';
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      console.error(`API server shutdown failure: ${message}`);
+      terminate(1);
+      throw err;
     } finally {
       if (timer) {
         clearTimeout(timer);
@@ -85,10 +93,13 @@ export async function startApiServer(options: StartServerOptions): Promise<ApiSe
   };
 
   const handleSignal = (): void => {
-    void close().catch((err) => {
-      const message = err instanceof Error ? err.message : 'Unknown error';
-      console.error(`API shutdown error: ${message}`);
-    });
+    void close()
+      .then(() => {
+        terminate(0);
+      })
+      .catch(() => {
+        // executeClose already logged failure and invoked terminate(1)
+      });
   };
 
   const handleSigint = (): void => handleSignal();

@@ -1,11 +1,12 @@
 import { getRedactedConfigMetadata, type AppConfig } from '@affiliate-content-os/config';
-import { runWorker } from './worker.js';
+import { runWorker, type WorkerRuntimeHandle } from './worker.js';
 
 export interface StartWorkerOptions {
   readonly config: AppConfig;
-  readonly abortController?: AbortController;
-  readonly installSignalHandlers?: boolean;
-  readonly onStarted?: () => void;
+  readonly abortController?: AbortController | undefined;
+  readonly installSignalHandlers?: boolean | undefined;
+  readonly onStarted?: (() => void) | undefined;
+  readonly runtimeHandle?: WorkerRuntimeHandle | undefined;
 }
 
 /**
@@ -17,17 +18,21 @@ export async function startWorker(options: StartWorkerOptions): Promise<void> {
 
   let isStopping = false;
 
-  const handleSignal = (): void => {
+  const handleSignal = (signalName: string): void => {
     if (isStopping) {
       return;
     }
     isStopping = true;
+    console.log(`Worker process received ${signalName}, shutting down gracefully`);
     controller.abort();
   };
 
+  const handleSigint = (): void => handleSignal('SIGINT');
+  const handleSigterm = (): void => handleSignal('SIGTERM');
+
   if (options.installSignalHandlers !== false) {
-    process.once('SIGINT', handleSignal);
-    process.once('SIGTERM', handleSignal);
+    process.once('SIGINT', handleSigint);
+    process.once('SIGTERM', handleSigterm);
   }
 
   const handleStarted = (): void => {
@@ -43,11 +48,12 @@ export async function startWorker(options: StartWorkerOptions): Promise<void> {
       config,
       signal: controller.signal,
       onStarted: handleStarted,
+      runtimeHandle: options.runtimeHandle,
     });
   } finally {
     if (options.installSignalHandlers !== false) {
-      process.removeListener('SIGINT', handleSignal);
-      process.removeListener('SIGTERM', handleSignal);
+      process.removeListener('SIGINT', handleSigint);
+      process.removeListener('SIGTERM', handleSigterm);
     }
   }
 }

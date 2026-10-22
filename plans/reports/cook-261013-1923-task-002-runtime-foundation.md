@@ -13,9 +13,9 @@ Implemented TASK-002 and resolved all review findings:
   - Configured `--env-file-if-exists` flags in package scripts (`apps/api`, `apps/worker`) and Next.js `transpilePackages` / `resolve.extensionAlias` (`apps/web/next.config.mjs`).
   - Tested and verified that `typecheck`, `test`, `dev:web`, `dev:api`, and `dev:worker` function reliably on a clean checkout without requiring pre-existing `dist`, `.next`, or cache artifacts.
 - **Worker Lifetime:**
-  - Replaced the passive pending Promise in `apps/worker/src/worker.ts` with an active, non-polling keepalive interval (`1 << 30` ms, ~12.4 days) that keeps libuv's event loop alive in an idle state without periodic CPU wakeups.
-  - On abort, the keepalive is immediately cleared and the worker resolves cleanly.
-  - Added a process-level integration test in `apps/worker/test/worker.test.ts` spawning the worker process, verifying it stays alive for >= 400ms, and cleanly terminates on signal.
+  - Implemented a timer-free referenced runtime handle (`MessagePort` via `node:worker_threads`) in `apps/worker/src/worker.ts` that keeps libuv's event loop active in an idle state without any timers, intervals, or periodic polling.
+  - On abort, the handle is cleanly unreferenced and closed, resolving the worker cleanly without lingering handles.
+  - Added process-level integration tests in `apps/worker/test/worker.test.ts` spawning the worker process, verifying it stays alive while idle, gracefully handles both `SIGINT` and `SIGTERM`, and cleanly exits with code 0.
 - **Runtime Configuration Boundaries & Fast Fail:**
   - Validated that only executable composition roots (`apps/api/src/main.ts`, `apps/worker/src/main.ts`, `apps/web/src/server/bootstrap.ts`, `apps/web/instrumentation.ts`) inspect `process.env`.
   - Removed all silent `NODE_ENV=development` assignments.
@@ -29,7 +29,7 @@ Implemented TASK-002 and resolved all review findings:
   - Added pnpm `overrides` in `pnpm-workspace.yaml` for `postcss` (`>=8.5.18`) and `vite` (`>=8.3.3`).
   - Verified `corepack pnpm audit --audit-level high` reports 0 vulnerabilities.
 - **API Lifecycle:**
-  - Implemented bounded timeout shutdown, idempotent close promise reference identity, startup barrier handling, and unsuppressed shutdown errors in `apps/api/src/server.ts`.
+  - Implemented bounded timeout shutdown, idempotent close promise reference identity, startup barrier handling, unsuppressed shutdown errors, and forced nonzero process termination boundary on close failure or timeout in `apps/api/src/server.ts`.
   - Removed fixed test ports `49152` and `49153` in favor of Fastify injection and injected test listeners.
 - **Code Quality & Formatting:**
   - Formatted all code with Prettier and fixed all whitespace errors identified by `git diff --check origin/main...HEAD`.

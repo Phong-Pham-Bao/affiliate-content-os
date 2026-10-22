@@ -134,10 +134,12 @@ describe('apps/api - startApiServer lifecycle', () => {
   it('handles repeated signals safely without duplicate shutdown or leakage', async () => {
     const initialSigintCount = process.listenerCount('SIGINT');
     const initialSigtermCount = process.listenerCount('SIGTERM');
+    const terminateSpy = vi.fn();
 
     const server = await startApiServer({
       config: testConfig,
       installSignalHandlers: true,
+      terminate: terminateSpy,
       listener: async (fastifyApp) => {
         await fastifyApp.ready();
       },
@@ -154,39 +156,88 @@ describe('apps/api - startApiServer lifecycle', () => {
 
     expect(process.listenerCount('SIGINT')).toBe(initialSigintCount);
     expect(process.listenerCount('SIGTERM')).toBe(initialSigtermCount);
+    expect(terminateSpy).toHaveBeenCalledWith(0);
   });
 
-  it('propagates shutdown failures without silently suppressing them', async () => {
+  it('logs failure and invokes terminate(1) when close() rejects', async () => {
     const customApp = createApp({ config: testConfig });
     const shutdownError = new Error('Simulated close failure');
     vi.spyOn(customApp, 'close').mockRejectedValueOnce(shutdownError);
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const terminateSpy = vi.fn();
 
     const server = await startApiServer({
       config: testConfig,
       app: customApp,
       installSignalHandlers: false,
+      terminate: terminateSpy,
       listener: async (fastifyApp) => {
         await fastifyApp.ready();
       },
     });
 
     await expect(server.close()).rejects.toThrow('Simulated close failure');
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('API server shutdown failure: Simulated close failure'),
+    );
+    expect(terminateSpy).toHaveBeenCalledWith(1);
+    consoleErrorSpy.mockRestore();
   });
 
-  it('enforces shutdown timeout when close hangs', async () => {
+  it('logs failure and invokes terminate(1) when shutdown exceeds deadline', async () => {
     const customApp = createApp({ config: testConfig });
     vi.spyOn(customApp, 'close').mockImplementation((() => new Promise<void>(() => {})) as never);
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const terminateSpy = vi.fn();
 
     const server = await startApiServer({
       config: testConfig,
       app: customApp,
       installSignalHandlers: false,
-      shutdownTimeoutMs: 50,
+      shutdownTimeoutMs: 30,
+      terminate: terminateSpy,
       listener: async (fastifyApp) => {
         await fastifyApp.ready();
       },
     });
 
     await expect(server.close()).rejects.toThrow(/timed out/);
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'API server shutdown failure: API server graceful shutdown timed out after 30ms',
+      ),
+    );
+    expect(terminateSpy).toHaveBeenCalledWith(1);
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('forces nonzero termination when signal shutdown exceeds deadline', async () => {
+    const customApp = createApp({ config: testConfig });
+    vi.spyOn(customApp, 'close').mockImplementation((() => new Promise<void>(() => {})) as never);
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const terminateSpy = vi.fn();
+
+    await startApiServer({
+      config: testConfig,
+      app: customApp,
+      installSignalHandlers: true,
+      shutdownTimeoutMs: 30,
+      terminate: terminateSpy,
+      listener: async (fastifyApp) => {
+        await fastifyApp.ready();
+      },
+    });
+
+    process.emit('SIGTERM');
+
+    await new Promise((resolve) => setTimeout(resolve, 60));
+
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'API server shutdown failure: API server graceful shutdown timed out after 30ms',
+      ),
+    );
+    expect(terminateSpy).toHaveBeenCalledWith(1);
+    consoleErrorSpy.mockRestore();
   });
 });

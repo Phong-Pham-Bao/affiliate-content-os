@@ -77,8 +77,9 @@ describe('apps/worker - runWorker', () => {
     await expect(workerPromise).resolves.toBeUndefined();
   });
 
-  it('operates in an idle state without periodic timer polling', async () => {
+  it('operates in an idle state without any timers or polling', async () => {
     const setIntervalSpy = vi.spyOn(globalThis, 'setInterval');
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
     const controller = new AbortController();
 
     const workerPromise = runWorker({
@@ -86,18 +87,41 @@ describe('apps/worker - runWorker', () => {
       signal: controller.signal,
     });
 
-    // Verify any interval registered is a non-polling keepalive (>= 1 hour) rather than periodic polling
-    for (const call of setIntervalSpy.mock.calls) {
-      const delay = call[1];
-      if (typeof delay === 'number') {
-        expect(delay).toBeGreaterThanOrEqual(3_600_000);
-      }
-    }
+    // Strictly 0 timer registrations during worker idle operation
+    expect(setIntervalSpy).not.toHaveBeenCalled();
+    expect(setTimeoutSpy).not.toHaveBeenCalled();
 
     controller.abort();
     await workerPromise;
 
+    expect(setIntervalSpy).not.toHaveBeenCalled();
+    expect(setTimeoutSpy).not.toHaveBeenCalled();
+
     setIntervalSpy.mockRestore();
+    setTimeoutSpy.mockRestore();
+  });
+
+  it('holds a referenced runtime handle while idle and closes it on abort', async () => {
+    const handleRef = vi.fn();
+    const handleClose = vi.fn();
+    const controller = new AbortController();
+
+    const workerPromise = runWorker({
+      config: mockConfig,
+      signal: controller.signal,
+      runtimeHandle: {
+        ref: handleRef,
+        close: handleClose,
+      },
+    });
+
+    expect(handleRef).toHaveBeenCalledTimes(1);
+    expect(handleClose).not.toHaveBeenCalled();
+
+    controller.abort();
+    await workerPromise;
+
+    expect(handleClose).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -130,7 +154,57 @@ describe('apps/worker - startWorker lifecycle', () => {
     expect(process.listenerCount('SIGTERM')).toBe(initialSigterm);
   });
 
-  it('remains alive as an active process until stopped and exits cleanly', async () => {
+  it('handles SIGINT gracefully by running shutdown path and closing resources', async () => {
+    const handleRef = vi.fn();
+    const handleClose = vi.fn();
+    const onStarted = vi.fn();
+
+    const workerPromise = startWorker({
+      config: mockConfig,
+      installSignalHandlers: true,
+      onStarted,
+      runtimeHandle: {
+        ref: handleRef,
+        close: handleClose,
+      },
+    });
+
+    expect(onStarted).toHaveBeenCalledTimes(1);
+    expect(handleRef).toHaveBeenCalledTimes(1);
+    expect(handleClose).not.toHaveBeenCalled();
+
+    process.emit('SIGINT');
+
+    await expect(workerPromise).resolves.toBeUndefined();
+    expect(handleClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('handles SIGTERM gracefully by running shutdown path and closing resources', async () => {
+    const handleRef = vi.fn();
+    const handleClose = vi.fn();
+    const onStarted = vi.fn();
+
+    const workerPromise = startWorker({
+      config: mockConfig,
+      installSignalHandlers: true,
+      onStarted,
+      runtimeHandle: {
+        ref: handleRef,
+        close: handleClose,
+      },
+    });
+
+    expect(onStarted).toHaveBeenCalledTimes(1);
+    expect(handleRef).toHaveBeenCalledTimes(1);
+    expect(handleClose).not.toHaveBeenCalled();
+
+    process.emit('SIGTERM');
+
+    await expect(workerPromise).resolves.toBeUndefined();
+    expect(handleClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('proves graceful handling on SIGINT in a real process exiting with code 0', async () => {
     const { spawn } = await import('node:child_process');
     const path = await import('node:path');
 
@@ -168,8 +242,8 @@ describe('apps/worker - startWorker lifecycle', () => {
       }, 50);
     });
 
-    // Verify it stays alive for at least 400ms (proving it does not exit prematurely after 253ms)
-    await new Promise((resolve) => setTimeout(resolve, 400));
+    // Verify it stays alive in idle state
+    await new Promise((resolve) => setTimeout(resolve, 300));
     expect(child.exitCode).toBeNull();
     expect(child.killed).toBe(false);
 
@@ -179,9 +253,72 @@ describe('apps/worker - startWorker lifecycle', () => {
       },
     );
 
-    child.kill('SIGTERM');
+    // Deliver SIGINT via stdin signal bridge (Windows-compatible non-destructive signal delivery)
+    child.stdin.write('SIGINT\n');
     const exit = await exitPromise;
 
-    expect(exit.code === 0 || exit.signal === 'SIGTERM').toBe(true);
+    expect(exit.code).toBe(0);
+    expect(exit.signal).toBeNull();
+    expect(output).toContain('Worker process received SIGINT, shutting down gracefully');
+    expect(output).toContain('Worker process stopped gracefully');
+  }, 10000);
+
+  it('proves graceful handling on SIGTERM in a real process exiting with code 0', async () => {
+    const { spawn } = await import('node:child_process');
+    const path = await import('node:path');
+
+    const workerDir = path.resolve(__dirname, '..');
+    const workerScript = path.resolve(workerDir, 'src/main.ts');
+    const child = spawn(process.execPath, ['--import', 'tsx', workerScript], {
+      cwd: workerDir,
+      env: {
+        ...process.env,
+        NODE_ENV: 'test',
+        LOG_LEVEL: 'info',
+      },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    let output = '';
+    child.stdout.on('data', (d) => {
+      output += d.toString();
+    });
+    child.stderr.on('data', (d) => {
+      output += d.toString();
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(
+        () => reject(new Error(`Worker did not start in time: ${output}`)),
+        5000,
+      );
+      const interval = setInterval(() => {
+        if (output.includes('Worker process started and entering idle state')) {
+          clearTimeout(timeout);
+          clearInterval(interval);
+          resolve();
+        }
+      }, 50);
+    });
+
+    // Verify it stays alive in idle state
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(child.exitCode).toBeNull();
+    expect(child.killed).toBe(false);
+
+    const exitPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+      (resolve) => {
+        child.once('exit', (code, signal) => resolve({ code, signal }));
+      },
+    );
+
+    // Deliver SIGTERM via stdin signal bridge (Windows-compatible non-destructive signal delivery)
+    child.stdin.write('SIGTERM\n');
+    const exit = await exitPromise;
+
+    expect(exit.code).toBe(0);
+    expect(exit.signal).toBeNull();
+    expect(output).toContain('Worker process received SIGTERM, shutting down gracefully');
+    expect(output).toContain('Worker process stopped gracefully');
   }, 10000);
 });
