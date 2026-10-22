@@ -42,6 +42,10 @@ jobs:
 
       - name: Verify Compose config
         if: success() || failure()
+        env:
+          POSTGRES_USER: ci_validation_user
+          POSTGRES_PASSWORD: ci_validation_password
+          POSTGRES_DB: ci_validation_db
         run: docker compose config --quiet
 
       - name: Verify infrastructure pins
