@@ -30,13 +30,58 @@ export async function startApiServer(options: StartServerOptions): Promise<ApiSe
   let state: ServerState = 'starting';
   let closePromise: Promise<void> | undefined;
   let closeRequestedDuringStartup = false;
+  let terminated = false;
+  let signalHandlersInstalled = false;
+
+  const invokeTerminate = (exitCode: number): void => {
+    if (terminated) {
+      return;
+    }
+    terminated = true;
+    terminate(exitCode);
+  };
 
   const removeSignalHandlers = (): void => {
-    if (options.installSignalHandlers !== false) {
+    if (signalHandlersInstalled) {
+      signalHandlersInstalled = false;
       process.removeListener('SIGINT', handleSigint);
       process.removeListener('SIGTERM', handleSigterm);
     }
   };
+
+  const handleSignal = (): void => {
+    void close()
+      .then(() => {
+        invokeTerminate(0);
+      })
+      .catch(() => {
+        // executeClose or timeout handler already logged failure and invoked invokeTerminate(1)
+      });
+  };
+
+  const handleSigint = (): void => handleSignal();
+  const handleSigterm = (): void => handleSignal();
+
+  if (options.installSignalHandlers !== false) {
+    signalHandlersInstalled = true;
+    process.on('SIGINT', handleSigint);
+    process.on('SIGTERM', handleSigterm);
+  }
+
+  let rejectStartup: ((err: Error) => void) | undefined;
+  const startupAbortPromise = new Promise<never>((_, reject) => {
+    rejectStartup = reject;
+  });
+
+  const defaultListener = async (fastifyApp: FastifyInstance, cfg: AppConfig): Promise<void> => {
+    await fastifyApp.listen({
+      host: cfg.apiHost,
+      port: cfg.apiPort,
+    });
+  };
+
+  const listener = options.listener ?? defaultListener;
+  const startupPromise = listener(app, config);
 
   const executeClose = async (): Promise<void> => {
     removeSignalHandlers();
@@ -57,7 +102,7 @@ export async function startApiServer(options: StartServerOptions): Promise<ApiSe
       state = 'closed';
       const message = err instanceof Error ? err.message : 'Unknown error';
       console.error(`API server shutdown failure: ${message}`);
-      terminate(1);
+      invokeTerminate(1);
       throw err;
     } finally {
       if (timer) {
@@ -75,16 +120,39 @@ export async function startApiServer(options: StartServerOptions): Promise<ApiSe
     }
     if (state === 'starting') {
       closeRequestedDuringStartup = true;
+      state = 'closing';
+      removeSignalHandlers();
+
       closePromise = (async () => {
+        let shutdownTimer: NodeJS.Timeout | undefined;
+        const shutdownTimeoutPromise = new Promise<never>((_, reject) => {
+          shutdownTimer = setTimeout(() => {
+            reject(new Error(`API server graceful shutdown timed out after ${timeoutMs}ms`));
+          }, timeoutMs);
+        });
+
         try {
-          await startupPromise;
-        } catch {
-          removeSignalHandlers();
+          // Bounded wait for startupPromise so hung startup listener cannot block shutdown indefinitely
+          await Promise.race([startupPromise, shutdownTimeoutPromise]);
+        } catch (err) {
           state = 'closed';
-          return;
+          removeSignalHandlers();
+          const message = err instanceof Error ? err.message : 'Unknown error';
+          console.error(`API server shutdown failure: ${message}`);
+          invokeTerminate(1);
+          const errorObj = err instanceof Error ? err : new Error(message);
+          rejectStartup?.(errorObj);
+          throw errorObj;
+        } finally {
+          if (shutdownTimer) {
+            clearTimeout(shutdownTimer);
+          }
         }
+
+        // If startup completed within deadline, proceed to close the server
         await executeClose();
       })();
+
       return closePromise;
     }
 
@@ -92,36 +160,8 @@ export async function startApiServer(options: StartServerOptions): Promise<ApiSe
     return closePromise;
   };
 
-  const handleSignal = (): void => {
-    void close()
-      .then(() => {
-        terminate(0);
-      })
-      .catch(() => {
-        // executeClose already logged failure and invoked terminate(1)
-      });
-  };
-
-  const handleSigint = (): void => handleSignal();
-  const handleSigterm = (): void => handleSignal();
-
-  if (options.installSignalHandlers !== false) {
-    process.on('SIGINT', handleSigint);
-    process.on('SIGTERM', handleSigterm);
-  }
-
-  const defaultListener = async (fastifyApp: FastifyInstance, cfg: AppConfig): Promise<void> => {
-    await fastifyApp.listen({
-      host: cfg.apiHost,
-      port: cfg.apiPort,
-    });
-  };
-
-  const listener = options.listener ?? defaultListener;
-  const startupPromise = listener(app, config);
-
   try {
-    await startupPromise;
+    await Promise.race([startupPromise, startupAbortPromise]);
     state = 'running';
   } catch (err) {
     removeSignalHandlers();

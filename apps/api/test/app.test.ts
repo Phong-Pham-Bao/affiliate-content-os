@@ -240,4 +240,150 @@ describe('apps/api - startApiServer lifecycle', () => {
     expect(terminateSpy).toHaveBeenCalledWith(1);
     consoleErrorSpy.mockRestore();
   });
+
+  it('bounds shutdown when SIGINT arrives during permanently pending startup', async () => {
+    const initialSigintCount = process.listenerCount('SIGINT');
+    const initialSigtermCount = process.listenerCount('SIGTERM');
+
+    const terminateSpy = vi.fn();
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    // Permanently pending listener
+    const pendingListener = () => new Promise<void>(() => {});
+
+    let startupSettled = false;
+    let startupError: unknown = null;
+
+    const startPromise = startApiServer({
+      config: testConfig,
+      listener: pendingListener,
+      shutdownTimeoutMs: 40,
+      terminate: terminateSpy,
+      installSignalHandlers: true,
+    }).then(
+      () => {
+        startupSettled = true;
+      },
+      (err) => {
+        startupSettled = true;
+        startupError = err;
+      },
+    );
+
+    expect(process.listenerCount('SIGINT')).toBe(initialSigintCount + 1);
+    expect(process.listenerCount('SIGTERM')).toBe(initialSigtermCount + 1);
+
+    // Trigger signal while startup is pending
+    process.emit('SIGINT');
+
+    // Emit repeated signals to verify idempotence
+    process.emit('SIGTERM');
+    process.emit('SIGINT');
+
+    // Wait for startPromise to settle
+    await startPromise;
+
+    expect(startupSettled).toBe(true);
+    expect(startupError).toBeInstanceOf(Error);
+    expect((startupError as Error).message).toMatch(/timed out after 40ms/);
+
+    expect(terminateSpy).toHaveBeenCalledTimes(1);
+    expect(terminateSpy).toHaveBeenCalledWith(1);
+
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'API server shutdown failure: API server graceful shutdown timed out after 40ms',
+      ),
+    );
+
+    expect(process.listenerCount('SIGINT')).toBe(initialSigintCount);
+    expect(process.listenerCount('SIGTERM')).toBe(initialSigtermCount);
+
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('bounds shutdown when SIGTERM arrives during permanently pending startup', async () => {
+    const initialSigintCount = process.listenerCount('SIGINT');
+    const initialSigtermCount = process.listenerCount('SIGTERM');
+
+    const terminateSpy = vi.fn();
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const pendingListener = () => new Promise<void>(() => {});
+
+    let startupSettled = false;
+    let startupError: unknown = null;
+
+    const startPromise = startApiServer({
+      config: testConfig,
+      listener: pendingListener,
+      shutdownTimeoutMs: 40,
+      terminate: terminateSpy,
+      installSignalHandlers: true,
+    }).then(
+      () => {
+        startupSettled = true;
+      },
+      (err) => {
+        startupSettled = true;
+        startupError = err;
+      },
+    );
+
+    process.emit('SIGTERM');
+    process.emit('SIGTERM');
+
+    await startPromise;
+
+    expect(startupSettled).toBe(true);
+    expect(startupError).toBeInstanceOf(Error);
+    expect((startupError as Error).message).toMatch(/timed out after 40ms/);
+
+    expect(terminateSpy).toHaveBeenCalledTimes(1);
+    expect(terminateSpy).toHaveBeenCalledWith(1);
+
+    expect(process.listenerCount('SIGINT')).toBe(initialSigintCount);
+    expect(process.listenerCount('SIGTERM')).toBe(initialSigtermCount);
+
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('handles signal shutdown gracefully when startup completes within deadline', async () => {
+    const initialSigintCount = process.listenerCount('SIGINT');
+    const initialSigtermCount = process.listenerCount('SIGTERM');
+
+    const terminateSpy = vi.fn();
+    let proceedStartup: () => void = () => {};
+    const startupBarrier = new Promise<void>((resolve) => {
+      proceedStartup = resolve;
+    });
+
+    const startPromise = startApiServer({
+      config: testConfig,
+      installSignalHandlers: true,
+      shutdownTimeoutMs: 100,
+      terminate: terminateSpy,
+      listener: async (fastifyApp) => {
+        await fastifyApp.ready();
+        await startupBarrier;
+      },
+    });
+
+    // Signal received during startup
+    process.emit('SIGINT');
+
+    // Startup finishes within deadline
+    setTimeout(() => {
+      proceedStartup();
+    }, 20);
+
+    const server = await startPromise;
+    expect(server).toBeDefined();
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(terminateSpy).toHaveBeenCalledWith(0);
+    expect(process.listenerCount('SIGINT')).toBe(initialSigintCount);
+    expect(process.listenerCount('SIGTERM')).toBe(initialSigtermCount);
+  });
 });
