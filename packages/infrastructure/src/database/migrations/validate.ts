@@ -1,3 +1,4 @@
+import type { TestAdminDatabaseConfig } from '@affiliate-content-os/config';
 import pg from 'pg';
 import { DatabaseError } from '../errors.js';
 import { discoverMigrations, getDefaultMigrationsDir } from './discovery.js';
@@ -9,9 +10,15 @@ import {
 } from './safety.js';
 
 export interface ValidateMigrationsOptions {
-  readonly adminUrl: string;
-  readonly ssl?: boolean | pg.ConnectionConfig['ssl'];
-  readonly migrationsDir?: string;
+  readonly adminUrl?: string | undefined;
+  readonly adminConfig?: TestAdminDatabaseConfig | undefined;
+  readonly ssl?: boolean | pg.ConnectionConfig['ssl'] | undefined;
+  readonly sslCaContent?: string | undefined;
+  readonly migrationsDir?: string | undefined;
+  readonly connectionTimeoutMs?: number | undefined;
+  readonly statementTimeoutMs?: number | undefined;
+  readonly effectiveNodeEnv?: string | undefined;
+  readonly isCi?: boolean | undefined;
 }
 
 export async function validateMigrations(options: ValidateMigrationsOptions): Promise<{
@@ -24,13 +31,30 @@ export async function validateMigrations(options: ValidateMigrationsOptions): Pr
   const localMigrations = discoverMigrations(migrationsDir);
   const targetDbName = generateTestDatabaseName();
 
+  const configOrUrl: TestAdminDatabaseConfig | string =
+    options.adminConfig ?? options.adminUrl ?? '';
+  const safetyOptions = {
+    effectiveNodeEnv: options.effectiveNodeEnv,
+    isCi: options.isCi,
+    sslCaContent: options.sslCaContent,
+  };
+
+  const connectionTimeoutMs =
+    options.connectionTimeoutMs ?? options.adminConfig?.connectionTimeoutMs ?? 5000;
+  const statementTimeoutMs =
+    options.statementTimeoutMs ?? options.adminConfig?.statementTimeoutMs ?? 15000;
+
   let isolatedDbUrl: string | undefined;
 
   try {
-    isolatedDbUrl = await createIsolatedDatabase(options.adminUrl, targetDbName, options.ssl);
+    isolatedDbUrl = await createIsolatedDatabase(configOrUrl, targetDbName, safetyOptions);
 
     // 1. Initial migration run on empty database
-    const initialRun = await runMigrationCommand(isolatedDbUrl, options.ssl, { migrationsDir });
+    const initialRun = await runMigrationCommand(isolatedDbUrl, options.ssl, {
+      migrationsDir,
+      connectionTimeoutMs,
+      statementTimeoutMs,
+    });
     if (initialRun.appliedCount !== localMigrations.length) {
       throw new DatabaseError(
         `Migration validation failed: expected ${localMigrations.length} applied migrations, but got ${initialRun.appliedCount}`,
@@ -38,7 +62,11 @@ export async function validateMigrations(options: ValidateMigrationsOptions): Pr
     }
 
     // 2. Status verification
-    const status = await checkMigrationStatusCommand(isolatedDbUrl, options.ssl, { migrationsDir });
+    const status = await checkMigrationStatusCommand(isolatedDbUrl, options.ssl, {
+      migrationsDir,
+      connectionTimeoutMs,
+      statementTimeoutMs,
+    });
     if (!status.isUpToDate || status.pending.length > 0) {
       throw new DatabaseError(
         'Migration validation failed: status is not up to date after initial run',
@@ -46,7 +74,11 @@ export async function validateMigrations(options: ValidateMigrationsOptions): Pr
     }
 
     // 3. Second run must be a no-op
-    const secondRun = await runMigrationCommand(isolatedDbUrl, options.ssl, { migrationsDir });
+    const secondRun = await runMigrationCommand(isolatedDbUrl, options.ssl, {
+      migrationsDir,
+      connectionTimeoutMs,
+      statementTimeoutMs,
+    });
     if (secondRun.appliedCount !== 0) {
       throw new DatabaseError(
         `Migration validation failed: second run was not a no-op (applied ${secondRun.appliedCount} migrations)`,
@@ -54,7 +86,12 @@ export async function validateMigrations(options: ValidateMigrationsOptions): Pr
     }
 
     // 4. Verify recorded schema_migrations rows and checksums
-    const client = new pg.Client({ connectionString: isolatedDbUrl, ssl: options.ssl });
+    const client = new pg.Client({
+      connectionString: isolatedDbUrl,
+      ssl: options.ssl,
+      connectionTimeoutMillis: connectionTimeoutMs,
+      statement_timeout: statementTimeoutMs,
+    });
     await client.connect();
     try {
       const res = await client.query<{
@@ -96,7 +133,7 @@ export async function validateMigrations(options: ValidateMigrationsOptions): Pr
     };
   } finally {
     if (isolatedDbUrl) {
-      await dropIsolatedDatabase(options.adminUrl, targetDbName, options.ssl);
+      await dropIsolatedDatabase(configOrUrl, targetDbName, safetyOptions);
     }
   }
 }

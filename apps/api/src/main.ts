@@ -1,6 +1,7 @@
 import {
   loadConfig,
   loadDatabaseConfig,
+  readAndValidateSslCaFile,
   getRedactedConfigMetadata,
   getRedactedDatabaseMetadata,
   type AppConfig,
@@ -12,17 +13,21 @@ import { startApiServer } from './server.js';
 async function main(): Promise<void> {
   let config: AppConfig;
   let databaseConfig: DatabaseConfig;
+  let sslCaContent: string | undefined;
 
   try {
     config = loadConfig(process.env);
     databaseConfig = loadDatabaseConfig(process.env);
+    if (databaseConfig.sslMode === 'verify-full' && databaseConfig.sslCaFile) {
+      sslCaContent = readAndValidateSslCaFile(databaseConfig.sslCaFile);
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown configuration error';
     console.error(`API process startup failed: ${message}`);
     process.exit(1);
   }
 
-  const database = createDatabase(databaseConfig);
+  const database = createDatabase(databaseConfig, { sslCaContent });
 
   try {
     await startApiServer({ config, database });

@@ -23,4 +23,7 @@ export interface MigrationStatus {
 export interface RunMigrationsOptions {
   readonly migrationsDir?: string | undefined;
   readonly onProgress?: ((migration: MigrationFile, durationMs: number) => void) | undefined;
+  readonly connectionTimeoutMs?: number | undefined;
+  readonly statementTimeoutMs?: number | undefined;
+  readonly lockTimeoutMs?: number | undefined;
 }

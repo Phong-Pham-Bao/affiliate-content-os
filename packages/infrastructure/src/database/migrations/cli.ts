@@ -1,4 +1,9 @@
-import { loadMigrationConfig, loadTestAdminDatabaseConfig } from '@affiliate-content-os/config';
+import { fileURLToPath } from 'node:url';
+import {
+  loadMigrationConfig,
+  loadTestAdminDatabaseConfig,
+  readAndValidateSslCaFile,
+} from '@affiliate-content-os/config';
 import { resolveSslOptions } from '../ssl.js';
 import { checkMigrationStatusCommand, runMigrationCommand } from './runner.js';
 import { validateMigrations } from './validate.js';
@@ -13,18 +18,16 @@ export async function runMigrationCli(args: readonly string[]): Promise<void> {
 
   if (command === 'migrate') {
     const config = loadMigrationConfig(process.env);
-    const ssl = resolveSslOptions({
-      databaseUrl: config.migrationDatabaseUrl,
-      poolMax: 1,
-      connectionTimeoutMs: config.connectionTimeoutMs,
-      idleTimeoutMs: 1000,
-      statementTimeoutMs: config.statementTimeoutMs,
-      sslMode: config.sslMode,
-      ...(config.sslCaFile ? { sslCaFile: config.sslCaFile } : {}),
-    });
+    let sslCaContent: string | undefined;
+    if (config.sslMode === 'verify-full' && config.sslCaFile) {
+      sslCaContent = readAndValidateSslCaFile(config.sslCaFile);
+    }
+    const ssl = resolveSslOptions(config.sslMode, sslCaContent);
 
     console.log('[db:migrate] Discovering and executing pending migrations...');
     const result = await runMigrationCommand(config.migrationDatabaseUrl, ssl, {
+      connectionTimeoutMs: config.connectionTimeoutMs,
+      statementTimeoutMs: config.statementTimeoutMs,
       onProgress: (m, durationMs) => {
         console.log(`[db:migrate] Applied ${m.filename} in ${durationMs}ms`);
       },
@@ -40,17 +43,16 @@ export async function runMigrationCli(args: readonly string[]): Promise<void> {
 
   if (command === 'status') {
     const config = loadMigrationConfig(process.env);
-    const ssl = resolveSslOptions({
-      databaseUrl: config.migrationDatabaseUrl,
-      poolMax: 1,
-      connectionTimeoutMs: config.connectionTimeoutMs,
-      idleTimeoutMs: 1000,
-      statementTimeoutMs: config.statementTimeoutMs,
-      sslMode: config.sslMode,
-      ...(config.sslCaFile ? { sslCaFile: config.sslCaFile } : {}),
-    });
+    let sslCaContent: string | undefined;
+    if (config.sslMode === 'verify-full' && config.sslCaFile) {
+      sslCaContent = readAndValidateSslCaFile(config.sslCaFile);
+    }
+    const ssl = resolveSslOptions(config.sslMode, sslCaContent);
 
-    const status = await checkMigrationStatusCommand(config.migrationDatabaseUrl, ssl);
+    const status = await checkMigrationStatusCommand(config.migrationDatabaseUrl, ssl, {
+      connectionTimeoutMs: config.connectionTimeoutMs,
+      statementTimeoutMs: config.statementTimeoutMs,
+    });
 
     console.log(`[db:migrate:status] Applied migrations: ${status.applied.length}`);
     for (const a of status.applied) {
@@ -78,20 +80,17 @@ export async function runMigrationCli(args: readonly string[]): Promise<void> {
 
   if (command === 'validate') {
     const config = loadTestAdminDatabaseConfig(process.env);
-    const ssl = resolveSslOptions({
-      databaseUrl: config.testDatabaseAdminUrl,
-      poolMax: 1,
-      connectionTimeoutMs: config.connectionTimeoutMs,
-      idleTimeoutMs: 1000,
-      statementTimeoutMs: config.statementTimeoutMs,
-      sslMode: config.sslMode,
-      ...(config.sslCaFile ? { sslCaFile: config.sslCaFile } : {}),
-    });
+    let sslCaContent: string | undefined;
+    if (config.sslMode === 'verify-full' && config.sslCaFile) {
+      sslCaContent = readAndValidateSslCaFile(config.sslCaFile);
+    }
+    const ssl = resolveSslOptions(config.sslMode, sslCaContent);
 
     console.log('[db:migrate:validate] Validating migrations against isolated database...');
     const result = await validateMigrations({
-      adminUrl: config.testDatabaseAdminUrl,
+      adminConfig: config,
       ssl,
+      sslCaContent,
     });
 
     console.log(
@@ -100,7 +99,13 @@ export async function runMigrationCli(args: readonly string[]): Promise<void> {
   }
 }
 
-if (process.argv[1] && process.argv[1].endsWith('cli.js')) {
+const currentFilePath = fileURLToPath(import.meta.url);
+if (
+  process.argv[1] &&
+  (process.argv[1] === currentFilePath ||
+    process.argv[1].endsWith('cli.js') ||
+    process.argv[1].endsWith('cli.ts'))
+) {
   runMigrationCli(process.argv.slice(2)).catch((err) => {
     console.error('[db:migrate] Error:', err instanceof Error ? err.message : String(err));
     process.exit(1);

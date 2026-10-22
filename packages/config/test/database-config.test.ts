@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   ConfigurationError,
@@ -10,6 +13,7 @@ import {
   loadDatabaseConfig,
   loadMigrationConfig,
   loadTestAdminDatabaseConfig,
+  readAndValidateSslCaFile,
 } from '../src/index.js';
 
 describe('Database configuration validation', () => {
@@ -368,6 +372,88 @@ describe('Database configuration validation', () => {
       expect(serialized).not.toContain('acos_local_only');
       expect(serialized).not.toContain('127.0.0.1');
       expect(serialized).not.toContain('acos_dev');
+    });
+
+    it('never echoes the required sentinel value in test admin validation errors', () => {
+      let error: ConfigurationError | undefined;
+      try {
+        loadTestAdminDatabaseConfig({
+          NODE_ENV: 'test',
+          TEST_DATABASE_ADMIN_URL: validAdminUrl,
+          TEST_DATABASE_DISPOSABLE: 'invalid_confirmation_value',
+        });
+      } catch (err) {
+        if (err instanceof ConfigurationError) {
+          error = err;
+        }
+      }
+
+      expect(error).toBeDefined();
+      const serialized = JSON.stringify(error?.toJSON());
+      expect(serialized).not.toContain(TEST_DATABASE_DISPOSABLE_SENTINEL);
+      expect(error?.message).not.toContain(TEST_DATABASE_DISPOSABLE_SENTINEL);
+      for (const issue of error?.issues ?? []) {
+        expect(issue.message).not.toContain(TEST_DATABASE_DISPOSABLE_SENTINEL);
+      }
+    });
+  });
+
+  describe('readAndValidateSslCaFile', () => {
+    it('rejects non-string or empty path', () => {
+      expect(() => readAndValidateSslCaFile('')).toThrow(ConfigurationError);
+      expect(() => readAndValidateSslCaFile(123)).toThrow(ConfigurationError);
+      expect(() => readAndValidateSslCaFile(null)).toThrow(ConfigurationError);
+    });
+
+    it('rejects relative path', () => {
+      expect(() => readAndValidateSslCaFile('certs/ca.pem')).toThrow(ConfigurationError);
+    });
+
+    it('rejects non-existent file or directory without leaking path', () => {
+      const secretPath = path.resolve(os.tmpdir(), 'non_existent_secret_ca_bundle.pem');
+      let error: ConfigurationError | undefined;
+      try {
+        readAndValidateSslCaFile(secretPath);
+      } catch (err) {
+        if (err instanceof ConfigurationError) {
+          error = err;
+        }
+      }
+      expect(error).toBeDefined();
+      expect(JSON.stringify(error?.toJSON())).not.toContain('non_existent_secret_ca_bundle');
+      expect(error?.message).not.toContain('non_existent_secret_ca_bundle');
+    });
+
+    it('rejects empty file', () => {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'acos_empty_ca_'));
+      try {
+        const filePath = path.join(tempDir, 'empty.pem');
+        fs.writeFileSync(filePath, '   \n  ');
+        expect(() => readAndValidateSslCaFile(filePath)).toThrow(ConfigurationError);
+      } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    it('rejects invalid PEM/trust content without leaking file content', () => {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'acos_invalid_ca_'));
+      const secretCaContent = 'SECRET_MALFORMED_CERT_CONTENT_XYZ';
+      try {
+        const filePath = path.join(tempDir, 'invalid.pem');
+        fs.writeFileSync(filePath, secretCaContent);
+        let error: ConfigurationError | undefined;
+        try {
+          readAndValidateSslCaFile(filePath);
+        } catch (err) {
+          if (err instanceof ConfigurationError) {
+            error = err;
+          }
+        }
+        expect(error).toBeDefined();
+        expect(JSON.stringify(error?.toJSON())).not.toContain(secretCaContent);
+      } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
     });
   });
 });

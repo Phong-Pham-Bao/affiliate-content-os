@@ -29,4 +29,5 @@ export {
   loadDatabaseConfig,
   loadMigrationConfig,
   loadTestAdminDatabaseConfig,
+  readAndValidateSslCaFile,
 } from './validate-database.js';

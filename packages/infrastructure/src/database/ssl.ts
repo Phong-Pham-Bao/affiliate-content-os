@@ -1,42 +1,34 @@
-import fs from 'node:fs';
 import tls from 'node:tls';
-import type { DatabaseConfig } from '@affiliate-content-os/config';
+import type { DatabaseSslMode } from '@affiliate-content-os/config';
 import type pg from 'pg';
 import { DatabaseError } from './errors.js';
 
 export function resolveSslOptions(
-  config: DatabaseConfig,
-  caContentOverride?: string,
+  sslModeOrConfig: DatabaseSslMode | { readonly sslMode: DatabaseSslMode },
+  sslCaContent?: string,
 ): boolean | pg.ConnectionConfig['ssl'] {
-  if (config.sslMode === 'disable') {
+  const mode = typeof sslModeOrConfig === 'string' ? sslModeOrConfig : sslModeOrConfig.sslMode;
+
+  if (mode === 'disable') {
     return false;
   }
 
-  let caContent = caContentOverride;
-  if (!caContent && config.sslCaFile) {
-    try {
-      const stat = fs.statSync(config.sslCaFile);
-      if (!stat.isFile()) {
-        throw new Error('SSL CA path is not a regular file');
-      }
-      caContent = fs.readFileSync(config.sslCaFile, 'utf8');
-    } catch {
-      throw new DatabaseError('Failed to read SSL CA bundle file for verify-full mode');
+  if (mode === 'verify-full') {
+    if (!sslCaContent || sslCaContent.trim() === '') {
+      throw new DatabaseError('SSL CA content is required for verify-full mode');
     }
+
+    try {
+      tls.createSecureContext({ ca: sslCaContent });
+    } catch {
+      throw new DatabaseError('Invalid SSL CA bundle: failed to create secure TLS context');
+    }
+
+    return {
+      rejectUnauthorized: true,
+      ca: sslCaContent,
+    };
   }
 
-  if (!caContent || caContent.trim() === '') {
-    throw new DatabaseError('SSL CA bundle content is empty or missing for verify-full mode');
-  }
-
-  try {
-    tls.createSecureContext({ ca: caContent });
-  } catch {
-    throw new DatabaseError('Invalid SSL CA bundle: failed to create secure TLS context');
-  }
-
-  return {
-    rejectUnauthorized: true,
-    ca: caContent,
-  };
+  throw new DatabaseError('Unsupported database SSL mode');
 }

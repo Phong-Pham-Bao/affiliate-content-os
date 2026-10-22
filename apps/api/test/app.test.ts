@@ -133,21 +133,42 @@ describe('apps/api - startApiServer lifecycle', () => {
     expect(terminateSpy).toHaveBeenCalledWith(1);
   });
 
-  it('consumes one single shared deadline across listener and pool shutdown', async () => {
+  it('consumes one single shared deadline across listener and pool shutdown with injected timers', async () => {
     let fakeTime = 1000;
     const now = () => fakeTime;
     const terminateSpy = vi.fn();
 
+    interface FakeTimer {
+      id: number;
+      fn: () => void;
+      ms: number;
+    }
+    const timers: FakeTimer[] = [];
+    let timerIdSeq = 0;
+
+    const setTimer = (fn: () => void, ms: number) => {
+      const id = ++timerIdSeq;
+      timers.push({ id, fn, ms });
+      return id;
+    };
+    const clearTimer = (id: unknown) => {
+      const idx = timers.findIndex((t) => t.id === id);
+      if (idx !== -1) {
+        timers.splice(idx, 1);
+      }
+    };
+
     const mockDb = createMockDatabase({
       close: vi.fn(async () => {
-        // Fast close
+        // Pool close consumes 1500ms of the remaining budget
+        fakeTime += 1500;
       }),
     });
 
     const customApp = createApp({ config: testConfig });
     vi.spyOn(customApp, 'close').mockImplementation((async () => {
-      // Advance clock by 3000ms
-      fakeTime += 3000;
+      // Listener close consumes 2500ms
+      fakeTime += 2500;
     }) as never);
 
     const server = await startApiServer({
@@ -156,6 +177,8 @@ describe('apps/api - startApiServer lifecycle', () => {
       database: mockDb,
       shutdownTimeoutMs: 5000,
       now,
+      setTimer,
+      clearTimer,
       terminate: terminateSpy,
       installSignalHandlers: false,
       listener: async (app) => {
@@ -165,8 +188,166 @@ describe('apps/api - startApiServer lifecycle', () => {
 
     await server.close();
 
+    // Total time elapsed: 4000ms <= 5000ms budget
+    expect(fakeTime).toBe(5000);
     expect(mockDb.close).toHaveBeenCalledTimes(1);
-    expect(server.database).toBe(mockDb);
+    expect(terminateSpy).not.toHaveBeenCalled(); // clean programmatic close
+  });
+
+  it('triggers forced exit code 1 when listener close exceeds the shared deadline', async () => {
+    let fakeTime = 1000;
+    const now = () => fakeTime;
+    const terminateSpy = vi.fn();
+
+    const timers: { id: number; fn: () => void }[] = [];
+    let timerSeq = 0;
+    const setTimer = (fn: () => void) => {
+      const id = ++timerSeq;
+      timers.push({ id, fn });
+      return id;
+    };
+    const clearTimer = (id: unknown) => {
+      const idx = timers.findIndex((t) => t.id === id);
+      if (idx !== -1) {
+        timers.splice(idx, 1);
+      }
+    };
+
+    const customApp = createApp({ config: testConfig });
+    vi.spyOn(customApp, 'close').mockImplementation((() => {
+      // Listener close hangs indefinitely; trigger injected timer
+      fakeTime += 6000;
+      const timer = timers.shift();
+      timer?.fn();
+      return new Promise<void>(() => {});
+    }) as never);
+
+    const mockDb = createMockDatabase();
+
+    const server = await startApiServer({
+      config: testConfig,
+      app: customApp,
+      database: mockDb,
+      shutdownTimeoutMs: 5000,
+      now,
+      setTimer,
+      clearTimer,
+      terminate: terminateSpy,
+      installSignalHandlers: false,
+      listener: async (app) => {
+        await app.ready();
+      },
+    });
+
+    await expect(server.close()).rejects.toThrow(/timed out/);
+    expect(terminateSpy).toHaveBeenCalledWith(1);
+  });
+
+  it('triggers forced exit code 1 when database pool close exceeds remaining deadline budget', async () => {
+    let fakeTime = 1000;
+    const now = () => fakeTime;
+    const terminateSpy = vi.fn();
+
+    const timers: { id: number; fn: () => void }[] = [];
+    let timerSeq = 0;
+    const setTimer = (fn: () => void) => {
+      const id = ++timerSeq;
+      timers.push({ id, fn });
+      return id;
+    };
+    const clearTimer = (id: unknown) => {
+      const idx = timers.findIndex((t) => t.id === id);
+      if (idx !== -1) {
+        timers.splice(idx, 1);
+      }
+    };
+
+    const customApp = createApp({ config: testConfig });
+    vi.spyOn(customApp, 'close').mockImplementation((async () => {
+      // Listener close took 4000ms out of 5000ms
+      fakeTime += 4000;
+    }) as never);
+
+    const mockDb = createMockDatabase({
+      close: vi.fn((() => {
+        // Pool close exceeds the remaining 1000ms budget
+        fakeTime += 2000;
+        const timer = timers.shift();
+        timer?.fn();
+        return new Promise<void>(() => {});
+      }) as never),
+    });
+
+    const server = await startApiServer({
+      config: testConfig,
+      app: customApp,
+      database: mockDb,
+      shutdownTimeoutMs: 5000,
+      now,
+      setTimer,
+      clearTimer,
+      terminate: terminateSpy,
+      installSignalHandlers: false,
+      listener: async (app) => {
+        await app.ready();
+      },
+    });
+
+    await expect(server.close()).rejects.toThrow(/timed out/);
+    expect(terminateSpy).toHaveBeenCalledWith(1);
+  });
+
+  it('preserves termination code 1 and ignores late completion after timeout', async () => {
+    let fakeTime = 1000;
+    const now = () => fakeTime;
+    const terminateSpy = vi.fn();
+
+    let triggerTimeout: (() => void) | undefined;
+    const setTimer = (fn: () => void) => {
+      triggerTimeout = fn;
+      return 1;
+    };
+    const clearTimer = vi.fn();
+
+    let resolveClose: () => void;
+    const mockDb = createMockDatabase({
+      close: vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            resolveClose = resolve;
+          }),
+      ),
+    });
+
+    const customApp = createApp({ config: testConfig });
+    vi.spyOn(customApp, 'close').mockImplementation((async () => {}) as never);
+
+    const server = await startApiServer({
+      config: testConfig,
+      app: customApp,
+      database: mockDb,
+      shutdownTimeoutMs: 5000,
+      now,
+      setTimer,
+      clearTimer,
+      terminate: terminateSpy,
+      installSignalHandlers: false,
+      listener: async (app) => {
+        await app.ready();
+      },
+    });
+
+    const closePromise = server.close();
+    // Simulate deadline timer firing
+    fakeTime += 6000;
+    triggerTimeout?.();
+
+    await expect(closePromise).rejects.toThrow(/timed out/);
+    expect(terminateSpy).toHaveBeenCalledWith(1);
+
+    // Late completion must not reverse exit code or invoke terminate again
+    resolveClose!();
+    expect(terminateSpy).toHaveBeenCalledTimes(1);
   });
 
   it('handles repeated signals safely without duplicate shutdown or leakage', async () => {

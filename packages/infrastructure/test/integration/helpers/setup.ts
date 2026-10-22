@@ -1,32 +1,80 @@
-import { loadTestAdminDatabaseConfig } from '@affiliate-content-os/config';
+import {
+  loadTestAdminDatabaseConfig,
+  readAndValidateSslCaFile,
+  type TestAdminDatabaseConfig,
+} from '@affiliate-content-os/config';
 import {
   createIsolatedDatabase,
   dropIsolatedDatabase,
   generateTestDatabaseName,
+  resolveSslOptions,
+  runMigrationCommand,
 } from '../../../src/database/index.js';
 
 export interface TestDatabaseContext {
   readonly dbName: string;
   readonly dbUrl: string;
-  readonly adminUrl: string;
+  readonly adminConfig: TestAdminDatabaseConfig;
   readonly cleanup: () => Promise<void>;
 }
 
-export async function setupIsolatedTestDatabase(): Promise<TestDatabaseContext> {
-  const adminConfig = loadTestAdminDatabaseConfig(process.env);
-  const adminUrl = adminConfig.testDatabaseAdminUrl;
+export interface SetupIsolatedOptions {
+  readonly rawEnv?: unknown;
+  readonly effectiveNodeEnv?: string;
+  readonly isCi?: boolean;
+  readonly skipMigrations?: boolean;
+}
+
+export async function setupIsolatedTestDatabase(
+  options?: SetupIsolatedOptions,
+): Promise<TestDatabaseContext> {
+  const adminConfig = loadTestAdminDatabaseConfig(options?.rawEnv ?? process.env);
   const dbName = generateTestDatabaseName();
 
-  const dbUrl = await createIsolatedDatabase(adminUrl, dbName);
+  let sslCaContent: string | undefined;
+  if (adminConfig.sslMode === 'verify-full' && adminConfig.sslCaFile) {
+    sslCaContent = readAndValidateSslCaFile(adminConfig.sslCaFile);
+  }
 
+  const safetyOptions = {
+    effectiveNodeEnv: options?.effectiveNodeEnv,
+    isCi: options?.isCi,
+    sslCaContent,
+  };
+
+  let cleanedUp = false;
   const cleanup = async (): Promise<void> => {
-    await dropIsolatedDatabase(adminUrl, dbName);
+    if (cleanedUp) {
+      return;
+    }
+    cleanedUp = true;
+    await dropIsolatedDatabase(adminConfig, dbName, safetyOptions);
   };
 
-  return {
-    dbName,
-    dbUrl,
-    adminUrl,
-    cleanup,
-  };
+  try {
+    const dbUrl = await createIsolatedDatabase(adminConfig, dbName, safetyOptions);
+
+    if (!options?.skipMigrations) {
+      // Apply migrations before handing the database to test suite
+      const migrationSsl = resolveSslOptions(adminConfig.sslMode, sslCaContent);
+      await runMigrationCommand(dbUrl, migrationSsl, {
+        connectionTimeoutMs: adminConfig.connectionTimeoutMs,
+        statementTimeoutMs: adminConfig.statementTimeoutMs,
+      });
+    }
+
+    return {
+      dbName,
+      dbUrl,
+      adminConfig,
+      cleanup,
+    };
+  } catch (err) {
+    try {
+      await cleanup();
+    } catch {
+      // Ignore cleanup error if create/migrate failed
+    }
+    throw err;
+  }
 }

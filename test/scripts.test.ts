@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { setupLocalEnv } from '../scripts/setup-local-env.mjs';
+import { prepareEnvironment } from '../scripts/run-with-env.mjs';
 import {
   extractPostgresReference,
   verifyInfrastructurePins,
@@ -104,6 +105,54 @@ describe('Scripts unit verification', () => {
           }),
         ).toThrow(/Platform child digests are rejected/);
       } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe('prepareEnvironment', () => {
+    it('fails with Run corepack pnpm env:local when .env is missing and not CI', () => {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'acos_run_env_missing_'));
+      const missingEnvPath = path.join(tempDir, '.env');
+      const mockExit = vi
+        .spyOn(process, 'exit')
+        .mockImplementation((code?: string | number | null | undefined) => {
+          throw new Error(`process.exit(${code})`);
+        });
+      const mockConsoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      try {
+        expect(() =>
+          prepareEnvironment({
+            envPath: missingEnvPath,
+            isCi: false,
+          }),
+        ).toThrow('process.exit(1)');
+
+        expect(mockConsoleError).toHaveBeenCalledWith('Run corepack pnpm env:local');
+      } finally {
+        mockExit.mockRestore();
+        mockConsoleError.mockRestore();
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    it('loads .env and sets target node env', () => {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'acos_run_env_success_'));
+      const envPath = path.join(tempDir, '.env');
+      fs.writeFileSync(envPath, 'CUSTOM_VAR=loaded_val\n');
+
+      try {
+        prepareEnvironment({
+          envPath,
+          setNodeEnv: 'test',
+          isCi: false,
+        });
+
+        expect(process.env['NODE_ENV']).toBe('test');
+        expect(process.env['CUSTOM_VAR']).toBe('loaded_val');
+      } finally {
+        delete process.env['CUSTOM_VAR'];
         fs.rmSync(tempDir, { recursive: true, force: true });
       }
     });

@@ -242,19 +242,18 @@ import {
 
 ### Database Environment Variables
 
-| Variable                           | Required | Type / Allowed Values                          | Default       | Rules & Constraints                                                                                                    |
-| ---------------------------------- | -------- | ---------------------------------------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `DATABASE_URL`                     | Yes      | `string` (`postgres://` or `postgresql://`)    | None          | Valid database connection URL without query parameters or hash fragments. Must be local loopback when SSL is disabled. |
-| `DATABASE_POOL_MIN`                | No       | `integer` (`0` - `100`)                        | `2`           | Minimum idle pool connections. Must be $\le$ `DATABASE_POOL_MAX`.                                                      |
-| `DATABASE_POOL_MAX`                | No       | `integer` (`1` - `100`)                        | `10`          | Maximum pool connections. Must be $\ge$ `DATABASE_POOL_MIN`.                                                           |
-| `DATABASE_CONNECTION_TIMEOUT_MS`   | No       | `integer` (`100` - `60000`)                    | `5000`        | Connection acquisition timeout in milliseconds.                                                                        |
-| `DATABASE_IDLE_TIMEOUT_MS`         | No       | `integer` (`1000` - `300000`)                  | `30000`       | Idle client eviction timeout in milliseconds.                                                                          |
-| `DATABASE_STATEMENT_TIMEOUT_MS`    | No       | `integer` (`100` - `300000`)                   | `10000`       | Statement execution timeout in milliseconds. Set on every acquired client session.                                     |
-| `DATABASE_SSL_MODE`                | No       | `'disable'` \| `'require'` \| `'verify-full'`  | `'disable'`   | SSL mode. In `production`, `'disable'` is strictly forbidden.                                                          |
-| `DATABASE_SSL_REJECT_UNAUTHORIZED` | No       | `'true'` \| `'false'`                          | Mode-derived  | TLS certificate verification override. Set to `true` for `verify-full`.                                                |
-| `DATABASE_SSL_CA`                  | No       | `string`                                       | None          | Custom PEM Certificate Authority content.                                                                              |
-| `MIGRATIONS_DIR`                   | No       | `string` (relative or absolute directory path) | Relative path | Directory containing forward migration SQL scripts. Defaults to `packages/infrastructure/migrations`.                  |
-| `TEST_DATABASE_ADMIN_URL`          | No       | `string` (`postgres://` or `postgresql://`)    | None          | Optional administrative connection URL for creating/dropping isolated test databases during integration testing.       |
+| Variable                         | Required                                                               | Type / Allowed Values                       | Default     | Rules & Constraints                                                                                                       |
+| -------------------------------- | ---------------------------------------------------------------------- | ------------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`                   | Required for API/worker database startup and integration entry points  | `string` (`postgres://` or `postgresql://`) | None        | Absolute database connection URL without query parameters or hash fragments. Must be local loopback when SSL is disabled. |
+| `DATABASE_POOL_MAX`              | No                                                                     | `integer` (`1` - `50`)                      | `10`        | Maximum pool connections.                                                                                                 |
+| `DATABASE_CONNECTION_TIMEOUT_MS` | No                                                                     | `integer` (`100` - `60000`)                 | `5000`      | Connection acquisition timeout in milliseconds.                                                                           |
+| `DATABASE_IDLE_TIMEOUT_MS`       | No                                                                     | `integer` (`1000` - `300000`)               | `30000`     | Idle client eviction timeout in milliseconds.                                                                             |
+| `DATABASE_STATEMENT_TIMEOUT_MS`  | No                                                                     | `integer` (`100` - `300000`)                | `15000`     | Statement execution timeout in milliseconds. Set on every acquired client session.                                        |
+| `DATABASE_SSL_MODE`              | Optional outside production, default `disable`; required in production | `'disable'` \| `'verify-full'`              | `'disable'` | SSL mode. In `production`, `'disable'` is strictly forbidden and `'verify-full'` is mandatory.                            |
+| `DATABASE_SSL_CA_FILE`           | Required when `DATABASE_SSL_MODE=verify-full`; otherwise absent/empty  | `string` (absolute filesystem path)         | None        | Absolute filesystem path to a non-empty PEM CA bundle. Validated by entry points before pool construction.                |
+| `MIGRATION_DATABASE_URL`         | Required only by migration/status/validation commands                  | `string` (`postgres://` or `postgresql://`) | None        | URL for migration commands. Never loaded or exposed by normal app runtime configuration.                                  |
+| `TEST_DATABASE_ADMIN_URL`        | Required only by database integration/validation harnesses             | `string` (`postgres://` or `postgresql://`) | None        | URL targeting the `postgres` administrative database on a loopback test instance. Never loaded by production roots.       |
+| `TEST_DATABASE_DISPOSABLE`       | Required only by destructive integration/validation harnesses          | `string`                                    | None        | Must equal the exact literal `YES_I_UNDERSTAND_TEST_DATABASES_WILL_BE_DROPPED`.                                           |
 
 ## Public Persistence Contract (`@affiliate-content-os/infrastructure/database`)
 
@@ -269,25 +268,27 @@ The persistence module provides connection pooling, health checks, transaction e
 
 ```ts
 import {
-  createDatabasePool,
-  probeDatabase,
-  withTransaction,
+  createDatabase,
   DatabaseError,
-  type DatabasePool,
-  type Queryable,
+  type Database,
+  type DatabaseConfig,
+  type TransactionExecutor,
+  type DatabaseQueryResult,
 } from '@affiliate-content-os/infrastructure/database';
 ```
 
-- `createDatabasePool(config: DatabaseConfig): DatabasePool`: Creates a configured `pg.Pool` instance configured with statement timeout and error sanitization.
-- `probeDatabase(pool: DatabasePool): Promise<void>`: Executes a health check probe (`SELECT 1`) to verify database connectivity.
-- `withTransaction<T>(pool: DatabasePool, fn: (client: PoolClient) => Promise<T>): Promise<T>`: Executes an async callback inside an atomic `BEGIN` / `COMMIT` / `ROLLBACK` transaction.
+- `createDatabase(config: DatabaseConfig, options?: CreateDatabaseOptions): Database`: Creates an operational database instance encapsulating pool management, query boundaries, and transaction execution.
+- `database.query<T>(text: string, params?: readonly unknown[]): Promise<DatabaseQueryResult<T>>`: Executes a parameterized SQL query without string interpolation.
+- `database.withTransaction<T>(fn: (tx: TransactionExecutor) => Promise<T>): Promise<T>`: Executes an async callback inside an atomic `BEGIN` / `COMMIT` / `ROLLBACK` transaction. The callback receives a single-use `TransactionExecutor` which is invalidated upon transaction completion.
+- `database.probe(signal?: AbortSignal): Promise<void>`: Executes a health check probe (`SELECT 1`) to verify database connectivity. Fully cancelable via AbortSignal without leaking connections.
+- `database.close(): Promise<void>`: Idempotently closes the connection pool.
 
 ## Process Lifecycle & Graceful Shutdown
 
 Both `apps/api` and `apps/worker` enforce strict operational shutdown guarantees:
 
-1. **Database Probe on Startup**: Before listening for HTTP traffic or entering the worker loop, the application verifies database connectivity via `probeDatabase(pool)`.
+1. **Database Probe on Startup**: Before listening for HTTP traffic or entering the worker loop, the application verifies database connectivity via `database.probe(signal)`.
 2. **Shared Shutdown Deadline**: A single monotonic 5000ms deadline bounds the entire graceful shutdown sequence:
-   - For `apps/api`: Closes the Fastify HTTP listener and closes the database connection pool concurrently.
-   - For `apps/worker`: Signals the worker runner to stop and closes the database connection pool concurrently.
-3. **Forced Nonzero Exit**: If any step in the shutdown sequence fails or the 5000ms deadline expires, the process forcefully terminates with exit code 1 to prevent zombie processes.
+   - For `apps/api`: Closes the Fastify HTTP listener and closes the database connection pool within the shared budget.
+   - For `apps/worker`: Awaits worker runtime settlement and closes the database connection pool within the shared budget.
+3. **Forced Nonzero Exit**: If any step in the shutdown sequence fails or the deadline expires, the process forcefully terminates with exit code 1 to prevent zombie processes.

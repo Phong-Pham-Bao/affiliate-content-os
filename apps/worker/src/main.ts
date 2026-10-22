@@ -1,6 +1,7 @@
 import {
   loadConfig,
   loadDatabaseConfig,
+  readAndValidateSslCaFile,
   type AppConfig,
   type DatabaseConfig,
 } from '@affiliate-content-os/config';
@@ -10,17 +11,21 @@ import { startWorker } from './runner.js';
 async function main(): Promise<void> {
   let config: AppConfig;
   let databaseConfig: DatabaseConfig;
+  let sslCaContent: string | undefined;
 
   try {
     config = loadConfig(process.env);
     databaseConfig = loadDatabaseConfig(process.env);
+    if (databaseConfig.sslMode === 'verify-full' && databaseConfig.sslCaFile) {
+      sslCaContent = readAndValidateSslCaFile(databaseConfig.sslCaFile);
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown configuration error';
     console.error(`Worker process startup failed: ${message}`);
     process.exit(1);
   }
 
-  const database = createDatabase(databaseConfig);
+  const database = createDatabase(databaseConfig, { sslCaContent });
 
   // On Windows, child processes cannot receive POSIX signals from parent processes via kill().
   // When running non-interactively in test mode, allow signaling via stdin.

@@ -1,3 +1,7 @@
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import tls from 'node:tls';
 import { ConfigurationError, type ConfigurationIssue } from './errors.js';
 import {
   ALLOWED_NODE_ENVS,
@@ -160,7 +164,7 @@ export function loadTestAdminDatabaseConfig(rawEnv?: unknown): TestAdminDatabase
   if (disposable !== TEST_DATABASE_DISPOSABLE_SENTINEL) {
     issues.push({
       field: 'TEST_DATABASE_DISPOSABLE',
-      message: `Must be exactly ${TEST_DATABASE_DISPOSABLE_SENTINEL}`,
+      message: 'Must match the required destructive confirmation value',
     });
   }
 
@@ -197,4 +201,55 @@ export function loadTestAdminDatabaseConfig(rawEnv?: unknown): TestAdminDatabase
   };
 
   return Object.freeze(config);
+}
+
+export function readAndValidateSslCaFile(filePath: unknown): string {
+  if (typeof filePath !== 'string' || filePath.trim() === '') {
+    throw new ConfigurationError([
+      { field: 'DATABASE_SSL_CA_FILE', message: 'Must be a non-empty string path' },
+    ]);
+  }
+  if (!path.isAbsolute(filePath)) {
+    throw new ConfigurationError([
+      { field: 'DATABASE_SSL_CA_FILE', message: 'Must be an absolute filesystem path' },
+    ]);
+  }
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(filePath);
+  } catch {
+    throw new ConfigurationError([
+      {
+        field: 'DATABASE_SSL_CA_FILE',
+        message: 'SSL CA bundle file does not exist or is inaccessible',
+      },
+    ]);
+  }
+  if (!stat.isFile()) {
+    throw new ConfigurationError([
+      { field: 'DATABASE_SSL_CA_FILE', message: 'SSL CA bundle path must be a regular file' },
+    ]);
+  }
+  let caContent: string;
+  try {
+    caContent = fs.readFileSync(filePath, 'utf8');
+  } catch {
+    throw new ConfigurationError([
+      { field: 'DATABASE_SSL_CA_FILE', message: 'Failed to read SSL CA bundle file' },
+    ]);
+  }
+  if (!caContent || caContent.trim() === '') {
+    throw new ConfigurationError([
+      { field: 'DATABASE_SSL_CA_FILE', message: 'SSL CA bundle file is empty' },
+    ]);
+  }
+  try {
+    tls.createSecureContext({ ca: caContent });
+    new crypto.X509Certificate(caContent);
+  } catch {
+    throw new ConfigurationError([
+      { field: 'DATABASE_SSL_CA_FILE', message: 'Invalid PEM/trust content in SSL CA bundle' },
+    ]);
+  }
+  return caContent;
 }

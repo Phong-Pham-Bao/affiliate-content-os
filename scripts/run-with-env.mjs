@@ -15,12 +15,20 @@ export function prepareEnvironment(options = {}) {
   if (fs.existsSync(envFile)) {
     process.loadEnvFile(envFile);
   } else if (!isCi) {
-    console.error('Missing .env file. Run corepack pnpm env:local');
+    console.error('Run corepack pnpm env:local');
     process.exit(1);
   }
 
   if (options.setNodeEnv) {
     process.env['NODE_ENV'] = options.setNodeEnv;
+  }
+
+  // Ensure local node_modules/.bin is on PATH so runtime tools like tsx resolve across platforms
+  const binDir = path.join(rootDir, 'node_modules', '.bin');
+  const pathKey = process.platform === 'win32' ? 'Path' : 'PATH';
+  const currentPath = process.env[pathKey] ?? '';
+  if (!currentPath.includes(binDir)) {
+    process.env[pathKey] = `${binDir}${path.delimiter}${currentPath}`;
   }
 }
 

@@ -1,12 +1,18 @@
 import {
   getRedactedConfigMetadata,
   loadDatabaseConfig,
+  readAndValidateSslCaFile,
   type AppConfig,
   type DatabaseConfig,
 } from '@affiliate-content-os/config';
 import { createDatabase, type Database } from '@affiliate-content-os/infrastructure/database';
 import { runWorker, type WorkerRuntimeHandle } from './worker.js';
-import { raceWithDeadline } from './timeout.js';
+import {
+  raceWithDeadline,
+  type ClearTimerFn,
+  type SetTimerFn,
+  type TimeoutOptions,
+} from './timeout.js';
 
 export interface StartWorkerOptions {
   readonly config: AppConfig;
@@ -19,6 +25,16 @@ export interface StartWorkerOptions {
   readonly runtimeHandle?: WorkerRuntimeHandle | undefined;
   readonly terminate?: ((exitCode: number) => void) | undefined;
   readonly now?: (() => number) | undefined;
+  readonly setTimer?: SetTimerFn | undefined;
+  readonly clearTimer?: ClearTimerFn | undefined;
+  readonly workerRunner?:
+    | ((opts: {
+        config: AppConfig;
+        signal: AbortSignal;
+        onStarted?: () => void;
+        runtimeHandle?: WorkerRuntimeHandle;
+      }) => Promise<void>)
+    | undefined;
 }
 
 export async function startWorker(options: StartWorkerOptions): Promise<void> {
@@ -26,16 +42,37 @@ export async function startWorker(options: StartWorkerOptions): Promise<void> {
   const timeoutMs = options.shutdownTimeoutMs ?? 5000;
   const terminate = options.terminate ?? ((exitCode: number): void => process.exit(exitCode));
   const getNow = options.now ?? (() => performance.now());
+  const timerOptions: TimeoutOptions = {
+    setTimer: options.setTimer,
+    clearTimer: options.clearTimer,
+  };
 
-  const database =
-    options.database ?? createDatabase(options.databaseConfig ?? loadDatabaseConfig(process.env));
+  let database: Database;
+  if (options.database) {
+    database = options.database;
+  } else {
+    const dbConfig = options.databaseConfig ?? loadDatabaseConfig(process.env);
+    let sslCaContent: string | undefined;
+    if (dbConfig.sslMode === 'verify-full' && dbConfig.sslCaFile) {
+      sslCaContent = readAndValidateSslCaFile(dbConfig.sslCaFile);
+    }
+    database = createDatabase(dbConfig, { sslCaContent });
+  }
 
   const controller = options.abortController ?? new AbortController();
 
   let closePromise: Promise<void> | undefined;
+  let runtimePromise: Promise<void> | undefined;
   let terminated = false;
   let signalHandlersInstalled = false;
   let absoluteDeadline: number | undefined;
+
+  const getRemainingMs = (): number => {
+    if (absoluteDeadline === undefined) {
+      absoluteDeadline = getNow() + timeoutMs;
+    }
+    return Math.max(0, absoluteDeadline - getNow());
+  };
 
   const invokeTerminate = (exitCode: number): void => {
     if (terminated) {
@@ -53,7 +90,12 @@ export async function startWorker(options: StartWorkerOptions): Promise<void> {
     }
   };
 
+  let isExecutingClose = false;
   const executeClose = async (): Promise<void> => {
+    if (isExecutingClose) {
+      return;
+    }
+    isExecutingClose = true;
     removeSignalHandlers();
     controller.abort();
 
@@ -61,13 +103,23 @@ export async function startWorker(options: StartWorkerOptions): Promise<void> {
       absoluteDeadline = getNow() + timeoutMs;
     }
 
-    const remaining = (): number => Math.max(0, absoluteDeadline! - getNow());
-
     try {
+      // Stage 1: Await worker runtime settlement
+      if (runtimePromise) {
+        await raceWithDeadline(
+          runtimePromise,
+          getRemainingMs(),
+          `Worker graceful shutdown timed out after ${timeoutMs}ms while awaiting runtime settlement`,
+          timerOptions,
+        );
+      }
+
+      // Stage 2: Close Database pool
       await raceWithDeadline(
         database.close(),
-        remaining(),
+        getRemainingMs(),
         `Worker graceful shutdown timed out after ${timeoutMs}ms while closing database pool`,
+        timerOptions,
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
@@ -81,7 +133,13 @@ export async function startWorker(options: StartWorkerOptions): Promise<void> {
     if (closePromise) {
       return closePromise;
     }
-    closePromise = executeClose();
+    let resolve!: () => void;
+    let reject!: (err: unknown) => void;
+    closePromise = new Promise<void>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    executeClose().then(resolve, reject);
     return closePromise;
   };
 
@@ -111,8 +169,17 @@ export async function startWorker(options: StartWorkerOptions): Promise<void> {
     await database.probe(controller.signal);
   } catch (probeErr) {
     removeSignalHandlers();
+    if (absoluteDeadline === undefined) {
+      absoluteDeadline = getNow() + timeoutMs;
+    }
+
     try {
-      await database.close();
+      await raceWithDeadline(
+        database.close(),
+        getRemainingMs(),
+        `Worker startup cleanup timed out after ${timeoutMs}ms`,
+        timerOptions,
+      );
     } catch {
       // Best-effort database close
     }
@@ -137,14 +204,41 @@ export async function startWorker(options: StartWorkerOptions): Promise<void> {
     options.onStarted?.();
   };
 
+  const onAbortSignal = (): void => {
+    void close().catch(() => {});
+  };
+  controller.signal.addEventListener('abort', onAbortSignal, { once: true });
+
+  const workerRunnerFn = options.workerRunner ?? runWorker;
+
   try {
-    await runWorker({
+    runtimePromise = workerRunnerFn({
       config,
       signal: controller.signal,
       onStarted: handleStarted,
-      runtimeHandle: options.runtimeHandle,
+      ...(options.runtimeHandle !== undefined ? { runtimeHandle: options.runtimeHandle } : {}),
     });
-    await close();
+
+    const closeRejectionPromise = new Promise<never>((_, reject) => {
+      const propagateRejection = () => {
+        if (closePromise) {
+          closePromise.catch(reject);
+        }
+      };
+      if (controller.signal.aborted) {
+        queueMicrotask(propagateRejection);
+      } else {
+        controller.signal.addEventListener(
+          'abort',
+          () => {
+            queueMicrotask(propagateRejection);
+          },
+          { once: true },
+        );
+      }
+    });
+
+    await Promise.race([runtimePromise.then(() => close()), closeRejectionPromise]);
   } catch (workerErr) {
     await close().catch(() => {});
     throw workerErr;

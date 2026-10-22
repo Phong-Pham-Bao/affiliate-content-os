@@ -1,12 +1,18 @@
 import type { FastifyInstance } from 'fastify';
 import {
   loadDatabaseConfig,
+  readAndValidateSslCaFile,
   type AppConfig,
   type DatabaseConfig,
 } from '@affiliate-content-os/config';
 import { createDatabase, type Database } from '@affiliate-content-os/infrastructure/database';
 import { createApp } from './app.js';
-import { raceWithDeadline } from './timeout.js';
+import {
+  raceWithDeadline,
+  type ClearTimerFn,
+  type SetTimerFn,
+  type TimeoutOptions,
+} from './timeout.js';
 
 export interface ApiServerHandle {
   readonly app: FastifyInstance;
@@ -22,9 +28,12 @@ export interface StartServerOptions {
   readonly app?: FastifyInstance | undefined;
   readonly installSignalHandlers?: boolean | undefined;
   readonly shutdownTimeoutMs?: number | undefined;
-  readonly listener?: ((app: FastifyInstance, config: AppConfig) => Promise<void>) | undefined;
+  readonly listener?:
+    ((app: FastifyInstance, config: AppConfig, signal?: AbortSignal) => Promise<void>) | undefined;
   readonly terminate?: ((exitCode: number) => void) | undefined;
   readonly now?: (() => number) | undefined;
+  readonly setTimer?: SetTimerFn | undefined;
+  readonly clearTimer?: ClearTimerFn | undefined;
 }
 
 export async function startApiServer(options: StartServerOptions): Promise<ApiServerHandle> {
@@ -32,9 +41,23 @@ export async function startApiServer(options: StartServerOptions): Promise<ApiSe
   const timeoutMs = options.shutdownTimeoutMs ?? 5000;
   const terminate = options.terminate ?? ((exitCode: number): void => process.exit(exitCode));
   const getNow = options.now ?? (() => performance.now());
+  const timerOptions: TimeoutOptions = {
+    setTimer: options.setTimer,
+    clearTimer: options.clearTimer,
+  };
 
-  const database =
-    options.database ?? createDatabase(options.databaseConfig ?? loadDatabaseConfig(process.env));
+  let database: Database;
+  if (options.database) {
+    database = options.database;
+  } else {
+    const dbConfig = options.databaseConfig ?? loadDatabaseConfig(process.env);
+    let sslCaContent: string | undefined;
+    if (dbConfig.sslMode === 'verify-full' && dbConfig.sslCaFile) {
+      sslCaContent = readAndValidateSslCaFile(dbConfig.sslCaFile);
+    }
+    database = createDatabase(dbConfig, { sslCaContent });
+  }
+
   const app = options.app ?? createApp({ config });
 
   type ServerState = 'starting' | 'running' | 'closing' | 'closed';
@@ -45,6 +68,13 @@ export async function startApiServer(options: StartServerOptions): Promise<ApiSe
   let absoluteDeadline: number | undefined;
 
   const startupAbortController = new AbortController();
+
+  const getRemainingMs = (): number => {
+    if (absoluteDeadline === undefined) {
+      absoluteDeadline = getNow() + timeoutMs;
+    }
+    return Math.max(0, absoluteDeadline - getNow());
+  };
 
   const invokeTerminate = (exitCode: number): void => {
     if (terminated) {
@@ -69,7 +99,7 @@ export async function startApiServer(options: StartServerOptions): Promise<ApiSe
         invokeTerminate(0);
       })
       .catch(() => {
-        // executeClose already logged failure and called invokeTerminate(1)
+        // executeClose already logged failure and invoked invokeTerminate(1)
       });
   };
 
@@ -82,7 +112,14 @@ export async function startApiServer(options: StartServerOptions): Promise<ApiSe
     process.on('SIGTERM', handleSigterm);
   }
 
-  const defaultListener = async (fastifyApp: FastifyInstance, cfg: AppConfig): Promise<void> => {
+  const defaultListener = async (
+    fastifyApp: FastifyInstance,
+    cfg: AppConfig,
+    signal?: AbortSignal,
+  ): Promise<void> => {
+    if (signal?.aborted) {
+      throw new Error('API server listener aborted before listen');
+    }
     await fastifyApp.listen({
       host: cfg.apiHost,
       port: cfg.apiPort,
@@ -99,21 +136,21 @@ export async function startApiServer(options: StartServerOptions): Promise<ApiSe
       absoluteDeadline = getNow() + timeoutMs;
     }
 
-    const remaining = (): number => Math.max(0, absoluteDeadline! - getNow());
-
     try {
       // 1. Close Fastify listener if started
       await raceWithDeadline(
         app.close(),
-        remaining(),
+        getRemainingMs(),
         `API server graceful shutdown timed out after ${timeoutMs}ms while closing HTTP listener`,
+        timerOptions,
       );
 
       // 2. Close Database pool within the remaining total budget
       await raceWithDeadline(
         database.close(),
-        remaining(),
+        getRemainingMs(),
         `API server graceful shutdown timed out after ${timeoutMs}ms while closing database pool`,
+        timerOptions,
       );
 
       state = 'closed';
@@ -143,10 +180,19 @@ export async function startApiServer(options: StartServerOptions): Promise<ApiSe
   } catch (probeErr) {
     removeSignalHandlers();
     state = 'closing';
+    if (absoluteDeadline === undefined) {
+      absoluteDeadline = getNow() + timeoutMs;
+    }
+
     try {
-      await database.close();
+      await raceWithDeadline(
+        database.close(),
+        getRemainingMs(),
+        `API server startup cleanup timed out after ${timeoutMs}ms`,
+        timerOptions,
+      );
     } catch {
-      // Best-effort cleanup
+      // Best-effort cleanup failure
     }
     state = 'closed';
 
@@ -166,18 +212,36 @@ export async function startApiServer(options: StartServerOptions): Promise<ApiSe
     if (startupAbortController.signal.aborted) {
       throw new Error('API server startup aborted before listener bound');
     }
-    await listener(app, config);
+    await listener(app, config, startupAbortController.signal);
+    if (startupAbortController.signal.aborted) {
+      throw new Error('API server startup aborted after listener bound');
+    }
     state = 'running';
   } catch (listenErr) {
     removeSignalHandlers();
     state = 'closing';
+    if (absoluteDeadline === undefined) {
+      absoluteDeadline = getNow() + timeoutMs;
+    }
+
     try {
-      await app.close();
+      await raceWithDeadline(
+        app.close(),
+        getRemainingMs(),
+        `API server startup cleanup timed out while closing listener`,
+        timerOptions,
+      );
     } catch {
       // Best-effort listener close
     }
+
     try {
-      await database.close();
+      await raceWithDeadline(
+        database.close(),
+        getRemainingMs(),
+        `API server startup cleanup timed out while closing database pool`,
+        timerOptions,
+      );
     } catch {
       // Best-effort database close
     }
@@ -185,11 +249,12 @@ export async function startApiServer(options: StartServerOptions): Promise<ApiSe
 
     if (startupAbortController.signal.aborted) {
       invokeTerminate(0);
-    } else {
-      const message = listenErr instanceof Error ? listenErr.message : 'Listener failed';
-      console.error(`API server startup failure: ${message}`);
-      invokeTerminate(1);
+      throw listenErr;
     }
+
+    const message = listenErr instanceof Error ? listenErr.message : 'Fastify listen failed';
+    console.error(`API server startup failure: ${message}`);
+    invokeTerminate(1);
     throw listenErr;
   }
 

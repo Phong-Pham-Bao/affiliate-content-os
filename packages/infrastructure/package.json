@@ -5,7 +5,8 @@
   "type": "module",
   "exports": {
     "./database": {
-      "types": "./dist/database/index.d.ts",
+      "types": "./src/database/index.ts",
+      "development": "./src/database/index.ts",
       "import": "./dist/database/index.js",
       "default": "./dist/database/index.js"
     }

@@ -25,6 +25,7 @@ export interface Database {
 
 export interface CreateDatabaseOptions {
   readonly caContent?: string | undefined;
+  readonly sslCaContent?: string | undefined;
   readonly poolFactory?: ((config: pg.PoolConfig) => pg.Pool) | undefined;
   readonly onPoolError?: ((error: Error) => void) | undefined;
 }

@@ -16,7 +16,7 @@ export function createDatabase(config: DatabaseConfig, options?: CreateDatabaseO
     connectionTimeoutMillis: config.connectionTimeoutMs,
     idleTimeoutMillis: config.idleTimeoutMs,
     statement_timeout: config.statementTimeoutMs,
-    ssl: resolveSslOptions(config, options?.caContent),
+    ssl: resolveSslOptions(config, options?.sslCaContent ?? options?.caContent),
   };
 
   const pool = options?.poolFactory ? options.poolFactory(poolConfig) : new pg.Pool(poolConfig);
@@ -38,23 +38,84 @@ export function createDatabase(config: DatabaseConfig, options?: CreateDatabaseO
       throw new DatabaseError('Cannot probe database: pool is closing or closed');
     }
 
-    let abortHandler: (() => void) | undefined;
-    const abortPromise = new Promise<never>((_, reject) => {
-      if (signal) {
-        abortHandler = () => {
-          reject(new DatabaseError('Database connection probe aborted'));
-        };
-        signal.addEventListener('abort', abortHandler, { once: true });
-      }
-    });
+    let client: pg.PoolClient | undefined;
+    let abortListener: (() => void) | undefined;
 
     try {
-      await Promise.race([pool.query('SELECT 1'), abortPromise]);
+      const connectPromise = pool.connect();
+      if (signal) {
+        const abortPromise = new Promise<never>((_, reject) => {
+          abortListener = () => {
+            reject(new DatabaseError('Database connection probe aborted'));
+          };
+          signal.addEventListener('abort', abortListener, { once: true });
+        });
+        client = await Promise.race([connectPromise, abortPromise]);
+      } else {
+        client = await connectPromise;
+      }
+
+      if (signal?.aborted) {
+        try {
+          (
+            client as unknown as { connection?: { stream?: { destroy: () => void } } }
+          )?.connection?.stream?.destroy();
+        } catch {
+          // ignore destroy error
+        }
+        throw new DatabaseError('Database connection probe aborted');
+      }
+
+      const queryPromise = client.query('SELECT 1');
+      if (signal) {
+        const queryAbortPromise = new Promise<never>((_, reject) => {
+          if (signal.aborted) {
+            try {
+              (
+                client as unknown as { connection?: { stream?: { destroy: () => void } } }
+              )?.connection?.stream?.destroy();
+            } catch {
+              // ignore destroy error
+            }
+            reject(new DatabaseError('Database connection probe aborted'));
+            return;
+          }
+          abortListener = () => {
+            try {
+              (
+                client as unknown as { connection?: { stream?: { destroy: () => void } } }
+              )?.connection?.stream?.destroy();
+            } catch {
+              // ignore destroy error
+            }
+            reject(new DatabaseError('Database connection probe aborted'));
+          };
+          signal.addEventListener('abort', abortListener, { once: true });
+        });
+        await Promise.race([queryPromise, queryAbortPromise]);
+      } else {
+        await queryPromise;
+      }
     } catch (err) {
+      if (client) {
+        try {
+          client.release(true);
+          client = undefined;
+        } catch {
+          // ignore release error
+        }
+      }
       throw sanitizeDatabaseError(err, 'Database connection probe failed');
     } finally {
-      if (signal && abortHandler) {
-        signal.removeEventListener('abort', abortHandler);
+      if (signal && abortListener) {
+        signal.removeEventListener('abort', abortListener);
+      }
+      if (client) {
+        try {
+          client.release();
+        } catch {
+          // ignore release error
+        }
       }
     }
   };
@@ -91,11 +152,21 @@ export function createDatabase(config: DatabaseConfig, options?: CreateDatabaseO
       throw sanitizeDatabaseError(err, 'Failed to acquire database connection for transaction');
     }
 
+    let clientError: Error | undefined;
+    const clientErrorHandler = (err: Error): void => {
+      clientError = err;
+    };
+    client.on('error', clientErrorHandler);
+
+    let active = true;
     const executor: TransactionExecutor = {
       async query<R = unknown>(
         text: string,
         params?: readonly unknown[],
       ): Promise<DatabaseQueryResult<R>> {
+        if (!active) {
+          throw new DatabaseError('Cannot execute query: transaction has already completed');
+        }
         try {
           const res = await client.query(text, params ? [...params] : undefined);
           return {
@@ -109,22 +180,42 @@ export function createDatabase(config: DatabaseConfig, options?: CreateDatabaseO
       },
     };
 
+    let callbackError: unknown;
+    let result: T | undefined;
     try {
       await client.query('BEGIN');
-      const result = await fn(executor);
+      result = await fn(executor);
+      if (clientError) {
+        throw clientError;
+      }
       await client.query('COMMIT');
-      return result;
     } catch (err) {
-      const primaryError = sanitizeDatabaseError(err, 'Transaction execution failed');
+      callbackError = sanitizeDatabaseError(err, 'Transaction execution failed');
       try {
         await client.query('ROLLBACK');
       } catch {
-        // Rollback failure ignored; primaryError is preserved
+        // Rollback failure ignored; primary callbackError is preserved
       }
-      throw primaryError;
-    } finally {
-      client.release();
     }
+
+    active = false;
+    client.removeListener('error', clientErrorHandler);
+    let releaseError: unknown;
+    try {
+      client.release(clientError ? true : undefined);
+    } catch (releaseErr) {
+      releaseError = releaseErr;
+    }
+
+    if (callbackError) {
+      throw callbackError;
+    }
+
+    if (releaseError) {
+      throw sanitizeDatabaseError(releaseError, 'Failed to release database connection');
+    }
+
+    return result as T;
   };
 
   const close = (): Promise<void> => {

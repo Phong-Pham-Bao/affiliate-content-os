@@ -161,34 +161,205 @@ describe('apps/worker - startWorker lifecycle', () => {
     expect(terminateSpy).toHaveBeenCalledWith(1);
   });
 
-  it('shares single shutdown deadline across worker stop and database close', async () => {
+  it('shares single shutdown deadline across worker runtime settlement and pool close with injected timers', async () => {
     let fakeTime = 1000;
     const now = () => fakeTime;
+    const executionOrder: string[] = [];
+
+    const timers: { id: number; fn: () => void }[] = [];
+    let timerSeq = 0;
+    const setTimer = (fn: () => void) => {
+      const id = ++timerSeq;
+      timers.push({ id, fn });
+      return id;
+    };
+    const clearTimer = (id: unknown) => {
+      const idx = timers.findIndex((t) => t.id === id);
+      if (idx !== -1) {
+        timers.splice(idx, 1);
+      }
+    };
+
     const mockDb = createMockDatabase({
       close: vi.fn(async () => {
-        // Fast close
+        executionOrder.push('pool.close');
+        fakeTime += 1500;
       }),
     });
 
     const controller = new AbortController();
+    let runnerStartedResolve!: () => void;
+    const runnerStartedPromise = new Promise<void>((resolve) => {
+      runnerStartedResolve = resolve;
+    });
+
     const workerPromise = startWorker({
       config: mockConfig,
       database: mockDb,
       abortController: controller,
       shutdownTimeoutMs: 5000,
       now,
+      setTimer,
+      clearTimer,
       installSignalHandlers: false,
-      runtimeHandle: {
-        ref: vi.fn(),
-        close: vi.fn(() => {
-          fakeTime += 2000;
-        }),
+      workerRunner: async ({ signal }) => {
+        executionOrder.push('runtime.start');
+        runnerStartedResolve();
+        await new Promise<void>((resolve) => {
+          if (signal.aborted) {
+            executionOrder.push('runtime.settle');
+            fakeTime += 2000;
+            resolve();
+            return;
+          }
+          signal.addEventListener('abort', () => {
+            executionOrder.push('runtime.settle');
+            fakeTime += 2000;
+            resolve();
+          });
+        });
       },
     });
 
+    await runnerStartedPromise;
     controller.abort();
     await expect(workerPromise).resolves.toBeUndefined();
+
+    // Verify ordering: runtime settlement happens before pool close!
+    expect(executionOrder).toEqual(['runtime.start', 'runtime.settle', 'pool.close']);
+    expect(fakeTime).toBe(4500); // 1000 + 2000 + 1500 <= 5000ms deadline
     expect(mockDb.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('triggers forced exit code 1 when worker runtime settlement times out', async () => {
+    let fakeTime = 1000;
+    const now = () => fakeTime;
+    const terminateSpy = vi.fn();
+
+    const timers: { id: number; fn: () => void }[] = [];
+    let timerSeq = 0;
+    const setTimer = (fn: () => void) => {
+      const id = ++timerSeq;
+      timers.push({ id, fn });
+      return id;
+    };
+    const clearTimer = (id: unknown) => {
+      const idx = timers.findIndex((t) => t.id === id);
+      if (idx !== -1) {
+        timers.splice(idx, 1);
+      }
+    };
+
+    const mockDb = createMockDatabase();
+    const controller = new AbortController();
+    let runnerStartedResolve!: () => void;
+    const runnerStartedPromise = new Promise<void>((resolve) => {
+      runnerStartedResolve = resolve;
+    });
+
+    const workerPromise = startWorker({
+      config: mockConfig,
+      database: mockDb,
+      abortController: controller,
+      shutdownTimeoutMs: 5000,
+      now,
+      setTimer,
+      clearTimer,
+      terminate: terminateSpy,
+      installSignalHandlers: false,
+      workerRunner: async ({ signal }) => {
+        runnerStartedResolve();
+        return new Promise<void>(() => {
+          const onAbort = () => {
+            // Runtime settlement hangs indefinitely; trigger timer
+            fakeTime += 6000;
+            queueMicrotask(() => {
+              const timer = timers.shift();
+              timer?.fn();
+            });
+          };
+          if (signal.aborted) {
+            onAbort();
+          } else {
+            signal.addEventListener('abort', onAbort);
+          }
+        });
+      },
+    });
+
+    await runnerStartedPromise;
+    controller.abort();
+    await expect(workerPromise).rejects.toThrow(/timed out/);
+    expect(terminateSpy).toHaveBeenCalledWith(1);
+  });
+
+  it('triggers forced exit code 1 when database close times out during shutdown', async () => {
+    let fakeTime = 1000;
+    const now = () => fakeTime;
+    const terminateSpy = vi.fn();
+
+    const timers: { id: number; fn: () => void }[] = [];
+    let timerSeq = 0;
+    const setTimer = (fn: () => void) => {
+      const id = ++timerSeq;
+      timers.push({ id, fn });
+      return id;
+    };
+    const clearTimer = (id: unknown) => {
+      const idx = timers.findIndex((t) => t.id === id);
+      if (idx !== -1) {
+        timers.splice(idx, 1);
+      }
+    };
+
+    const mockDb = createMockDatabase({
+      close: vi.fn((() => {
+        // Pool close hangs; trigger timer
+        fakeTime += 3000;
+        queueMicrotask(() => {
+          const timer = timers.shift();
+          timer?.fn();
+        });
+        return new Promise<void>(() => {});
+      }) as never),
+    });
+
+    const controller = new AbortController();
+    let runnerStartedResolve!: () => void;
+    const runnerStartedPromise = new Promise<void>((resolve) => {
+      runnerStartedResolve = resolve;
+    });
+
+    const workerPromise = startWorker({
+      config: mockConfig,
+      database: mockDb,
+      abortController: controller,
+      shutdownTimeoutMs: 5000,
+      now,
+      setTimer,
+      clearTimer,
+      terminate: terminateSpy,
+      installSignalHandlers: false,
+      workerRunner: async ({ signal }) => {
+        runnerStartedResolve();
+        await new Promise<void>((resolve) => {
+          const onAbort = () => {
+            fakeTime += 3000; // Runtime settlement takes 3000ms out of 5000ms
+            resolve();
+          };
+          if (signal.aborted) {
+            onAbort();
+          } else {
+            signal.addEventListener('abort', onAbort);
+          }
+        });
+      },
+    });
+
+    await runnerStartedPromise;
+    controller.abort();
+    await expect(workerPromise).rejects.toThrow(/timed out/);
+    expect(terminateSpy).toHaveBeenCalledWith(1);
   });
 
   it('installs and cleans up signal listeners during worker lifecycle', async () => {
@@ -288,15 +459,19 @@ describe('apps/worker - startWorker lifecycle', () => {
 
     const workerDir = path.resolve(__dirname, '..');
     const workerScript = path.resolve(workerDir, 'test/fixtures/test-worker-entry.ts');
-    const child = spawn(process.execPath, ['--import', 'tsx', workerScript], {
-      cwd: workerDir,
-      env: {
-        ...process.env,
-        NODE_ENV: 'test',
-        LOG_LEVEL: 'info',
+    const child = spawn(
+      process.execPath,
+      ['--conditions=development', '--import', 'tsx', workerScript],
+      {
+        cwd: workerDir,
+        env: {
+          ...process.env,
+          NODE_ENV: 'test',
+          LOG_LEVEL: 'info',
+        },
+        stdio: ['pipe', 'pipe', 'pipe'],
       },
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
+    );
 
     let output = '';
     child.stdout.on('data', (d) => {
@@ -345,15 +520,19 @@ describe('apps/worker - startWorker lifecycle', () => {
 
     const workerDir = path.resolve(__dirname, '..');
     const workerScript = path.resolve(workerDir, 'test/fixtures/test-worker-entry.ts');
-    const child = spawn(process.execPath, ['--import', 'tsx', workerScript], {
-      cwd: workerDir,
-      env: {
-        ...process.env,
-        NODE_ENV: 'test',
-        LOG_LEVEL: 'info',
+    const child = spawn(
+      process.execPath,
+      ['--conditions=development', '--import', 'tsx', workerScript],
+      {
+        cwd: workerDir,
+        env: {
+          ...process.env,
+          NODE_ENV: 'test',
+          LOG_LEVEL: 'info',
+        },
+        stdio: ['pipe', 'pipe', 'pipe'],
       },
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
+    );
 
     let output = '';
     child.stdout.on('data', (d) => {
