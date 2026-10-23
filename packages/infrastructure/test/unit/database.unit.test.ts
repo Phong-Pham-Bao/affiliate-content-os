@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import util from 'node:util';
 import { describe, expect, it, vi } from 'vitest';
 import type pg from 'pg';
 import {
@@ -402,5 +403,233 @@ describe('Database client and transaction manager (unit tests with fakes)', () =
     expect(sanitized).not.toContain('5432');
     expect(sanitized).not.toContain('my_db');
     expect(sanitized).toContain('postgresql://[REDACTED]');
+  });
+
+  describe('falsy transaction rejection and success handling', () => {
+    const falsyValues = [
+      { name: 'undefined', value: undefined },
+      { name: 'null', value: null },
+      { name: 'false', value: false },
+      { name: '0', value: 0 },
+      { name: 'NaN', value: Number.NaN },
+      { name: "''", value: '' },
+    ];
+
+    for (const { name, value } of falsyValues) {
+      it(`preserves falsy rejection: ${name}`, async () => {
+        const { mockPool, mockClient, clientQueries } = createMockPool();
+        const db = createDatabase(dummyConfig, {
+          poolFactory: () => mockPool,
+        });
+
+        let caughtError: unknown;
+        let rejected = false;
+        try {
+          await db.withTransaction(async () => {
+            return Promise.reject(value);
+          });
+        } catch (err) {
+          rejected = true;
+          caughtError = err;
+        }
+
+        expect(rejected).toBe(true);
+        if (Number.isNaN(value)) {
+          expect(Number.isNaN(caughtError)).toBe(true);
+        } else {
+          expect(caughtError).toBe(value);
+        }
+
+        const queryTexts = clientQueries.map((q) => q.text);
+        expect(queryTexts).toContain('BEGIN');
+        expect(queryTexts).toContain('ROLLBACK');
+        expect(queryTexts).not.toContain('COMMIT');
+        expect(mockClient.release).toHaveBeenCalledTimes(1);
+      });
+
+      it(`preserves falsy resolved value: ${name}`, async () => {
+        const { mockPool, mockClient, clientQueries } = createMockPool();
+        const db = createDatabase(dummyConfig, {
+          poolFactory: () => mockPool,
+        });
+
+        const result = await db.withTransaction(async () => {
+          return value;
+        });
+
+        if (Number.isNaN(value)) {
+          expect(Number.isNaN(result)).toBe(true);
+        } else {
+          expect(result).toBe(value);
+        }
+
+        const queryTexts = clientQueries.map((q) => q.text);
+        expect(queryTexts).toContain('BEGIN');
+        expect(queryTexts).toContain('COMMIT');
+        expect(queryTexts).not.toContain('ROLLBACK');
+        expect(mockClient.release).toHaveBeenCalledTimes(1);
+      });
+    }
+
+    it('preserves falsy rejection when rollback fails, release fails, or both fail', async () => {
+      for (const { value } of falsyValues) {
+        // 1. Rollback fails
+        {
+          const { mockPool, mockClient } = createMockPool();
+          mockClient.query = vi.fn(async (text: string) => {
+            if (text === 'ROLLBACK') {
+              throw new Error('Rollback network fault');
+            }
+            return { rows: [], rowCount: 0, command: 'SELECT' };
+          });
+
+          const db = createDatabase(dummyConfig, { poolFactory: () => mockPool });
+          let caught: unknown;
+          try {
+            await db.withTransaction(async () => Promise.reject(value));
+          } catch (err) {
+            caught = err;
+          }
+          if (Number.isNaN(value)) {
+            expect(Number.isNaN(caught)).toBe(true);
+          } else {
+            expect(caught).toBe(value);
+          }
+          expect(mockClient.release).toHaveBeenCalledTimes(1);
+        }
+
+        // 2. Release fails
+        {
+          const { mockPool, mockClient } = createMockPool();
+          mockClient.release = vi.fn(() => {
+            throw new Error('Release socket fault');
+          });
+
+          const db = createDatabase(dummyConfig, { poolFactory: () => mockPool });
+          let caught: unknown;
+          try {
+            await db.withTransaction(async () => Promise.reject(value));
+          } catch (err) {
+            caught = err;
+          }
+          if (Number.isNaN(value)) {
+            expect(Number.isNaN(caught)).toBe(true);
+          } else {
+            expect(caught).toBe(value);
+          }
+          expect(mockClient.release).toHaveBeenCalledTimes(1);
+        }
+
+        // 3. Both rollback and release fail
+        {
+          const { mockPool, mockClient } = createMockPool();
+          mockClient.query = vi.fn(async (text: string) => {
+            if (text === 'ROLLBACK') {
+              throw new Error('Rollback fault');
+            }
+            return { rows: [], rowCount: 0, command: 'SELECT' };
+          });
+          mockClient.release = vi.fn(() => {
+            throw new Error('Release fault');
+          });
+
+          const db = createDatabase(dummyConfig, { poolFactory: () => mockPool });
+          let caught: unknown;
+          try {
+            await db.withTransaction(async () => Promise.reject(value));
+          } catch (err) {
+            caught = err;
+          }
+          if (Number.isNaN(value)) {
+            expect(Number.isNaN(caught)).toBe(true);
+          } else {
+            expect(caught).toBe(value);
+          }
+          expect(mockClient.release).toHaveBeenCalledTimes(1);
+        }
+      }
+    });
+
+    it('sanitizes credentials in callback Error message and manually assigned stack', async () => {
+      const sentinels = [
+        'sensitive_tx_user',
+        'super_secret_tx_password',
+        '10.20.30.40',
+        'secret_tenant_db',
+        'sensitive_query_param=supersecret',
+        'sensitive_hash_frag',
+      ];
+      const sensitiveUrl =
+        'postgresql://sensitive_tx_user:super_secret_tx_password@10.20.30.40:5432/secret_tenant_db?sensitive_query_param=supersecret#sensitive_hash_frag';
+
+      const { mockPool } = createMockPool();
+      const db = createDatabase(dummyConfig, {
+        poolFactory: () => mockPool,
+      });
+
+      const customErr = new Error(`Transaction callback failed with connection to ${sensitiveUrl}`);
+      customErr.stack = `Error: Transaction callback failed with connection to ${sensitiveUrl}\n    at customStackTracer (/app/src/service.ts:42:15)`;
+
+      let caughtErr: unknown;
+      try {
+        await db.withTransaction(async () => {
+          throw customErr;
+        });
+      } catch (err) {
+        caughtErr = err;
+      }
+
+      expect(caughtErr).toBe(customErr);
+      const castErr = caughtErr as Error;
+
+      const message = castErr.message;
+      const stack = castErr.stack ?? '';
+      const stringified = String(castErr);
+      const inspected = util.inspect(castErr);
+      const json = JSON.stringify(castErr);
+
+      for (const sentinel of sentinels) {
+        expect(message).not.toContain(sentinel);
+        expect(stack).not.toContain(sentinel);
+        expect(stringified).not.toContain(sentinel);
+        expect(inspected).not.toContain(sentinel);
+        if (json) {
+          expect(json).not.toContain(sentinel);
+        }
+      }
+
+      expect(message).toContain('postgresql://[REDACTED]');
+      expect(stack).toContain('postgresql://[REDACTED]');
+    });
+
+    it('sanitizes IPv6 database credentials in callback Error message and stack', async () => {
+      const sentinels = ['ipv6_user', 'ipv6_pass', '2001:db8::1', 'ipv6_db'];
+      const sensitiveIpv6Url = 'postgresql://ipv6_user:ipv6_pass@[2001:db8::1]:5432/ipv6_db';
+
+      const { mockPool } = createMockPool();
+      const db = createDatabase(dummyConfig, {
+        poolFactory: () => mockPool,
+      });
+
+      const errWithIpv6 = new Error(`Failed to query ${sensitiveIpv6Url}`);
+      errWithIpv6.stack = `Error: Failed to query ${sensitiveIpv6Url}\n    at query (/app/src/repo.ts:10:5)`;
+
+      let caught: unknown;
+      try {
+        await db.withTransaction(async () => {
+          throw errWithIpv6;
+        });
+      } catch (e) {
+        caught = e;
+      }
+
+      const err = caught as Error;
+      for (const s of sentinels) {
+        expect(err.message).not.toContain(s);
+        expect(err.stack).not.toContain(s);
+        expect(util.inspect(err)).not.toContain(s);
+      }
+      expect(err.message).toContain('postgresql://[REDACTED]');
+    });
   });
 });

@@ -22,6 +22,7 @@
     "infra:logs": "node scripts/run-with-env.mjs docker compose logs -f",
     "infra:reset": "node scripts/run-with-env.mjs docker compose down -v",
     "verify:infrastructure-pins": "node scripts/verify-infrastructure-pins.mjs",
+    "verify:trivy-exception": "node scripts/verify-trivy-exception.mjs",
     "env:local": "node scripts/setup-local-env.mjs",
     "db:migrate": "node scripts/run-with-env.mjs tsx --conditions=development packages/infrastructure/src/database/migrations/cli.ts migrate",
     "db:migrate:status": "node scripts/run-with-env.mjs tsx --conditions=development packages/infrastructure/src/database/migrations/cli.ts status",

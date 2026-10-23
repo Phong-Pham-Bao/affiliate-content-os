@@ -45,19 +45,32 @@ describe('Database safety guards and isolation policy (unit tests)', () => {
   });
 
   it('rejects non-test environment without leaking environment name', () => {
-    const invalidEnvs = ['development', 'production', 'staging', ''];
+    const invalidEnvs = [
+      'development',
+      'production',
+      'staging',
+      '',
+      ' test ',
+      'test ',
+      'TEST',
+      undefined,
+      null,
+      123 as unknown as string,
+    ];
     for (const env of invalidEnvs) {
       let thrown: unknown;
       try {
-        assertDatabaseSafetyGuards(validAdminConfig, validTargetDb, { effectiveNodeEnv: env });
+        assertDatabaseSafetyGuards(validAdminConfig, validTargetDb, {
+          effectiveNodeEnv: env as string,
+        });
       } catch (err) {
         thrown = err;
       }
       expect(thrown).toBeInstanceOf(DatabaseError);
       const msg = (thrown as Error).message;
-      expect(msg).toBe('Destructive test database operation rejected: invalid environment');
-      if (env) {
-        expect(msg).not.toContain(env);
+      expect(msg).toBe('Destructive test database operation rejected: invalid or missing NODE_ENV');
+      if (typeof env === 'string' && env.trim() && env.trim().toLowerCase() !== 'test') {
+        expect(msg).not.toContain(env.trim());
       }
     }
   });
@@ -330,7 +343,7 @@ describe('Database safety guards and isolation policy (unit tests)', () => {
         assertDatabaseSafetyGuards(validAdminConfig, validTargetDb, {
           effectiveNodeEnv: 'development',
         }),
-      ).toThrow('invalid environment');
+      ).toThrow('invalid or missing NODE_ENV');
     } finally {
       process.env['NODE_ENV'] = origEnv;
       process.env['TEST_DATABASE_DISPOSABLE'] = origSent;

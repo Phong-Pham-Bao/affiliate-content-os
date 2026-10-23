@@ -1,6 +1,6 @@
 import type { DatabaseConfig } from '@affiliate-content-os/config';
 import pg from 'pg';
-import { DatabaseError, sanitizeDatabaseError, stripCredentials } from './errors.js';
+import { DatabaseError, sanitizeCallbackError, sanitizeDatabaseError } from './errors.js';
 import { resolveSslOptions } from './ssl.js';
 import type {
   CreateDatabaseOptions,
@@ -201,43 +201,43 @@ export function createDatabase(config: DatabaseConfig, options?: CreateDatabaseO
       },
     };
 
-    let transactionError: unknown;
+    let hasTransactionFailure = false;
+    let transactionFailureValue: unknown;
     let result: T | undefined;
-    let callbackThrew = false;
-    let callbackError: unknown;
+    let callbackFailed = false;
+
     try {
       await client.query('BEGIN');
       try {
         result = await fn(executor);
       } catch (userErr) {
-        callbackThrew = true;
-        callbackError = userErr;
-        throw userErr;
+        callbackFailed = true;
+        hasTransactionFailure = true;
+        transactionFailureValue = sanitizeCallbackError(userErr);
       } finally {
         active = false;
       }
-      if (clientError) {
-        throw clientError;
-      }
-      await client.query('COMMIT');
-    } catch (err) {
-      if (callbackThrew) {
-        if (callbackError instanceof DatabaseError) {
-          transactionError = callbackError;
-        } else if (callbackError instanceof Error) {
-          callbackError.message = stripCredentials(callbackError.message);
-          transactionError = callbackError;
-        } else {
-          transactionError = callbackError;
-        }
-      } else {
-        transactionError = sanitizeDatabaseError(err, 'Transaction execution failed');
-      }
 
+      if (callbackFailed) {
+        // Callback failed; do not attempt COMMIT
+      } else if (clientError) {
+        hasTransactionFailure = true;
+        transactionFailureValue = sanitizeDatabaseError(clientError, 'Transaction client error');
+      } else {
+        await client.query('COMMIT');
+      }
+    } catch (err) {
+      if (!hasTransactionFailure) {
+        hasTransactionFailure = true;
+        transactionFailureValue = sanitizeDatabaseError(err, 'Transaction execution failed');
+      }
+    }
+
+    if (hasTransactionFailure) {
       try {
         await client.query('ROLLBACK');
       } catch {
-        // Rollback failure ignored; primary transactionError is preserved
+        // Rollback failure ignored; primary transactionFailureValue is preserved
       }
     }
 
@@ -250,8 +250,8 @@ export function createDatabase(config: DatabaseConfig, options?: CreateDatabaseO
       releaseError = releaseErr;
     }
 
-    if (transactionError) {
-      throw transactionError;
+    if (hasTransactionFailure) {
+      throw transactionFailureValue;
     }
 
     if (releaseError) {

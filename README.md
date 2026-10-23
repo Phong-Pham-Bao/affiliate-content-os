@@ -246,18 +246,23 @@ The `@affiliate-content-os/config` package establishes an immutable, fail-fast c
 
 ### Database URL Separation & Isolation Policy
 
-To prevent accidental data loss and maintain strict privilege boundaries, three distinct database URLs are defined:
+To establish explicit architecture boundaries and prevent accidental cross-contamination, three distinct database URLs are defined:
 
 1. **`DATABASE_URL` (Application Runtime)**:
    - Used by `apps/api` and `apps/worker` to connect to application databases (`acos_dev`, `acos_prod`).
-   - Does not have administrative privileges to create or drop databases.
+   - In production, this URL must connect with a least-privilege runtime principal that lacks administrative privileges to create or drop databases.
+   - In the local-only TASK-003 development setup, the default `.env.example` and Compose configuration reuse the single bootstrap `acos_local` PostgreSQL superuser role for all three URLs. This demonstrates configuration boundary separation rather than local least-privilege role enforcement.
 2. **`MIGRATION_DATABASE_URL` (Schema Migrations)**:
    - Used by `db:migrate` and `db:migrate:status` to apply forward migrations and inspect schema versions.
-   - Separated from the application runtime pool to ensure migration credentials and lock parameters are never exposed to HTTP or worker request handlers.
+   - Separated from the application runtime pool to ensure migration credentials and lock parameters are never exposed to HTTP or worker request handlers. In production, this URL connects using a dedicated DDL migration principal.
 3. **`TEST_DATABASE_ADMIN_URL` & `TEST_DATABASE_DISPOSABLE` (Test Isolation Harness)**:
-   - Used strictly by `test:integration` and `db:migrate:validate`.
+   - Used strictly by `test:integration` and `db:migrate:validate` against non-production loopback/CI test instances.
+   - In production, administrative credentials are never loaded or made available to runtime containers.
    - Requires `NODE_ENV=test`, strict host allowlisting (`localhost`, `127.0.0.1`, `::1`, or `postgres` in CI), URL path strictly `/postgres`, target database matching `^acos_test_[0-9a-f]{1,48}$`, and the exact sentinel `TEST_DATABASE_DISPOSABLE=YES_I_UNDERSTAND_TEST_DATABASES_WILL_BE_DROPPED`.
    - Administrative helpers (`createIsolatedDatabase`, `dropIsolatedDatabase`) are restricted to internal testing and migration validation and are never exported in public production module boundaries.
+
+> [!NOTE]
+> Production environments strictly require distinct, least-privilege database roles for application runtime, schema migrations, and administrative tasks. Those distinct database roles and grants are managed as deployment infrastructure and are not provisioned by the local TASK-003 foundation.
 
 ### SSL & CA Certificate Handling
 

@@ -4,6 +4,42 @@ export function stripCredentials(text: string): string {
   return text.replace(REDACT_URL_REGEX, 'postgresql://[REDACTED]');
 }
 
+export function sanitizeCallbackError<E = unknown>(err: E): E {
+  if (err instanceof DatabaseError) {
+    return err;
+  }
+  if (err instanceof Error) {
+    if (typeof err.message === 'string') {
+      err.message = stripCredentials(err.message);
+    }
+    if (typeof err.stack === 'string') {
+      err.stack = stripCredentials(err.stack);
+    }
+    if (err.cause instanceof Error) {
+      sanitizeCallbackError(err.cause);
+    } else if (typeof err.cause === 'string') {
+      err.cause = stripCredentials(err.cause);
+    }
+    for (const key of Object.getOwnPropertyNames(err)) {
+      if (key !== 'message' && key !== 'stack' && key !== 'cause' && key !== 'name') {
+        try {
+          const val = (err as Record<string, unknown>)[key];
+          if (typeof val === 'string') {
+            (err as Record<string, unknown>)[key] = stripCredentials(val);
+          }
+        } catch {
+          // ignore accessor error
+        }
+      }
+    }
+    return err;
+  }
+  if (typeof err === 'string') {
+    return stripCredentials(err) as E;
+  }
+  return err;
+}
+
 export class DatabaseError extends Error {
   public readonly code?: string | undefined;
 

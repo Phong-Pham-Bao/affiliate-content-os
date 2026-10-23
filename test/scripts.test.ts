@@ -8,7 +8,22 @@ import {
   extractPostgresReference,
   verifyInfrastructurePins,
 } from '../scripts/verify-infrastructure-pins.mjs';
-import { runComposeUp, verifyAuthenticatedQueries } from '../scripts/infra-up.mjs';
+import {
+  runComposeUp,
+  verifyAuthenticatedQueries,
+  classifyReadinessError,
+  ALLOWLISTED_READINESS_REASONS,
+} from '../scripts/infra-up.mjs';
+import {
+  verifyTrivyExceptionPolicy,
+  parseTrivyIgnoreYaml,
+  REQUIRED_EXCEPTION_ID,
+  REQUIRED_CVE,
+  REQUIRED_PATH,
+  REQUIRED_EXPIRY,
+  REQUIRED_IMAGE_DIGEST,
+  REQUIRED_EVIDENCE_URLS,
+} from '../scripts/verify-trivy-exception.mjs';
 
 describe('Scripts unit verification', () => {
   describe('setupLocalEnv', () => {
@@ -222,6 +237,243 @@ describe('Scripts unit verification', () => {
           throwOnError: true,
         }),
       ).rejects.toThrow(/readiness verification timed out/);
+    });
+
+    it('redacts credentials and uses allowlisted reasons when errors occur during readiness check', async () => {
+      const sentinels = [
+        'secret_user',
+        'super_secret_pw',
+        '10.99.88.77',
+        'secret_db',
+        'token=xyz123',
+      ];
+      const sensitiveUrl =
+        'postgresql://secret_user:super_secret_pw@10.99.88.77:5432/secret_db?token=xyz123#frag';
+
+      const errorCases = [
+        {
+          err: Object.assign(new Error(`password authentication failed for ${sensitiveUrl}`), {
+            code: '28P01',
+          }),
+          expectedReason: 'AUTH_FAILED',
+        },
+        {
+          err: Object.assign(new Error(`connect ECONNREFUSED ${sensitiveUrl}`), {
+            code: 'ECONNREFUSED',
+          }),
+          expectedReason: 'CONNECTION_REFUSED',
+        },
+        {
+          err: Object.assign(new Error(`connection timed out to ${sensitiveUrl}`), {
+            code: 'ETIMEDOUT',
+          }),
+          expectedReason: 'CONNECTION_TIMED_OUT',
+        },
+        {
+          err: new Error(`unknown driver failure: ${sensitiveUrl}`),
+          expectedReason: 'SERVER_UNAVAILABLE',
+        },
+      ];
+
+      for (const { err, expectedReason } of errorCases) {
+        expect(ALLOWLISTED_READINESS_REASONS).toContain(expectedReason);
+        const classified = classifyReadinessError(err);
+        expect(classified).toBe(expectedReason);
+
+        const mockConsoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+        const mockPg = {
+          Client: vi.fn(function () {
+            return {
+              connect: vi.fn(async () => {
+                throw err;
+              }),
+              end: vi.fn(async () => {}),
+            };
+          }),
+        };
+
+        let thrownError: Error | undefined;
+        try {
+          await verifyAuthenticatedQueries({
+            pgModule: mockPg,
+            connectionString: sensitiveUrl,
+            requiredSuccesses: 1,
+            timeoutMs: 30,
+            retryIntervalMs: 10,
+            silent: false,
+            throwOnError: true,
+          });
+        } catch (e) {
+          thrownError = e as Error;
+        }
+
+        expect(thrownError).toBeDefined();
+        const thrownMessage = thrownError!.message;
+        const loggedMessage = mockConsoleError.mock.calls.map((c) => c.join(' ')).join('\n');
+
+        for (const sentinel of sentinels) {
+          expect(thrownMessage).not.toContain(sentinel);
+          expect(loggedMessage).not.toContain(sentinel);
+        }
+
+        expect(thrownMessage).toContain(`reason: ${expectedReason}`);
+        expect(thrownMessage).toMatch(
+          /readiness verification timed out after \d+ms \(reason: [A-Z_]+, attempts: \d+\)\./,
+        );
+
+        mockConsoleError.mockRestore();
+      }
+    });
+  });
+
+  describe('verifyTrivyExceptionPolicy', () => {
+    it('accepts the valid repository configuration', () => {
+      const result = verifyTrivyExceptionPolicy();
+      expect(result.verified).toBe(true);
+      expect(result.exceptionId).toBe(REQUIRED_EXCEPTION_ID);
+    });
+
+    it('exports required constants and parses valid schema correctly', () => {
+      expect(REQUIRED_IMAGE_DIGEST).toBe(
+        'sha256:bbf83594798e144bff365a9c191c5d779f181fb3135902064ab8ff11918020fc',
+      );
+      expect(REQUIRED_EVIDENCE_URLS.length).toBeGreaterThanOrEqual(5);
+
+      const parsed = parseTrivyIgnoreYaml(
+        `vulnerabilities:\n  - id: ${REQUIRED_CVE}\n    paths:\n      - ${REQUIRED_PATH}\n    expired_at: ${REQUIRED_EXPIRY}\n    statement: test doc\n`,
+      );
+      expect(parsed.topLevelKeys).toEqual(['vulnerabilities']);
+      expect(parsed.entries).toHaveLength(1);
+      expect(parsed.entries[0]?.id).toBe(REQUIRED_CVE);
+    });
+
+    it('rejects missing ignore file', () => {
+      expect(() =>
+        verifyTrivyExceptionPolicy({ ignorePath: '/non/existent/.trivyignore.yaml' }),
+      ).toThrow(/\.trivyignore\.yaml does not exist/);
+    });
+
+    it('rejects multiple or unexpected top-level keys in .trivyignore.yaml', () => {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'acos_trivy_keys_'));
+      try {
+        const ignorePath = path.join(tempDir, '.trivyignore.yaml');
+        fs.writeFileSync(
+          ignorePath,
+          `vulnerabilities:\n  - id: ${REQUIRED_CVE}\n    paths:\n      - ${REQUIRED_PATH}\n    expired_at: ${REQUIRED_EXPIRY}\n    statement: see security/exceptions/TASK-003-CVE-2025-68121-GOSU.md\npackages:\n  - foo\n`,
+        );
+
+        expect(() => verifyTrivyExceptionPolicy({ ignorePath })).toThrow(
+          /must contain only the 'vulnerabilities' top-level key/,
+        );
+      } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    it('rejects multiple vulnerability items in .trivyignore.yaml', () => {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'acos_trivy_multi_'));
+      try {
+        const ignorePath = path.join(tempDir, '.trivyignore.yaml');
+        fs.writeFileSync(
+          ignorePath,
+          `vulnerabilities:\n  - id: ${REQUIRED_CVE}\n    paths:\n      - ${REQUIRED_PATH}\n    expired_at: ${REQUIRED_EXPIRY}\n    statement: see security/exceptions/TASK-003-CVE-2025-68121-GOSU.md\n  - id: CVE-2025-99999\n    paths:\n      - usr/bin/foo\n    expired_at: ${REQUIRED_EXPIRY}\n    statement: see doc\n`,
+        );
+
+        expect(() => verifyTrivyExceptionPolicy({ ignorePath })).toThrow(
+          /must contain exactly one vulnerability item/,
+        );
+      } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    it('rejects wildcard paths in .trivyignore.yaml', () => {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'acos_trivy_wildcard_'));
+      try {
+        const ignorePath = path.join(tempDir, '.trivyignore.yaml');
+        fs.writeFileSync(
+          ignorePath,
+          `vulnerabilities:\n  - id: ${REQUIRED_CVE}\n    paths:\n      - usr/local/bin/*\n    expired_at: ${REQUIRED_EXPIRY}\n    statement: see security/exceptions/TASK-003-CVE-2025-68121-GOSU.md\n`,
+        );
+
+        expect(() => verifyTrivyExceptionPolicy({ ignorePath })).toThrow(
+          /paths must contain exactly \['usr\/local\/bin\/gosu'\]/,
+        );
+      } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    it('rejects expired exceptions', () => {
+      // Mock 'now' to 2027-01-01
+      const futureNow = () => new Date('2027-01-01T00:00:00Z').getTime();
+      expect(() => verifyTrivyExceptionPolicy({ now: futureNow })).toThrow(/expired on 2026-12-31/);
+    });
+
+    it('rejects missing or altered exception documentation', () => {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'acos_trivy_doc_'));
+      try {
+        const docPath = path.join(tempDir, 'doc.md');
+        fs.writeFileSync(docPath, '# Incomplete doc\n');
+
+        expect(() => verifyTrivyExceptionPolicy({ exceptionDocPath: docPath })).toThrow(
+          /missing required exception ID/,
+        );
+      } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    it('rejects CI workflow with missing --ignorefile, missing timeout-minutes, or forbidden suppression flags', () => {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'acos_ci_check_'));
+      try {
+        const ciPath = path.join(tempDir, 'ci.yml');
+        // Missing --ignorefile
+        fs.writeFileSync(ciPath, 'run: trivy image --show-suppressed "$POSTGRES_IMAGE"\n');
+
+        expect(() => verifyTrivyExceptionPolicy({ ciPath })).toThrow(
+          /must pass '--ignorefile \.trivyignore\.yaml'/,
+        );
+
+        // Missing timeout-minutes: 15
+        fs.writeFileSync(
+          ciPath,
+          'run: trivy image --ignorefile .trivyignore.yaml --show-suppressed "$POSTGRES_IMAGE"\n',
+        );
+        expect(() => verifyTrivyExceptionPolicy({ ciPath })).toThrow(
+          /must specify 'timeout-minutes: 15'/,
+        );
+
+        // Forbidden --pkg-types flag
+        fs.writeFileSync(
+          ciPath,
+          'timeout-minutes: 15\nrun: trivy image --ignorefile .trivyignore.yaml --show-suppressed --pkg-types os "$POSTGRES_IMAGE"\n',
+        );
+        expect(() => verifyTrivyExceptionPolicy({ ciPath })).toThrow(
+          /forbidden scanning suppression\/bypass: '--pkg-types'/,
+        );
+      } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe('README privilege contract', () => {
+    it('accurately states local development reuses bootstrap superuser without claiming lack of privileges', () => {
+      const readmePath = path.resolve(process.cwd(), 'README.md');
+      const readmeContent = fs.readFileSync(readmePath, 'utf8');
+
+      expect(readmeContent).toContain('acos_local');
+      expect(readmeContent).toContain('bootstrap `acos_local` PostgreSQL superuser');
+      expect(readmeContent).toContain(
+        'demonstrates configuration boundary separation rather than local least-privilege role enforcement',
+      );
+      expect(readmeContent).not.toContain(
+        'Does not have administrative privileges to create or drop databases',
+      );
+      expect(readmeContent).toContain(
+        'Production environments strictly require distinct, least-privilege database roles',
+      );
     });
   });
 });

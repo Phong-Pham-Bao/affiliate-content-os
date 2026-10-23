@@ -362,6 +362,225 @@ describe('apps/worker - startWorker lifecycle', () => {
     expect(terminateSpy).toHaveBeenCalledWith(1);
   });
 
+  it('forces exit code 1 when pool close hangs until deadline during probe abort', async () => {
+    let fakeTime = 1000;
+    const now = () => fakeTime;
+    const terminateSpy = vi.fn();
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const timers: { id: number; fn: () => void }[] = [];
+    let timerSeq = 0;
+    const setTimer = (fn: () => void) => {
+      const id = ++timerSeq;
+      timers.push({ id, fn });
+      return id;
+    };
+    const clearTimer = (id: unknown) => {
+      const idx = timers.findIndex((t) => t.id === id);
+      if (idx !== -1) {
+        timers.splice(idx, 1);
+      }
+    };
+
+    const controller = new AbortController();
+
+    const mockDb = createMockDatabase({
+      probe: vi.fn(async (signal?: AbortSignal) => {
+        if (signal?.aborted) {
+          throw new Error('Probe aborted');
+        }
+        return new Promise<void>((_, rej) => {
+          signal?.addEventListener('abort', () => rej(new Error('Probe aborted')));
+        });
+      }),
+      close: vi.fn((() => {
+        // Pool close hangs; advance time past 5000ms deadline and trigger timer
+        fakeTime += 6000;
+        queueMicrotask(() => {
+          const timer = timers.shift();
+          timer?.fn();
+        });
+        return new Promise<void>(() => {});
+      }) as never),
+    });
+
+    const workerPromise = startWorker({
+      config: mockConfig,
+      database: mockDb,
+      abortController: controller,
+      shutdownTimeoutMs: 5000,
+      now,
+      setTimer,
+      clearTimer,
+      terminate: terminateSpy,
+      installSignalHandlers: false,
+    });
+
+    // Abort controller while probe is pending
+    controller.abort();
+
+    await expect(workerPromise).rejects.toThrow(/Worker startup cleanup timed out/);
+    expect(terminateSpy).toHaveBeenCalledTimes(1);
+    expect(terminateSpy).toHaveBeenCalledWith(1);
+    expect(terminateSpy).not.toHaveBeenCalledWith(0);
+
+    const errorLogs = consoleErrorSpy.mock.calls.map((c) => c.join(' ')).join('\n');
+    expect(errorLogs).toContain(
+      'Worker startup cleanup failure: Worker startup cleanup timed out after 5000ms',
+    );
+
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('forces exit code 1 when pool close rejects during probe abort', async () => {
+    const terminateSpy = vi.fn();
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const controller = new AbortController();
+    const mockDb = createMockDatabase({
+      probe: vi.fn(async (signal?: AbortSignal) => {
+        if (signal?.aborted) {
+          throw new Error('Probe aborted');
+        }
+        return new Promise<void>((_, rej) => {
+          signal?.addEventListener('abort', () => rej(new Error('Probe aborted')));
+        });
+      }),
+      close: vi.fn().mockRejectedValue(new Error('Database close pool error')),
+    });
+
+    const workerPromise = startWorker({
+      config: mockConfig,
+      database: mockDb,
+      abortController: controller,
+      shutdownTimeoutMs: 5000,
+      terminate: terminateSpy,
+      installSignalHandlers: false,
+    });
+
+    controller.abort();
+
+    await expect(workerPromise).rejects.toThrow('Database close pool error');
+    expect(terminateSpy).toHaveBeenCalledTimes(1);
+    expect(terminateSpy).toHaveBeenCalledWith(1);
+    expect(terminateSpy).not.toHaveBeenCalledWith(0);
+
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('forces exit code 1 when remaining deadline budget is zero during probe cleanup', async () => {
+    let callCount = 0;
+    const now = () => {
+      callCount++;
+      // First call (during shutdown initialization): 1000ms (deadline = 6000ms)
+      // Subsequent calls: 7000ms (budget already exhausted, remaining = 0ms)
+      return callCount === 1 ? 1000 : 7000;
+    };
+    const terminateSpy = vi.fn();
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const controller = new AbortController();
+    const mockDb = createMockDatabase({
+      probe: vi.fn(async () => {
+        throw new Error('Database connection failed');
+      }),
+      close: vi.fn(async () => {}),
+    });
+
+    const workerPromise = startWorker({
+      config: mockConfig,
+      database: mockDb,
+      abortController: controller,
+      shutdownTimeoutMs: 5000,
+      now,
+      terminate: terminateSpy,
+      installSignalHandlers: false,
+    });
+
+    await expect(workerPromise).rejects.toThrow(/Worker startup cleanup timed out/);
+    expect(terminateSpy).toHaveBeenCalledTimes(1);
+    expect(terminateSpy).toHaveBeenCalledWith(1);
+
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('preserves termination code 1 and ignores late completion after deadline expiry', async () => {
+    let fakeTime = 1000;
+    const now = () => fakeTime;
+    const terminateSpy = vi.fn();
+    const consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const timers: { id: number; fn: () => void }[] = [];
+    let timerSeq = 0;
+    const setTimer = (fn: () => void) => {
+      const id = ++timerSeq;
+      timers.push({ id, fn });
+      return id;
+    };
+    const clearTimer = (id: unknown) => {
+      const idx = timers.findIndex((t) => t.id === id);
+      if (idx !== -1) {
+        timers.splice(idx, 1);
+      }
+    };
+
+    let resolveClose!: () => void;
+    const closePromise = new Promise<void>((r) => {
+      resolveClose = r;
+    });
+
+    const mockDb = createMockDatabase({
+      close: vi.fn((() => {
+        fakeTime += 6000;
+        queueMicrotask(() => {
+          const timer = timers.shift();
+          timer?.fn();
+        });
+        return closePromise;
+      }) as never),
+    });
+
+    const controller = new AbortController();
+    let runnerStartedResolve!: () => void;
+    const runnerStartedPromise = new Promise<void>((resolve) => {
+      runnerStartedResolve = resolve;
+    });
+
+    const workerPromise = startWorker({
+      config: mockConfig,
+      database: mockDb,
+      abortController: controller,
+      shutdownTimeoutMs: 5000,
+      now,
+      setTimer,
+      clearTimer,
+      terminate: terminateSpy,
+      installSignalHandlers: false,
+      workerRunner: async () => {
+        runnerStartedResolve();
+        return Promise.resolve();
+      },
+    });
+
+    await runnerStartedPromise;
+    controller.abort();
+    await expect(workerPromise).rejects.toThrow(/timed out/);
+
+    expect(terminateSpy).toHaveBeenCalledWith(1);
+
+    // Late close resolves after deadline expiry
+    resolveClose();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(terminateSpy).toHaveBeenCalledTimes(1);
+    expect(terminateSpy).not.toHaveBeenCalledWith(0);
+
+    const logs = consoleLogSpy.mock.calls.map((c) => c.join(' ')).join('\n');
+    expect(logs).not.toContain('Worker process stopped gracefully');
+
+    consoleLogSpy.mockRestore();
+  });
+
   it('installs and cleans up signal listeners during worker lifecycle', async () => {
     const initialSigint = process.listenerCount('SIGINT');
     const initialSigterm = process.listenerCount('SIGTERM');

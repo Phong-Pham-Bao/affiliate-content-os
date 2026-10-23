@@ -1,11 +1,5 @@
-import {
-  getRedactedConfigMetadata,
-  loadDatabaseConfig,
-  readAndValidateSslCaFile,
-  type AppConfig,
-  type DatabaseConfig,
-} from '@affiliate-content-os/config';
-import { createDatabase, type Database } from '@affiliate-content-os/infrastructure/database';
+import { getRedactedConfigMetadata, type AppConfig } from '@affiliate-content-os/config';
+import type { Database } from '@affiliate-content-os/infrastructure/database';
 import { runWorker, type WorkerRuntimeHandle } from './worker.js';
 import {
   raceWithDeadline,
@@ -16,8 +10,7 @@ import {
 
 export interface StartWorkerOptions {
   readonly config: AppConfig;
-  readonly databaseConfig?: DatabaseConfig | undefined;
-  readonly database?: Database | undefined;
+  readonly database: Database;
   readonly abortController?: AbortController | undefined;
   readonly installSignalHandlers?: boolean | undefined;
   readonly shutdownTimeoutMs?: number | undefined;
@@ -38,7 +31,7 @@ export interface StartWorkerOptions {
 }
 
 export async function startWorker(options: StartWorkerOptions): Promise<void> {
-  const { config } = options;
+  const { config, database } = options;
   const timeoutMs = options.shutdownTimeoutMs ?? 5000;
   const terminate = options.terminate ?? ((exitCode: number): void => process.exit(exitCode));
   const getNow = options.now ?? (() => performance.now());
@@ -46,18 +39,6 @@ export async function startWorker(options: StartWorkerOptions): Promise<void> {
     setTimer: options.setTimer,
     clearTimer: options.clearTimer,
   };
-
-  let database: Database;
-  if (options.database) {
-    database = options.database;
-  } else {
-    const dbConfig = options.databaseConfig ?? loadDatabaseConfig(process.env);
-    let sslCaContent: string | undefined;
-    if (dbConfig.sslMode === 'verify-full' && dbConfig.sslCaFile) {
-      sslCaContent = readAndValidateSslCaFile(dbConfig.sslCaFile);
-    }
-    database = createDatabase(dbConfig, { sslCaContent });
-  }
 
   const controller = options.abortController ?? new AbortController();
 
@@ -147,8 +128,10 @@ export async function startWorker(options: StartWorkerOptions): Promise<void> {
     console.log(`Worker process received ${signalName}, shutting down gracefully`);
     void close()
       .then(() => {
-        console.log('Worker process stopped gracefully');
-        invokeTerminate(0);
+        if (!terminated) {
+          console.log('Worker process stopped gracefully');
+          invokeTerminate(0);
+        }
       })
       .catch(() => {
         // executeClose already invoked invokeTerminate(1)
@@ -173,6 +156,7 @@ export async function startWorker(options: StartWorkerOptions): Promise<void> {
       absoluteDeadline = getNow() + timeoutMs;
     }
 
+    let cleanupError: unknown;
     try {
       await raceWithDeadline(
         database.close(),
@@ -180,8 +164,16 @@ export async function startWorker(options: StartWorkerOptions): Promise<void> {
         `Worker startup cleanup timed out after ${timeoutMs}ms`,
         timerOptions,
       );
-    } catch {
-      // Best-effort database close
+    } catch (err) {
+      cleanupError = err;
+    }
+
+    if (cleanupError) {
+      const message =
+        cleanupError instanceof Error ? cleanupError.message : 'Database cleanup failed';
+      console.error(`Worker startup cleanup failure: ${message}`);
+      invokeTerminate(1);
+      throw cleanupError;
     }
 
     if (controller.signal.aborted) {
@@ -197,6 +189,9 @@ export async function startWorker(options: StartWorkerOptions): Promise<void> {
 
   // Phase 2: Run Worker idle loop
   const handleStarted = (): void => {
+    if (controller.signal.aborted || terminated) {
+      return;
+    }
     const metadata = getRedactedConfigMetadata(config);
     console.log(
       `Worker process started and entering idle state (nodeEnv: ${metadata.nodeEnv}, logLevel: ${metadata.logLevel})`,

@@ -1,11 +1,6 @@
 import type { FastifyInstance } from 'fastify';
-import {
-  loadDatabaseConfig,
-  readAndValidateSslCaFile,
-  type AppConfig,
-  type DatabaseConfig,
-} from '@affiliate-content-os/config';
-import { createDatabase, type Database } from '@affiliate-content-os/infrastructure/database';
+import type { AppConfig } from '@affiliate-content-os/config';
+import type { Database } from '@affiliate-content-os/infrastructure/database';
 import { createApp } from './app.js';
 import {
   raceWithDeadline,
@@ -23,8 +18,7 @@ export interface ApiServerHandle {
 
 export interface StartServerOptions {
   readonly config: AppConfig;
-  readonly databaseConfig?: DatabaseConfig | undefined;
-  readonly database?: Database | undefined;
+  readonly database: Database;
   readonly app?: FastifyInstance | undefined;
   readonly installSignalHandlers?: boolean | undefined;
   readonly shutdownTimeoutMs?: number | undefined;
@@ -37,7 +31,7 @@ export interface StartServerOptions {
 }
 
 export async function startApiServer(options: StartServerOptions): Promise<ApiServerHandle> {
-  const { config } = options;
+  const { config, database } = options;
   const timeoutMs = options.shutdownTimeoutMs ?? 5000;
   const terminate = options.terminate ?? ((exitCode: number): void => process.exit(exitCode));
   const getNow = options.now ?? (() => performance.now());
@@ -45,18 +39,6 @@ export async function startApiServer(options: StartServerOptions): Promise<ApiSe
     setTimer: options.setTimer,
     clearTimer: options.clearTimer,
   };
-
-  let database: Database;
-  if (options.database) {
-    database = options.database;
-  } else {
-    const dbConfig = options.databaseConfig ?? loadDatabaseConfig(process.env);
-    let sslCaContent: string | undefined;
-    if (dbConfig.sslMode === 'verify-full' && dbConfig.sslCaFile) {
-      sslCaContent = readAndValidateSslCaFile(dbConfig.sslCaFile);
-    }
-    database = createDatabase(dbConfig, { sslCaContent });
-  }
 
   const app = options.app ?? createApp({ config });
 

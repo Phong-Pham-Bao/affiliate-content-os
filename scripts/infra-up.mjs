@@ -6,6 +6,69 @@ export const REQUIRED_CONSECUTIVE_SUCCESSES = 5;
 export const READINESS_TIMEOUT_MS = 30000;
 export const RETRY_INTERVAL_MS = 250;
 
+export const ALLOWLISTED_READINESS_REASONS = Object.freeze([
+  'AUTH_FAILED',
+  'CONNECTION_REFUSED',
+  'CONNECTION_TIMED_OUT',
+  'CONNECTION_RESET',
+  'HOST_NOT_FOUND',
+  'DATABASE_NOT_FOUND',
+  'QUERY_TIMEOUT',
+  'SERVER_UNAVAILABLE',
+  'VERIFICATION_TIMEOUT',
+]);
+
+export function classifyReadinessError(err) {
+  if (!err || typeof err !== 'object') {
+    return 'VERIFICATION_TIMEOUT';
+  }
+
+  const code = typeof err.code === 'string' ? err.code : '';
+  if (code === '28P01' || code === '28000') {
+    return 'AUTH_FAILED';
+  }
+  if (code === 'ECONNREFUSED') {
+    return 'CONNECTION_REFUSED';
+  }
+  if (code === 'ETIMEDOUT') {
+    return 'CONNECTION_TIMED_OUT';
+  }
+  if (code === 'ECONNRESET') {
+    return 'CONNECTION_RESET';
+  }
+  if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') {
+    return 'HOST_NOT_FOUND';
+  }
+  if (code === '3D000') {
+    return 'DATABASE_NOT_FOUND';
+  }
+  if (code === '57014') {
+    return 'QUERY_TIMEOUT';
+  }
+
+  const rawMessage = typeof err.message === 'string' ? err.message.toLowerCase() : '';
+  if (
+    rawMessage.includes('password authentication failed') ||
+    (rawMessage.includes('role') && rawMessage.includes('does not exist'))
+  ) {
+    return 'AUTH_FAILED';
+  }
+  if (rawMessage.includes('connection refused')) {
+    return 'CONNECTION_REFUSED';
+  }
+  if (rawMessage.includes('connection reset')) {
+    return 'CONNECTION_RESET';
+  }
+  if (rawMessage.includes('database') && rawMessage.includes('does not exist')) {
+    return 'DATABASE_NOT_FOUND';
+  }
+  if (rawMessage.includes('timeout')) {
+    return 'CONNECTION_TIMED_OUT';
+  }
+
+  return 'SERVER_UNAVAILABLE';
+}
+
 export function runComposeUp(options = {}) {
   const spawnFn = options.spawnSyncFn ?? spawnSync;
   const result = spawnFn('docker', ['compose', 'up', '-d', '--wait'], {
@@ -38,9 +101,11 @@ export async function verifyAuthenticatedQueries(options = {}) {
 
   const deadline = Date.now() + timeoutMs;
   let consecutiveSuccesses = 0;
+  let attempts = 0;
   let lastError;
 
   while (Date.now() < deadline) {
+    attempts += 1;
     const client = new pg.Client({
       connectionString,
       connectionTimeoutMillis: 3000,
@@ -60,7 +125,7 @@ export async function verifyAuthenticatedQueries(options = {}) {
               `[infra:up] PostgreSQL is fully ready and accepting authenticated queries (${requiredSuccesses}/${requiredSuccesses} verified).`,
             );
           }
-          return { verified: true, attempts: consecutiveSuccesses };
+          return { verified: true, attempts };
         }
       } else {
         consecutiveSuccesses = 0;
@@ -78,7 +143,8 @@ export async function verifyAuthenticatedQueries(options = {}) {
     await new Promise((resolve) => setTimeout(resolve, retryIntervalMs));
   }
 
-  const errorMsg = `[infra:up] PostgreSQL readiness verification timed out after ${timeoutMs}ms. Last error: ${lastError?.message ?? 'unknown'}`;
+  const reason = classifyReadinessError(lastError);
+  const errorMsg = `[infra:up] PostgreSQL readiness verification timed out after ${timeoutMs}ms (reason: ${reason}, attempts: ${attempts}).`;
   if (!options.silent) {
     console.error(errorMsg);
   }

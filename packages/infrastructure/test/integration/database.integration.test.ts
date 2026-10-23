@@ -133,4 +133,81 @@ describe('Real PostgreSQL persistence and transaction integration', () => {
       await timeoutDb.close();
     }
   });
+
+  describe('falsy transaction rejection and rollback visibility in real PostgreSQL', () => {
+    const falsyCases = [
+      { name: 'undefined', value: undefined },
+      { name: 'false', value: false },
+      { name: '0', value: 0 },
+      { name: "''", value: '' },
+    ];
+
+    for (const { name, value } of falsyCases) {
+      it(`preserves falsy rejection ${name}, rolls back changes, and allows client reuse`, async () => {
+        const uniqueName = `falsy_tx_real_${name}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+
+        let caught: unknown;
+        let didReject = false;
+        try {
+          await db.withTransaction(async (tx) => {
+            await tx.query('INSERT INTO test_items (name, value) VALUES ($1, $2);', [
+              uniqueName,
+              'falsy_rollback_data',
+            ]);
+            return Promise.reject(value);
+          });
+        } catch (err) {
+          didReject = true;
+          caught = err;
+        }
+
+        expect(didReject).toBe(true);
+        expect(caught).toBe(value);
+
+        // Verify rollback: row was not persisted
+        const check = await db.query('SELECT id FROM test_items WHERE name = $1;', [uniqueName]);
+        expect(check.rowCount).toBe(0);
+
+        // Verify subsequent query can acquire and use the released connection from pool
+        const probeQuery = await db.query<{ one: number }>('SELECT 1 as one;');
+        expect(probeQuery.rowCount).toBe(1);
+        expect(probeQuery.rows[0]?.one).toBe(1);
+      });
+    }
+  });
+
+  it('fails closed when NODE_ENV is absent in child process without creating test database', async () => {
+    const { spawnSync } = await import('node:child_process');
+    const childScript = `
+      import { setupIsolatedTestDatabase } from './packages/infrastructure/test/integration/helpers/setup.js';
+      try {
+        await setupIsolatedTestDatabase();
+        process.exit(0);
+      } catch (err) {
+        console.error(err instanceof Error ? err.message : String(err));
+        process.exit(1);
+      }
+    `;
+
+    const childEnv = { ...process.env };
+    delete childEnv['NODE_ENV'];
+    childEnv['TEST_DATABASE_ADMIN_URL'] = context.adminConfig.testDatabaseAdminUrl;
+    childEnv['TEST_DATABASE_DISPOSABLE'] = 'YES_I_UNDERSTAND_TEST_DATABASES_WILL_BE_DROPPED';
+    childEnv['DATABASE_SSL_MODE'] = 'disable';
+
+    const result = spawnSync(
+      process.execPath,
+      ['--conditions=development', '--import', 'tsx', '--input-type=module', '-e', childScript],
+      {
+        cwd: process.cwd(),
+        env: childEnv,
+        encoding: 'utf8',
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('invalid or missing NODE_ENV');
+    expect(result.stderr).not.toContain('YES_I_UNDERSTAND_TEST_DATABASES_WILL_BE_DROPPED');
+    expect(result.stderr).not.toContain('secret_password');
+  });
 });

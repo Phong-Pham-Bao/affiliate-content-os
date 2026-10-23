@@ -39,7 +39,9 @@ export async function setupIsolatedTestDatabase(
 
   let databaseCreated = false;
   const safetyOptions = {
-    effectiveNodeEnv: options?.effectiveNodeEnv ?? process.env['NODE_ENV'] ?? 'test',
+    effectiveNodeEnv:
+      options?.effectiveNodeEnv ??
+      (typeof process.env['NODE_ENV'] === 'string' ? process.env['NODE_ENV'] : ''),
     isCi: options?.isCi ?? (process.env['CI'] === 'true' || process.env['CI'] === '1'),
     sslCaContent,
     onDatabaseCreated: () => {

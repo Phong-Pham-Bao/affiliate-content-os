@@ -26,7 +26,9 @@ export function assertDatabaseSafetyGuards(
   options: DatabaseSafetyOptions,
 ): void {
   if (options.effectiveNodeEnv !== 'test') {
-    throw new DatabaseError('Destructive test database operation rejected: invalid environment');
+    throw new DatabaseError(
+      'Destructive test database operation rejected: invalid or missing NODE_ENV',
+    );
   }
 
   if (
