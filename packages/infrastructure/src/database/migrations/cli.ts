@@ -5,6 +5,7 @@ import {
   readAndValidateSslCaFile,
 } from '@affiliate-content-os/config';
 import { resolveSslOptions } from '../ssl.js';
+import { sanitizeDatabaseError } from '../errors.js';
 import { checkMigrationStatusCommand, runMigrationCommand } from './runner.js';
 import { validateMigrations } from './validate.js';
 
@@ -91,6 +92,8 @@ export async function runMigrationCli(args: readonly string[]): Promise<void> {
       adminConfig: config,
       ssl,
       sslCaContent,
+      effectiveNodeEnv: process.env['NODE_ENV'] ?? '',
+      isCi: process.env['CI'] === 'true' || process.env['CI'] === '1',
     });
 
     console.log(
@@ -107,7 +110,8 @@ if (
     process.argv[1].endsWith('cli.ts'))
 ) {
   runMigrationCli(process.argv.slice(2)).catch((err) => {
-    console.error('[db:migrate] Error:', err instanceof Error ? err.message : String(err));
+    const sanitized = sanitizeDatabaseError(err);
+    console.error(`[db:migrate] Error: ${sanitized.message}`);
     process.exit(1);
   });
 }

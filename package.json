@@ -17,7 +17,7 @@
     "test": "vitest run",
     "build": "pnpm -r run build",
     "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build",
-    "infra:up": "node scripts/run-with-env.mjs docker compose up -d --wait",
+    "infra:up": "node scripts/run-with-env.mjs node scripts/infra-up.mjs",
     "infra:down": "node scripts/run-with-env.mjs docker compose down",
     "infra:logs": "node scripts/run-with-env.mjs docker compose logs -f",
     "infra:reset": "node scripts/run-with-env.mjs docker compose down -v",

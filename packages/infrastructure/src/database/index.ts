@@ -9,14 +9,6 @@ export {
   fetchMigrationStatus,
   runMigrationCommand,
 } from './migrations/runner.js';
-export {
-  assertDatabaseSafetyGuards,
-  buildIsolatedDatabaseUrl,
-  createIsolatedDatabase,
-  dropIsolatedDatabase,
-  generateTestDatabaseName,
-} from './migrations/safety.js';
-export { validateMigrations } from './migrations/validate.js';
 export type {
   AppliedMigration,
   MigrationFile,

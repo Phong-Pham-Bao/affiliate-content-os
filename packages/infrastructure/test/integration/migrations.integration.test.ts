@@ -8,8 +8,8 @@ import {
   discoverMigrations,
   getDefaultMigrationsDir,
   runMigrationCommand,
-  validateMigrations,
 } from '../../src/database/index.js';
+import { validateMigrations } from '../../src/database/migrations/validate.js';
 import { setupIsolatedTestDatabase, type TestDatabaseContext } from './helpers/setup.js';
 
 describe('Real PostgreSQL migration runner and validation integration', () => {
@@ -291,6 +291,8 @@ describe('Real PostgreSQL migration runner and validation integration', () => {
   it('executes validateMigrations end-to-end on real PostgreSQL and drops isolated database', async () => {
     const result = await validateMigrations({
       adminConfig: context.adminConfig,
+      effectiveNodeEnv: 'test',
+      isCi: process.env['CI'] === 'true' || process.env['CI'] === '1',
     });
 
     expect(result.isolatedDatabaseName).toMatch(/^acos_test_[0-9a-f]{1,48}$/);

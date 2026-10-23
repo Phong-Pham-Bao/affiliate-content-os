@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   assertDatabaseSafetyGuards,
   buildIsolatedDatabaseUrl,
@@ -308,5 +308,62 @@ describe('Database safety guards and isolation policy (unit tests)', () => {
     await expect(
       dropIsolatedDatabase(badConfig, validTargetDb, { effectiveNodeEnv: 'test' }),
     ).rejects.toThrow('administrative host is not permitted for test execution');
+  });
+
+  it('rejects invalid or missing typed config without reading process.env', () => {
+    // Save original process.env
+    const origEnv = process.env['NODE_ENV'];
+    const origSent = process.env['TEST_DATABASE_DISPOSABLE'];
+    try {
+      process.env['NODE_ENV'] = 'test';
+      process.env['TEST_DATABASE_DISPOSABLE'] = TEST_DATABASE_DISPOSABLE_SENTINEL;
+
+      // Destructive helper must reject undefined/invalid config without falling back to process.env
+      expect(() =>
+        assertDatabaseSafetyGuards(null as unknown as TestAdminDatabaseConfig, validTargetDb, {
+          effectiveNodeEnv: 'test',
+        }),
+      ).toThrow('missing required confirmation');
+
+      // Must reject if options.effectiveNodeEnv is not provided, even if process.env.NODE_ENV === 'test'
+      expect(() =>
+        assertDatabaseSafetyGuards(validAdminConfig, validTargetDb, {
+          effectiveNodeEnv: 'development',
+        }),
+      ).toThrow('invalid environment');
+    } finally {
+      process.env['NODE_ENV'] = origEnv;
+      process.env['TEST_DATABASE_DISPOSABLE'] = origSent;
+    }
+  });
+
+  it('proves cleanup retryability if first drop attempt fails', async () => {
+    let attempts = 0;
+    const mockDrop = vi.fn(async () => {
+      attempts++;
+      if (attempts === 1) {
+        throw new Error('Transient drop failure');
+      }
+    });
+
+    let cleanedUp = false;
+    const retryableCleanup = async () => {
+      if (cleanedUp) return;
+      await mockDrop();
+      cleanedUp = true;
+    };
+
+    // First attempt fails
+    await expect(retryableCleanup()).rejects.toThrow('Transient drop failure');
+    expect(cleanedUp).toBe(false);
+
+    // Second attempt succeeds and marks cleanedUp = true
+    await expect(retryableCleanup()).resolves.toBeUndefined();
+    expect(cleanedUp).toBe(true);
+    expect(attempts).toBe(2);
+
+    // Third attempt is a no-op
+    await retryableCleanup();
+    expect(attempts).toBe(2);
   });
 });

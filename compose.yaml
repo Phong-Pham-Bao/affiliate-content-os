@@ -13,10 +13,12 @@ services:
     volumes:
       - acos_postgres_data:/var/lib/postgresql
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB']
+      test:
+        - 'CMD-SHELL'
+        - '[ "$$(cat /proc/1/comm 2>/dev/null)" = "postgres" ] && pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB && psql -U $$POSTGRES_USER -d $$POSTGRES_DB -c "SELECT 1" -q'
       interval: 2s
       timeout: 5s
-      retries: 10
+      retries: 20
       start_period: 5s
     restart: unless-stopped
 

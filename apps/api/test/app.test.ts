@@ -380,4 +380,77 @@ describe('apps/api - startApiServer lifecycle', () => {
     expect(terminateSpy).toHaveBeenCalledWith(0);
     expect(mockDb.close).toHaveBeenCalledTimes(1);
   });
+
+  it('awaits in-flight probe settlement and aborts listener when SIGINT fires during probe', async () => {
+    const terminateSpy = vi.fn();
+    const listenerSpy = vi.fn();
+
+    let resolveProbe!: () => void;
+    const probePromise = new Promise<void>((resolve) => {
+      resolveProbe = resolve;
+    });
+
+    const mockDb = createMockDatabase({
+      probe: vi.fn(async (signal) => {
+        if (signal?.aborted) return;
+        return probePromise;
+      }),
+    });
+
+    const startPromise = startApiServer({
+      config: testConfig,
+      database: mockDb,
+      installSignalHandlers: true,
+      terminate: terminateSpy,
+      listener: listenerSpy,
+    });
+
+    // Fire SIGINT while probe is pending
+    process.emit('SIGINT');
+
+    // Settle probe
+    resolveProbe();
+
+    await expect(startPromise).rejects.toThrow();
+    expect(listenerSpy).not.toHaveBeenCalled();
+    expect(terminateSpy).toHaveBeenCalledWith(0);
+  });
+
+  it('forces exit code 1 when in-flight startup probe exceeds shutdown deadline', async () => {
+    let fakeTime = 1000;
+    const now = () => fakeTime;
+    const terminateSpy = vi.fn();
+
+    let timeoutCb: (() => void) | undefined;
+    const setTimer = (fn: () => void) => {
+      timeoutCb = fn;
+      return 1;
+    };
+    const clearTimer = vi.fn();
+
+    const mockDb = createMockDatabase({
+      probe: vi.fn(() => new Promise<void>(() => {})), // hangs indefinitely
+    });
+
+    const startPromise = startApiServer({
+      config: testConfig,
+      database: mockDb,
+      installSignalHandlers: true,
+      terminate: terminateSpy,
+      now,
+      setTimer,
+      clearTimer,
+      shutdownTimeoutMs: 5000,
+    });
+
+    // Fire SIGINT
+    process.emit('SIGINT');
+
+    // Simulate deadline expiry
+    fakeTime += 6000;
+    timeoutCb?.();
+
+    await expect(startPromise).rejects.toThrow(/timed out/);
+    expect(terminateSpy).toHaveBeenCalledWith(1);
+  });
 });

@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import type { TestAdminDatabaseConfig } from '@affiliate-content-os/config';
 import { TEST_DATABASE_DISPOSABLE_SENTINEL } from '@affiliate-content-os/config';
 import pg from 'pg';
-import { DatabaseError } from '../errors.js';
+import { DatabaseError, sanitizeDatabaseError } from '../errors.js';
 import { resolveSslOptions } from '../ssl.js';
 
 const TARGET_DB_REGEX = /^acos_test_[0-9a-f]{1,48}$/;
@@ -14,37 +14,32 @@ export function generateTestDatabaseName(): string {
 }
 
 export interface DatabaseSafetyOptions {
-  readonly effectiveNodeEnv?: string | undefined;
+  readonly effectiveNodeEnv: string;
   readonly isCi?: boolean | undefined;
   readonly sslCaContent?: string | undefined;
+  readonly onDatabaseCreated?: (() => void) | undefined;
 }
 
 export function assertDatabaseSafetyGuards(
-  configOrUrl: TestAdminDatabaseConfig | string,
+  config: TestAdminDatabaseConfig,
   targetDb: string,
-  options?: DatabaseSafetyOptions,
+  options: DatabaseSafetyOptions,
 ): void {
-  const effectiveNodeEnv = options?.effectiveNodeEnv ?? process.env['NODE_ENV'];
-  if (effectiveNodeEnv !== 'test') {
+  if (options.effectiveNodeEnv !== 'test') {
     throw new DatabaseError('Destructive test database operation rejected: invalid environment');
   }
 
-  const disposableValue =
-    typeof configOrUrl === 'object' && configOrUrl !== null
-      ? configOrUrl.testDatabaseDisposable
-      : process.env['TEST_DATABASE_DISPOSABLE'];
-
-  if (disposableValue !== TEST_DATABASE_DISPOSABLE_SENTINEL) {
+  if (
+    !config ||
+    typeof config !== 'object' ||
+    config.testDatabaseDisposable !== TEST_DATABASE_DISPOSABLE_SENTINEL
+  ) {
     throw new DatabaseError(
       'Destructive test database operation rejected: missing required confirmation',
     );
   }
 
-  const adminUrl =
-    typeof configOrUrl === 'object' && configOrUrl !== null
-      ? configOrUrl.testDatabaseAdminUrl
-      : configOrUrl;
-
+  const adminUrl = config.testDatabaseAdminUrl;
   if (typeof adminUrl !== 'string' || adminUrl.trim() === '') {
     throw new DatabaseError(
       'Destructive test database operation rejected: invalid administrative URL',
@@ -95,10 +90,8 @@ export function assertDatabaseSafetyGuards(
   }
 
   const hostname = parsed.hostname.toLowerCase();
-  const isCi = options?.isCi ?? (process.env['CI'] === 'true' || process.env['CI'] === '1');
-
   const allowedHosts = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
-  if (isCi) {
+  if (options.isCi) {
     allowedHosts.add('postgres');
   }
 
@@ -135,79 +128,54 @@ export function buildIsolatedDatabaseUrl(adminUrl: string, targetDb: string): st
 }
 
 export async function createIsolatedDatabase(
-  configOrUrl: TestAdminDatabaseConfig | string,
+  config: TestAdminDatabaseConfig,
   targetDb: string,
-  options?: DatabaseSafetyOptions,
+  options: DatabaseSafetyOptions,
 ): Promise<string> {
-  assertDatabaseSafetyGuards(configOrUrl, targetDb, options);
+  assertDatabaseSafetyGuards(config, targetDb, options);
 
-  const adminUrl =
-    typeof configOrUrl === 'object' && configOrUrl !== null
-      ? configOrUrl.testDatabaseAdminUrl
-      : configOrUrl;
-  const sslMode =
-    typeof configOrUrl === 'object' && configOrUrl !== null ? configOrUrl.sslMode : 'disable';
-  const connectionTimeoutMillis =
-    typeof configOrUrl === 'object' && configOrUrl !== null
-      ? configOrUrl.connectionTimeoutMs
-      : 5000;
-  const statementTimeoutMillis =
-    typeof configOrUrl === 'object' && configOrUrl !== null
-      ? configOrUrl.statementTimeoutMs
-      : 15000;
-
-  const ssl = resolveSslOptions(sslMode, options?.sslCaContent);
+  const adminUrl = config.testDatabaseAdminUrl;
+  const ssl = resolveSslOptions(config.sslMode, options.sslCaContent);
 
   const client = new pg.Client({
     connectionString: adminUrl,
     ssl,
-    connectionTimeoutMillis,
-    statement_timeout: statementTimeoutMillis,
+    connectionTimeoutMillis: config.connectionTimeoutMs,
+    statement_timeout: config.statementTimeoutMs,
   });
 
-  await client.connect();
   try {
+    await client.connect();
     // Quoted identifier is safe because targetDb is strictly validated against ^acos_test_[0-9a-f]{1,48}$
     await client.query(`CREATE DATABASE "${targetDb}";`);
+    options.onDatabaseCreated?.();
     return buildIsolatedDatabaseUrl(adminUrl, targetDb);
+  } catch (err) {
+    throw sanitizeDatabaseError(err, 'Failed to create isolated test database');
   } finally {
-    await client.end();
+    await client.end().catch(() => {});
   }
 }
 
 export async function dropIsolatedDatabase(
-  configOrUrl: TestAdminDatabaseConfig | string,
+  config: TestAdminDatabaseConfig,
   targetDb: string,
-  options?: DatabaseSafetyOptions,
+  options: DatabaseSafetyOptions,
 ): Promise<void> {
-  assertDatabaseSafetyGuards(configOrUrl, targetDb, options);
+  assertDatabaseSafetyGuards(config, targetDb, options);
 
-  const adminUrl =
-    typeof configOrUrl === 'object' && configOrUrl !== null
-      ? configOrUrl.testDatabaseAdminUrl
-      : configOrUrl;
-  const sslMode =
-    typeof configOrUrl === 'object' && configOrUrl !== null ? configOrUrl.sslMode : 'disable';
-  const connectionTimeoutMillis =
-    typeof configOrUrl === 'object' && configOrUrl !== null
-      ? configOrUrl.connectionTimeoutMs
-      : 5000;
-  const statementTimeoutMillis =
-    typeof configOrUrl === 'object' && configOrUrl !== null
-      ? configOrUrl.statementTimeoutMs
-      : 15000;
-
-  const ssl = resolveSslOptions(sslMode, options?.sslCaContent);
+  const adminUrl = config.testDatabaseAdminUrl;
+  const ssl = resolveSslOptions(config.sslMode, options.sslCaContent);
 
   const client = new pg.Client({
     connectionString: adminUrl,
     ssl,
-    connectionTimeoutMillis,
-    statement_timeout: statementTimeoutMillis,
+    connectionTimeoutMillis: config.connectionTimeoutMs,
+    statement_timeout: config.statementTimeoutMs,
   });
 
-  await client.connect();
   try {
+    await client.connect();
     await client.query(
       `SELECT pg_terminate_backend(pid)
        FROM pg_stat_activity
@@ -215,7 +183,9 @@ export async function dropIsolatedDatabase(
       [targetDb],
     );
     await client.query(`DROP DATABASE IF EXISTS "${targetDb}";`);
+  } catch (err) {
+    throw sanitizeDatabaseError(err, 'Failed to drop isolated test database');
   } finally {
-    await client.end();
+    await client.end().catch(() => {});
   }
 }

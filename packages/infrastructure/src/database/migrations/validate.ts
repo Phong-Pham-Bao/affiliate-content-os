@@ -1,6 +1,6 @@
 import type { TestAdminDatabaseConfig } from '@affiliate-content-os/config';
 import pg from 'pg';
-import { DatabaseError } from '../errors.js';
+import { DatabaseError, sanitizeDatabaseError } from '../errors.js';
 import { discoverMigrations, getDefaultMigrationsDir } from './discovery.js';
 import { checkMigrationStatusCommand, runMigrationCommand } from './runner.js';
 import {
@@ -10,15 +10,14 @@ import {
 } from './safety.js';
 
 export interface ValidateMigrationsOptions {
-  readonly adminUrl?: string | undefined;
-  readonly adminConfig?: TestAdminDatabaseConfig | undefined;
+  readonly adminConfig: TestAdminDatabaseConfig;
   readonly ssl?: boolean | pg.ConnectionConfig['ssl'] | undefined;
   readonly sslCaContent?: string | undefined;
   readonly migrationsDir?: string | undefined;
   readonly connectionTimeoutMs?: number | undefined;
   readonly statementTimeoutMs?: number | undefined;
-  readonly effectiveNodeEnv?: string | undefined;
-  readonly isCi?: boolean | undefined;
+  readonly effectiveNodeEnv: string;
+  readonly isCi: boolean;
 }
 
 export async function validateMigrations(options: ValidateMigrationsOptions): Promise<{
@@ -31,23 +30,33 @@ export async function validateMigrations(options: ValidateMigrationsOptions): Pr
   const localMigrations = discoverMigrations(migrationsDir);
   const targetDbName = generateTestDatabaseName();
 
-  const configOrUrl: TestAdminDatabaseConfig | string =
-    options.adminConfig ?? options.adminUrl ?? '';
+  let databaseCreated = false;
   const safetyOptions = {
     effectiveNodeEnv: options.effectiveNodeEnv,
     isCi: options.isCi,
     sslCaContent: options.sslCaContent,
+    onDatabaseCreated: () => {
+      databaseCreated = true;
+    },
   };
 
   const connectionTimeoutMs =
-    options.connectionTimeoutMs ?? options.adminConfig?.connectionTimeoutMs ?? 5000;
-  const statementTimeoutMs =
-    options.statementTimeoutMs ?? options.adminConfig?.statementTimeoutMs ?? 15000;
+    options.connectionTimeoutMs ?? options.adminConfig.connectionTimeoutMs;
+  const statementTimeoutMs = options.statementTimeoutMs ?? options.adminConfig.statementTimeoutMs;
 
   let isolatedDbUrl: string | undefined;
+  let primaryError: unknown;
+  let validationResult:
+    | {
+        readonly isolatedDatabaseName: string;
+        readonly appliedCount: number;
+        readonly secondRunCount: number;
+        readonly verifiedChecksums: number;
+      }
+    | undefined;
 
   try {
-    isolatedDbUrl = await createIsolatedDatabase(configOrUrl, targetDbName, safetyOptions);
+    isolatedDbUrl = await createIsolatedDatabase(options.adminConfig, targetDbName, safetyOptions);
 
     // 1. Initial migration run on empty database
     const initialRun = await runMigrationCommand(isolatedDbUrl, options.ssl, {
@@ -92,8 +101,8 @@ export async function validateMigrations(options: ValidateMigrationsOptions): Pr
       connectionTimeoutMillis: connectionTimeoutMs,
       statement_timeout: statementTimeoutMs,
     });
-    await client.connect();
     try {
+      await client.connect();
       const res = await client.query<{
         migration_number: number;
         name: string;
@@ -122,18 +131,43 @@ export async function validateMigrations(options: ValidateMigrationsOptions): Pr
         }
       }
     } finally {
-      await client.end();
+      await client.end().catch(() => {});
     }
 
-    return {
+    validationResult = {
       isolatedDatabaseName: targetDbName,
       appliedCount: initialRun.appliedCount,
       secondRunCount: secondRun.appliedCount,
       verifiedChecksums: localMigrations.length,
     };
-  } finally {
-    if (isolatedDbUrl) {
-      await dropIsolatedDatabase(configOrUrl, targetDbName, safetyOptions);
+  } catch (err) {
+    primaryError = err;
+  }
+
+  let cleanupError: unknown;
+  if (databaseCreated) {
+    try {
+      await dropIsolatedDatabase(options.adminConfig, targetDbName, safetyOptions);
+    } catch (err) {
+      cleanupError = err;
     }
   }
+
+  if (primaryError && cleanupError) {
+    const primarySanitized = sanitizeDatabaseError(primaryError);
+    const cleanupSanitized = sanitizeDatabaseError(cleanupError);
+    throw new DatabaseError(
+      `Migration validation failed: ${primarySanitized.message}; cleanup failed: ${cleanupSanitized.message}`,
+    );
+  }
+
+  if (cleanupError) {
+    throw sanitizeDatabaseError(cleanupError);
+  }
+
+  if (primaryError) {
+    throw sanitizeDatabaseError(primaryError);
+  }
+
+  return validationResult!;
 }

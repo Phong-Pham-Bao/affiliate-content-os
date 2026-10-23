@@ -76,7 +76,7 @@ jobs:
           POSTGRES_IMAGE: postgres:18.6-bookworm@sha256:bbf83594798e144bff365a9c191c5d779f181fb3135902064ab8ff11918020fc
         run: |
           trivy image --scanners vuln --timeout 10m --no-progress --format table --severity HIGH,CRITICAL --exit-code 0 "$POSTGRES_IMAGE"
-          trivy image --scanners vuln --pkg-types os --timeout 10m --no-progress --format table --severity CRITICAL --ignore-unfixed --exit-code 1 "$POSTGRES_IMAGE"
+          trivy image --scanners vuln --timeout 10m --no-progress --format table --severity CRITICAL --ignore-unfixed --exit-code 1 "$POSTGRES_IMAGE"
 
   postgres_integration:
     name: PostgreSQL Integration

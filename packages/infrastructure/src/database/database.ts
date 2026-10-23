@@ -1,6 +1,6 @@
 import type { DatabaseConfig } from '@affiliate-content-os/config';
 import pg from 'pg';
-import { DatabaseError, sanitizeDatabaseError } from './errors.js';
+import { DatabaseError, sanitizeDatabaseError, stripCredentials } from './errors.js';
 import { resolveSslOptions } from './ssl.js';
 import type {
   CreateDatabaseOptions,
@@ -40,9 +40,30 @@ export function createDatabase(config: DatabaseConfig, options?: CreateDatabaseO
 
     let client: pg.PoolClient | undefined;
     let abortListener: (() => void) | undefined;
+    let clientError: Error | undefined;
+    let clientErrorHandler: ((err: Error) => void) | undefined;
+    let settled = false;
 
     try {
-      const connectPromise = pool.connect();
+      const connectPromise = pool.connect().then((acquiredClient) => {
+        if (settled || signal?.aborted || isClosingState || isClosedState) {
+          try {
+            (
+              acquiredClient as unknown as { connection?: { stream?: { destroy: () => void } } }
+            )?.connection?.stream?.destroy();
+          } catch {
+            // ignore destroy error
+          }
+          try {
+            acquiredClient.release(true);
+          } catch {
+            // ignore release error
+          }
+          throw new DatabaseError('Database connection probe aborted');
+        }
+        return acquiredClient;
+      });
+
       if (signal) {
         const abortPromise = new Promise<never>((_, reject) => {
           abortListener = () => {
@@ -56,38 +77,22 @@ export function createDatabase(config: DatabaseConfig, options?: CreateDatabaseO
       }
 
       if (signal?.aborted) {
-        try {
-          (
-            client as unknown as { connection?: { stream?: { destroy: () => void } } }
-          )?.connection?.stream?.destroy();
-        } catch {
-          // ignore destroy error
-        }
         throw new DatabaseError('Database connection probe aborted');
       }
+
+      clientErrorHandler = (err: Error) => {
+        clientError = err;
+      };
+      client.on('error', clientErrorHandler);
 
       const queryPromise = client.query('SELECT 1');
       if (signal) {
         const queryAbortPromise = new Promise<never>((_, reject) => {
           if (signal.aborted) {
-            try {
-              (
-                client as unknown as { connection?: { stream?: { destroy: () => void } } }
-              )?.connection?.stream?.destroy();
-            } catch {
-              // ignore destroy error
-            }
             reject(new DatabaseError('Database connection probe aborted'));
             return;
           }
           abortListener = () => {
-            try {
-              (
-                client as unknown as { connection?: { stream?: { destroy: () => void } } }
-              )?.connection?.stream?.destroy();
-            } catch {
-              // ignore destroy error
-            }
             reject(new DatabaseError('Database connection probe aborted'));
           };
           signal.addEventListener('abort', abortListener, { once: true });
@@ -96,8 +101,20 @@ export function createDatabase(config: DatabaseConfig, options?: CreateDatabaseO
       } else {
         await queryPromise;
       }
+
+      if (clientError) {
+        throw clientError;
+      }
     } catch (err) {
+      settled = true;
       if (client) {
+        try {
+          (
+            client as unknown as { connection?: { stream?: { destroy: () => void } } }
+          )?.connection?.stream?.destroy();
+        } catch {
+          // ignore destroy error
+        }
         try {
           client.release(true);
           client = undefined;
@@ -107,12 +124,16 @@ export function createDatabase(config: DatabaseConfig, options?: CreateDatabaseO
       }
       throw sanitizeDatabaseError(err, 'Database connection probe failed');
     } finally {
+      settled = true;
       if (signal && abortListener) {
         signal.removeEventListener('abort', abortListener);
       }
       if (client) {
+        if (clientErrorHandler) {
+          client.removeListener('error', clientErrorHandler);
+        }
         try {
-          client.release();
+          client.release(clientError ? true : undefined);
         } catch {
           // ignore release error
         }
@@ -180,21 +201,43 @@ export function createDatabase(config: DatabaseConfig, options?: CreateDatabaseO
       },
     };
 
-    let callbackError: unknown;
+    let transactionError: unknown;
     let result: T | undefined;
+    let callbackThrew = false;
+    let callbackError: unknown;
     try {
       await client.query('BEGIN');
-      result = await fn(executor);
+      try {
+        result = await fn(executor);
+      } catch (userErr) {
+        callbackThrew = true;
+        callbackError = userErr;
+        throw userErr;
+      } finally {
+        active = false;
+      }
       if (clientError) {
         throw clientError;
       }
       await client.query('COMMIT');
     } catch (err) {
-      callbackError = sanitizeDatabaseError(err, 'Transaction execution failed');
+      if (callbackThrew) {
+        if (callbackError instanceof DatabaseError) {
+          transactionError = callbackError;
+        } else if (callbackError instanceof Error) {
+          callbackError.message = stripCredentials(callbackError.message);
+          transactionError = callbackError;
+        } else {
+          transactionError = callbackError;
+        }
+      } else {
+        transactionError = sanitizeDatabaseError(err, 'Transaction execution failed');
+      }
+
       try {
         await client.query('ROLLBACK');
       } catch {
-        // Rollback failure ignored; primary callbackError is preserved
+        // Rollback failure ignored; primary transactionError is preserved
       }
     }
 
@@ -207,8 +250,8 @@ export function createDatabase(config: DatabaseConfig, options?: CreateDatabaseO
       releaseError = releaseErr;
     }
 
-    if (callbackError) {
-      throw callbackError;
+    if (transactionError) {
+      throw transactionError;
     }
 
     if (releaseError) {
@@ -219,9 +262,6 @@ export function createDatabase(config: DatabaseConfig, options?: CreateDatabaseO
   };
 
   const close = (): Promise<void> => {
-    if (isClosedState) {
-      return Promise.resolve();
-    }
     if (closePromise) {
       return closePromise;
     }

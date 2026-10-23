@@ -2,7 +2,7 @@
 
 Deterministic development foundation, runtime process shells, and architecture boundary enforcement for Affiliate Content OS.
 
-> **Status Notice:** This repository contains the deterministic monorepo foundation, configuration boundary (`@affiliate-content-os/config`), and three minimal runtime process shells (`apps/web`, `apps/api`, `apps/worker`). These processes are foundation shells only. Databases, migrations, ORM, queue systems, background job processors, authentication, domain workflows, AI models, and social platform integrations do not exist yet.
+> **Status Notice:** This repository contains the deterministic monorepo foundation, configuration boundary (`@affiliate-content-os/config`), persistence foundation and migration engine (`@affiliate-content-os/infrastructure`), and three minimal runtime process shells (`apps/web`, `apps/api`, `apps/worker`). Application domain workflows, ORM, authentication, AI models, and social platform integrations do not exist yet.
 
 ## Prerequisites
 
@@ -10,23 +10,24 @@ Deterministic development foundation, runtime process shells, and architecture b
 - **pnpm**: `12.4.2` (pinned via `packageManager` and engines in `package.json`)
 - **Docker & Docker Compose**: Docker Compose v2+ for running local PostgreSQL 18.6 infrastructure
 
-## Setup & Environment
+## Setup & Clean Checkout Sequence
 
-Enable Corepack or use installed `pnpm`:
+From a fresh checkout without prior build artifacts, run the following exact sequence:
 
 ```bash
 corepack enable
 corepack pnpm install --frozen-lockfile
-```
-
-Initialize your local environment file (`.env`):
-
-```bash
 corepack pnpm env:local
+corepack pnpm infra:up
+corepack pnpm db:migrate
 ```
 
-> [!NOTE]
-> `.env` is git-ignored and never committed. `corepack pnpm env:local` safely copies `.env.example` without overwriting existing `.env` files.
+### Environment Ownership & Remediation
+
+- `.env` is developer-owned and git-ignored. It is never committed to source control.
+- If `.env` is missing, running commands requiring environment variables will fail fast with `Run corepack pnpm env:local`.
+- Run `corepack pnpm env:local` to generate a fresh `.env` from `.env.example` without overwriting existing `.env` files.
+- In CI workflows, job-scoped non-production environment variables are injected directly or generated dynamically.
 
 Verify that local infrastructure and CI container image pins are identical:
 
@@ -38,12 +39,22 @@ corepack pnpm verify:infrastructure-pins
 
 Local persistence runs on PostgreSQL `18.6-bookworm` pinned by multi-platform image manifest digest (`sha256:bbf83594798e144bff365a9c191c5d779f181fb3135902064ab8ff11918020fc`).
 
-| Command                     | Description                                                                         |
-| --------------------------- | ----------------------------------------------------------------------------------- |
-| `corepack pnpm infra:up`    | Start PostgreSQL container in background and wait for health check to pass          |
-| `corepack pnpm infra:down`  | Stop and remove container, preserving local database volume (`acos_postgres_data`)  |
-| `corepack pnpm infra:logs`  | View live container logs for PostgreSQL                                             |
-| `corepack pnpm infra:reset` | Stop container and delete local database volume (recreates a fresh, blank database) |
+| Command                     | Description                                                                                         |
+| --------------------------- | --------------------------------------------------------------------------------------------------- |
+| `corepack pnpm infra:up`    | Start PostgreSQL container in background, await healthcheck and 5 consecutive authenticated queries |
+| `corepack pnpm infra:down`  | Stop and remove container, preserving local database volume (`acos_postgres_data`)                  |
+| `corepack pnpm infra:logs`  | View live container logs for PostgreSQL                                                             |
+| `corepack pnpm infra:reset` | Stop container and delete local database volume (`acos_postgres_data`)                              |
+
+> [!WARNING]
+> `infra:reset` permanently destroys the `acos_postgres_data` volume and all local database state. After running `infra:reset`, you must run `corepack pnpm infra:up` followed by `corepack pnpm db:migrate` to recreate the schema.
+
+### Readiness Behavior
+
+PostgreSQL initialization on empty volumes runs an internal temporary bootstrap server before starting the permanent server. `infra:up` uses a multi-stage readiness check:
+
+1. Docker Compose healthcheck verifies that the process running as PID 1 inside the container is `postgres` (`/proc/1/comm`), ensuring health checks never report ready against the transient bootstrap process.
+2. `infra:up` executes 5 consecutive successful authenticated SQL queries (`SELECT 1`) across the loopback network interface with a bounded 30-second timeout before reporting success.
 
 ## Database Migrations
 
@@ -63,8 +74,8 @@ Database schema evolution is strictly forward-only and managed via SQL files in 
 The repository defines three independent runtime processes:
 
 1. **Web Application Shell (`apps/web`)**: Next.js App Router application providing the root layout and landing page. It enforces server-only configuration boundaries and contains no application forms, dashboards, or external client-side calls.
-2. **API Server Shell (`apps/api`)**: Fastify-based HTTP application exposing an operational `GET /health/live` liveness endpoint. It provides an import-safe application factory (`createApp`), loads validated configuration before binding, and enforces genuinely bounded graceful shutdown via `SIGINT` and `SIGTERM` with deadline enforcement, error logging, and forced nonzero termination on close failure or timeout.
-3. **Worker Runtime Shell (`apps/worker`)**: Pure event-driven Node.js worker runtime. It initializes with validated configuration, reports startup via lifecycle callbacks, and remains in an idle state using a real referenced runtime handle without polling, timers, or CPU spin until receiving cancellation via `AbortSignal` or termination signals (`SIGINT`, `SIGTERM`), exiting cleanly with code 0.
+2. **API Server Shell (`apps/api`)**: Fastify-based HTTP application exposing an operational `GET /health/live` liveness endpoint. It provides an import-safe application factory (`createApp`), loads validated configuration before binding, probes database connectivity on startup, and enforces genuinely bounded graceful shutdown via `SIGINT` and `SIGTERM` with deadline enforcement, error logging, and forced nonzero termination on close failure or timeout.
+3. **Worker Runtime Shell (`apps/worker`)**: Pure event-driven Node.js worker runtime. It initializes with validated configuration, probes database connectivity on startup, and remains in an idle state using a real referenced runtime handle without polling, timers, or CPU spin until receiving cancellation via `AbortSignal` or termination signals (`SIGINT`, `SIGTERM`), exiting cleanly with code 0.
 
 ### Development Commands
 
@@ -88,7 +99,7 @@ corepack pnpm start:api    # Run Fastify production server (node dist/main.js)
 corepack pnpm start:worker # Run worker production process (node dist/main.js)
 ```
 
-### API Liveness Endpoint
+### API Liveness Endpoint (`GET /health/live`)
 
 When the API server is running, the operational liveness probe is available:
 
@@ -104,6 +115,9 @@ Expected response (`200 OK`, `application/json`):
   "service": "api"
 }
 ```
+
+> [!NOTE]
+> `GET /health/live` is a pure process-level liveness probe. It intentionally executes zero database queries to ensure orchestrator health probes do not saturate connection pools or trigger cascading failure when databases experience transient load. Readiness is validated on startup via `database.probe()` before the HTTP listener binds.
 
 An unknown route returns standard Fastify `404 Not Found`.
 
@@ -172,7 +186,7 @@ affiliate-content-os/
 │       ├── src/                 # Connection pooling, transaction runner, and health probe
 │       ├── test/                # Unit and isolated PostgreSQL integration tests
 │       └── package.json
-├── scripts/                     # Cross-platform environment and infrastructure pin scripts
+├── scripts/                     # Cross-platform environment, infra-up, and pin scripts
 ├── test/
 │   ├── boundaries.test.ts       # Architecture boundary verification test suite
 │   ├── scripts.test.ts          # Scripts unit test suite
@@ -215,31 +229,6 @@ The `@affiliate-content-os/config` package establishes an immutable, fail-fast c
 | `API_HOST`     | No       | `string` (valid IP or hostname)                                          | `'127.0.0.1'` | Optional. Host address for the API server listener. Defaults to `127.0.0.1`. Unsafe whitespace or control characters are rejected.                                                                     |
 | `API_PORT`     | No       | `integer` (`1` - `65535`)                                                | `3001`        | Optional. Port number for the API server listener. Defaults to `3001`. Non-numeric, decimal, zero, negative, or out-of-range values are rejected.                                                      |
 
-### Exported API
-
-```ts
-import {
-  loadConfig,
-  getRedactedConfigMetadata,
-  ConfigurationError,
-  type AppConfig,
-  type RedactedConfigMetadata,
-  type ConfigurationIssue,
-  type RawEnvironment,
-  type NodeEnv,
-  type LogLevel,
-  ALLOWED_NODE_ENVS,
-  ALLOWED_LOG_LEVELS,
-  DEFAULT_LOG_LEVEL,
-  DEFAULT_API_HOST,
-  DEFAULT_API_PORT,
-} from '@affiliate-content-os/config';
-```
-
-- `loadConfig(rawEnv?: unknown): AppConfig`: Validates and returns an immutable `AppConfig` object `{ nodeEnv, logLevel, appBaseUrl?, apiHost, apiPort }`. Throws `ConfigurationError` on any validation failure.
-- `getRedactedConfigMetadata(config: AppConfig): RedactedConfigMetadata`: Generates startup-safe diagnostic metadata `{ nodeEnv, logLevel, hasAppBaseUrl, appBaseUrlOrigin?, apiHost, apiPort }`. The `appBaseUrlOrigin` is reduced strictly to scheme, host, and port (e.g. `https://example.com:8443`), stripping any path, query, or fragment.
-- `ConfigurationError`: Subclass of `Error` containing a frozen `issues: readonly ConfigurationIssue[]` list and a safe `toJSON()` implementation.
-
 ### Database Environment Variables
 
 | Variable                         | Required                                                               | Type / Allowed Values                       | Default     | Rules & Constraints                                                                                                       |
@@ -254,6 +243,30 @@ import {
 | `MIGRATION_DATABASE_URL`         | Required only by migration/status/validation commands                  | `string` (`postgres://` or `postgresql://`) | None        | URL for migration commands. Never loaded or exposed by normal app runtime configuration.                                  |
 | `TEST_DATABASE_ADMIN_URL`        | Required only by database integration/validation harnesses             | `string` (`postgres://` or `postgresql://`) | None        | URL targeting the `postgres` administrative database on a loopback test instance. Never loaded by production roots.       |
 | `TEST_DATABASE_DISPOSABLE`       | Required only by destructive integration/validation harnesses          | `string`                                    | None        | Must equal the exact literal `YES_I_UNDERSTAND_TEST_DATABASES_WILL_BE_DROPPED`.                                           |
+
+### Database URL Separation & Isolation Policy
+
+To prevent accidental data loss and maintain strict privilege boundaries, three distinct database URLs are defined:
+
+1. **`DATABASE_URL` (Application Runtime)**:
+   - Used by `apps/api` and `apps/worker` to connect to application databases (`acos_dev`, `acos_prod`).
+   - Does not have administrative privileges to create or drop databases.
+2. **`MIGRATION_DATABASE_URL` (Schema Migrations)**:
+   - Used by `db:migrate` and `db:migrate:status` to apply forward migrations and inspect schema versions.
+   - Separated from the application runtime pool to ensure migration credentials and lock parameters are never exposed to HTTP or worker request handlers.
+3. **`TEST_DATABASE_ADMIN_URL` & `TEST_DATABASE_DISPOSABLE` (Test Isolation Harness)**:
+   - Used strictly by `test:integration` and `db:migrate:validate`.
+   - Requires `NODE_ENV=test`, strict host allowlisting (`localhost`, `127.0.0.1`, `::1`, or `postgres` in CI), URL path strictly `/postgres`, target database matching `^acos_test_[0-9a-f]{1,48}$`, and the exact sentinel `TEST_DATABASE_DISPOSABLE=YES_I_UNDERSTAND_TEST_DATABASES_WILL_BE_DROPPED`.
+   - Administrative helpers (`createIsolatedDatabase`, `dropIsolatedDatabase`) are restricted to internal testing and migration validation and are never exported in public production module boundaries.
+
+### SSL & CA Certificate Handling
+
+- `DATABASE_SSL_MODE`:
+  - In `production`: `'verify-full'` is strictly required. `'disable'` is rejected at startup.
+  - In `development` and `test`: `'disable'` is permitted for local loopback connections (`127.0.0.1`, `localhost`).
+- `DATABASE_SSL_CA_FILE`:
+  - When `DATABASE_SSL_MODE=verify-full`, `DATABASE_SSL_CA_FILE` must be an absolute path pointing to an existing, non-empty PEM-encoded CA certificate file.
+  - The certificate content is validated and loaded into memory before connection pool initialization.
 
 ## Public Persistence Contract (`@affiliate-content-os/infrastructure/database`)
 
@@ -281,7 +294,7 @@ import {
 - `database.query<T>(text: string, params?: readonly unknown[]): Promise<DatabaseQueryResult<T>>`: Executes a parameterized SQL query without string interpolation.
 - `database.withTransaction<T>(fn: (tx: TransactionExecutor) => Promise<T>): Promise<T>`: Executes an async callback inside an atomic `BEGIN` / `COMMIT` / `ROLLBACK` transaction. The callback receives a single-use `TransactionExecutor` which is invalidated upon transaction completion.
 - `database.probe(signal?: AbortSignal): Promise<void>`: Executes a health check probe (`SELECT 1`) to verify database connectivity. Fully cancelable via AbortSignal without leaking connections.
-- `database.close(): Promise<void>`: Idempotently closes the connection pool.
+- `database.close(): Promise<void>`: Idempotently closes the connection pool, preserving and returning the exact first close promise and outcome on repeated invocations.
 
 ## Process Lifecycle & Graceful Shutdown
 
@@ -289,6 +302,19 @@ Both `apps/api` and `apps/worker` enforce strict operational shutdown guarantees
 
 1. **Database Probe on Startup**: Before listening for HTTP traffic or entering the worker loop, the application verifies database connectivity via `database.probe(signal)`.
 2. **Shared Shutdown Deadline**: A single monotonic 5000ms deadline bounds the entire graceful shutdown sequence:
-   - For `apps/api`: Closes the Fastify HTTP listener and closes the database connection pool within the shared budget.
+   - For `apps/api`: Waits for in-flight startup probe and listener settlement, closes the Fastify HTTP listener, and closes the database connection pool within the shared budget.
    - For `apps/worker`: Awaits worker runtime settlement and closes the database connection pool within the shared budget.
-3. **Forced Nonzero Exit**: If any step in the shutdown sequence fails or the deadline expires, the process forcefully terminates with exit code 1 to prevent zombie processes.
+3. **Forced Nonzero Exit**: If any step in the shutdown sequence fails or the deadline expires, the process forcefully terminates with exit code 1 to prevent zombie processes. Late listener bindings or late completion callbacks are prevented from reversing termination or logging success.
+
+## Troubleshooting
+
+### Docker / Infrastructure Issues
+
+- **Health check timeout on `infra:up`**: Ensure Docker Desktop or Docker Engine is running and port `5432` is not occupied by a host PostgreSQL instance. Check container logs with `pnpm infra:logs`.
+- **Database authentication failed**: Verify credentials in `.env` match `POSTGRES_USER` and `POSTGRES_PASSWORD`. If `.env` was modified after volume creation, run `pnpm infra:reset` to reinitialize the volume with new credentials.
+- **Port 5432 already allocated**: Stop any host PostgreSQL services (`net stop postgresql` on Windows or `sudo systemctl stop postgresql` on Linux) or change `127.0.0.1:5432:5432` in `compose.yaml`.
+
+### Migration Issues
+
+- **`Migration checksum mismatch`**: Existing migration files must never be edited once applied. Roll forward by creating a new migration file.
+- **`Missing required confirmation for test database`**: Ensure `TEST_DATABASE_DISPOSABLE=YES_I_UNDERSTAND_TEST_DATABASES_WILL_BE_DROPPED` is present in your environment when running integration tests or validation.

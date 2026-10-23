@@ -7,9 +7,10 @@ import {
   createIsolatedDatabase,
   dropIsolatedDatabase,
   generateTestDatabaseName,
-  resolveSslOptions,
-  runMigrationCommand,
-} from '../../../src/database/index.js';
+} from '../../../src/database/migrations/safety.js';
+import { resolveSslOptions } from '../../../src/database/ssl.js';
+import { runMigrationCommand } from '../../../src/database/migrations/runner.js';
+import { DatabaseError, sanitizeDatabaseError } from '../../../src/database/errors.js';
 
 export interface TestDatabaseContext {
   readonly dbName: string;
@@ -36,10 +37,14 @@ export async function setupIsolatedTestDatabase(
     sslCaContent = readAndValidateSslCaFile(adminConfig.sslCaFile);
   }
 
+  let databaseCreated = false;
   const safetyOptions = {
-    effectiveNodeEnv: options?.effectiveNodeEnv,
-    isCi: options?.isCi,
+    effectiveNodeEnv: options?.effectiveNodeEnv ?? process.env['NODE_ENV'] ?? 'test',
+    isCi: options?.isCi ?? (process.env['CI'] === 'true' || process.env['CI'] === '1'),
     sslCaContent,
+    onDatabaseCreated: () => {
+      databaseCreated = true;
+    },
   };
 
   let cleanedUp = false;
@@ -47,8 +52,8 @@ export async function setupIsolatedTestDatabase(
     if (cleanedUp) {
       return;
     }
-    cleanedUp = true;
     await dropIsolatedDatabase(adminConfig, dbName, safetyOptions);
+    cleanedUp = true;
   };
 
   try {
@@ -69,12 +74,16 @@ export async function setupIsolatedTestDatabase(
       adminConfig,
       cleanup,
     };
-  } catch (err) {
-    try {
-      await cleanup();
-    } catch {
-      // Ignore cleanup error if create/migrate failed
+  } catch (primaryErr) {
+    if (databaseCreated) {
+      try {
+        await cleanup();
+      } catch (cleanupErr) {
+        throw new DatabaseError(
+          `Setup failed: ${sanitizeDatabaseError(primaryErr).message}; Cleanup also failed: ${sanitizeDatabaseError(cleanupErr).message}`,
+        );
+      }
     }
-    throw err;
+    throw sanitizeDatabaseError(primaryErr);
   }
 }

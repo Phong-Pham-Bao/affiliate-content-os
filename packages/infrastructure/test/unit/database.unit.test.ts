@@ -247,7 +247,7 @@ describe('Database client and transaction manager (unit tests with fakes)', () =
       db.withTransaction(async () => {
         mockClient.emit('error', new Error('Client connection reset by peer'));
       }),
-    ).rejects.toThrow(/Client connection reset by peer/);
+    ).rejects.toThrow(/Connection reset by peer/);
 
     expect(getReleasedWithDestroy()).toBe(true);
   });
@@ -274,6 +274,124 @@ describe('Database client and transaction manager (unit tests with fakes)', () =
 
     // Repeated call after close resolves immediately
     await expect(db.close()).resolves.toBeUndefined();
+  });
+
+  it('destroys and releases late-acquired probe client if connection resolves after abort signal fired', async () => {
+    let resolveConnect!: (client: unknown) => void;
+    const pendingConnect = new Promise<unknown>((resolve) => {
+      resolveConnect = resolve;
+    });
+
+    const { mockClient, getStreamDestroyed, getReleasedWithDestroy } = createMockPool();
+    const mockPool = {
+      on: vi.fn(),
+      query: vi.fn(),
+      connect: vi.fn(() => pendingConnect),
+      end: vi.fn(async () => {}),
+    };
+
+    const db = createDatabase(dummyConfig, {
+      poolFactory: () => mockPool as unknown as pg.Pool,
+    });
+
+    const controller = new AbortController();
+    const probePromise = db.probe(controller.signal);
+
+    // Abort while connect is pending
+    controller.abort();
+    await expect(probePromise).rejects.toThrow('Database connection probe aborted');
+
+    // Connect resolves late in the background
+    resolveConnect(mockClient);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(getStreamDestroyed()).toBe(true);
+    expect(getReleasedWithDestroy()).toBe(true);
+  });
+
+  it('destroys client and throws sanitized error when checked-out client emits error during probe query', async () => {
+    const { mockPool, mockClient, getReleasedWithDestroy } = createMockPool();
+    mockClient.query = vi.fn(async () => {
+      mockClient.emit('error', new Error('Connection reset by peer'));
+      throw new Error('Socket closed');
+    });
+
+    const db = createDatabase(dummyConfig, {
+      poolFactory: () => mockPool,
+    });
+
+    await expect(db.probe()).rejects.toThrow(
+      /Connection reset by peer|Database connection probe failed/,
+    );
+    expect(getReleasedWithDestroy()).toBe(true);
+  });
+
+  it('invalidates transaction executor immediately upon callback return before COMMIT completes', async () => {
+    const { mockPool, mockClient } = createMockPool();
+    let executorRef!: TransactionExecutor;
+    let resolveCommit!: () => void;
+    let commitStarted!: () => void;
+    const commitPromise = new Promise<void>((resolve) => {
+      resolveCommit = resolve;
+    });
+    const commitStartedPromise = new Promise<void>((resolve) => {
+      commitStarted = resolve;
+    });
+
+    mockClient.query = vi.fn(async (text: string) => {
+      if (text === 'COMMIT') {
+        commitStarted();
+        await commitPromise;
+      }
+      return { rows: [], rowCount: 0, command: 'SELECT' };
+    });
+
+    const db = createDatabase(dummyConfig, {
+      poolFactory: () => mockPool,
+    });
+
+    const txPromise = db.withTransaction(async (tx) => {
+      executorRef = tx;
+      return 'done';
+    });
+
+    await commitStartedPromise;
+
+    // At this point, the callback returned and COMMIT is pending.
+    // Querying through the executor MUST fail immediately:
+    await expect(executorRef.query('SELECT 1')).rejects.toThrow(
+      'Cannot execute query: transaction has already completed',
+    );
+
+    resolveCommit();
+    await expect(txPromise).resolves.toBe('done');
+  });
+
+  it('preserves the exact first close promise and rejection across repeated close calls', async () => {
+    const closeError = new Error('Pool shutdown error');
+    const mockPool = {
+      on: vi.fn(),
+      query: vi.fn(),
+      connect: vi.fn(),
+      end: vi.fn().mockRejectedValue(closeError),
+    };
+
+    const db = createDatabase(dummyConfig, {
+      poolFactory: () => mockPool as unknown as pg.Pool,
+    });
+
+    const closePromise1 = db.close();
+    const closePromise2 = db.close();
+
+    expect(closePromise1).toBe(closePromise2);
+
+    await expect(closePromise1).rejects.toThrow(/Database pool shutdown failed/);
+    await expect(closePromise2).rejects.toThrow(/Database pool shutdown failed/);
+
+    // Third call after failure still returns the exact same rejected promise
+    const closePromise3 = db.close();
+    expect(closePromise3).toBe(closePromise1);
+    await expect(closePromise3).rejects.toThrow(/Database pool shutdown failed/);
   });
 
   it('sanitizes connection string and credentials in error formatting without disclosing origin or database', () => {

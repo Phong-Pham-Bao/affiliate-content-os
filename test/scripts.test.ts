@@ -8,6 +8,7 @@ import {
   extractPostgresReference,
   verifyInfrastructurePins,
 } from '../scripts/verify-infrastructure-pins.mjs';
+import { runComposeUp, verifyAuthenticatedQueries } from '../scripts/infra-up.mjs';
 
 describe('Scripts unit verification', () => {
   describe('setupLocalEnv', () => {
@@ -155,6 +156,72 @@ describe('Scripts unit verification', () => {
         delete process.env['CUSTOM_VAR'];
         fs.rmSync(tempDir, { recursive: true, force: true });
       }
+    });
+  });
+
+  describe('infraUp readiness', () => {
+    it('executes compose up and throws when non-zero exit', () => {
+      const mockSpawnSync = vi.fn(() => ({ status: 1 }));
+      expect(() => runComposeUp({ spawnSyncFn: mockSpawnSync, throwOnError: true })).toThrow(
+        'docker compose up exited with code 1',
+      );
+    });
+
+    it('requires consecutive successful queries before reporting readiness', async () => {
+      let attempts = 0;
+      const mockPg = {
+        Client: vi.fn(function () {
+          return {
+            connect: vi.fn(async () => {}),
+            query: vi.fn(async () => {
+              attempts++;
+              // First attempt fails, then 5 consecutive succeed
+              if (attempts === 1) {
+                throw new Error('Connection refused by bootstrap server');
+              }
+              return { rows: [{ ready: 1 }] };
+            }),
+            end: vi.fn(async () => {}),
+          };
+        }),
+      };
+
+      const result = await verifyAuthenticatedQueries({
+        pgModule: mockPg,
+        requiredSuccesses: 3,
+        timeoutMs: 5000,
+        retryIntervalMs: 5,
+        silent: true,
+        throwOnError: true,
+      });
+
+      expect(result.verified).toBe(true);
+      expect(attempts).toBe(4); // 1 failure + 3 successes = 4
+    });
+
+    it('times out and throws when consecutive successes are not achieved within deadline', async () => {
+      const mockPg = {
+        Client: vi.fn(function () {
+          return {
+            connect: vi.fn(async () => {}),
+            query: vi.fn(async () => {
+              throw new Error('Server starting up');
+            }),
+            end: vi.fn(async () => {}),
+          };
+        }),
+      };
+
+      await expect(
+        verifyAuthenticatedQueries({
+          pgModule: mockPg,
+          requiredSuccesses: 5,
+          timeoutMs: 50,
+          retryIntervalMs: 10,
+          silent: true,
+          throwOnError: true,
+        }),
+      ).rejects.toThrow(/readiness verification timed out/);
     });
   });
 });
