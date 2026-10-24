@@ -678,9 +678,12 @@ describe('Database client and transaction manager (unit tests with fakes)', () =
       expect(res.stack).toContain('postgresql://[REDACTED]');
     });
 
-    it('sanitizes custom Error inspection and JSON serialization through withTransaction', async () => {
+    it('sanitizes custom Error inspection and JSON serialization through withTransaction by replacing with safe DatabaseError', async () => {
       const sentinels = ['custom_user', 'custom_pass', '172.16.0.5', 'custom_db'];
       const secretUrl = 'postgresql://custom_user:custom_pass@172.16.0.5:5432/custom_db';
+
+      let toJSONCalls = 0;
+      let inspectCalls = 0;
 
       class CustomTestError extends Error {
         public secret = secretUrl;
@@ -689,6 +692,7 @@ describe('Database client and transaction manager (unit tests with fakes)', () =
           this.name = 'CustomTestError';
         }
         public toJSON() {
+          toJSONCalls++;
           return {
             name: this.name,
             message: this.message,
@@ -696,11 +700,12 @@ describe('Database client and transaction manager (unit tests with fakes)', () =
           };
         }
         public [Symbol.for('nodejs.util.inspect.custom')]() {
+          inspectCalls++;
           return `[CustomTestError: ${this.message} (url: ${this.secret})]`;
         }
       }
 
-      const { mockPool } = createMockPool();
+      const { mockPool, clientQueries } = createMockPool();
       const db = createDatabase(dummyConfig, { poolFactory: () => mockPool });
 
       const customErr = new CustomTestError();
@@ -715,8 +720,14 @@ describe('Database client and transaction manager (unit tests with fakes)', () =
         caught = err;
       }
 
-      expect(caught).toBe(customErr);
-      const cast = caught as CustomTestError;
+      expect(caught).not.toBe(customErr);
+      expect(caught).toBeInstanceOf(DatabaseError);
+      expect(toJSONCalls).toBe(0);
+      expect(inspectCalls).toBe(0);
+
+      const cast = caught as DatabaseError;
+      expect(cast.message).toBe('Transaction callback failed');
+      expect(cast.cause).toBeUndefined();
 
       const inspected = util.inspect(cast);
       const serialized = JSON.stringify(cast);
@@ -724,14 +735,16 @@ describe('Database client and transaction manager (unit tests with fakes)', () =
 
       for (const s of sentinels) {
         expect(cast.message).not.toContain(s);
-        expect(cast.stack).not.toContain(s);
-        expect(cast.secret).not.toContain(s);
+        expect(cast.stack ?? '').not.toContain(s);
         expect(inspected).not.toContain(s);
         expect(serialized).not.toContain(s);
         expect(stringified).not.toContain(s);
       }
-      expect(inspected).toContain('postgresql://[REDACTED]');
-      expect(serialized).toContain('postgresql://[REDACTED]');
+
+      const queryTexts = clientQueries.map((q) => q.text);
+      expect(queryTexts).toContain('BEGIN');
+      expect(queryTexts).toContain('ROLLBACK');
+      expect(queryTexts).not.toContain('COMMIT');
     });
 
     it('sanitizes plain-object rejection through withTransaction', async () => {
@@ -776,20 +789,22 @@ describe('Database client and transaction manager (unit tests with fakes)', () =
       expect(cast.nested.connection).toBe('postgresql://[REDACTED]');
     });
 
-    it('sanitizes accessor-backed properties through withTransaction', async () => {
+    it('sanitizes accessor-backed properties through withTransaction by replacing with safe DatabaseError without executing getter', async () => {
       const sentinels = ['acc_user', 'acc_pass', '10.20.30.40', 'acc_db'];
       const secretUrl = 'postgresql://acc_user:acc_pass@10.20.30.40:5432/acc_db';
 
+      let getterCalls = 0;
       const err = new Error('Accessor error');
       Object.defineProperty(err, 'secretProp', {
         get() {
+          getterCalls++;
           return secretUrl;
         },
         enumerable: true,
         configurable: true,
       });
 
-      const { mockPool } = createMockPool();
+      const { mockPool, clientQueries } = createMockPool();
       const db = createDatabase(dummyConfig, { poolFactory: () => mockPool });
 
       let caught: unknown;
@@ -801,19 +816,28 @@ describe('Database client and transaction manager (unit tests with fakes)', () =
         caught = e;
       }
 
-      expect(caught).toBe(err);
-      const cast = caught as Error & { secretProp: string };
+      expect(caught).not.toBe(err);
+      expect(caught).toBeInstanceOf(DatabaseError);
+      expect(getterCalls).toBe(0);
+
+      const cast = caught as DatabaseError;
+      expect(cast.message).toBe('Transaction callback failed');
+      expect(cast.cause).toBeUndefined();
 
       const inspected = util.inspect(cast);
       const serialized = JSON.stringify(cast);
-      const accessedValue = cast.secretProp;
 
       for (const s of sentinels) {
-        expect(accessedValue).not.toContain(s);
+        expect(cast.message).not.toContain(s);
+        expect(cast.stack ?? '').not.toContain(s);
         expect(inspected).not.toContain(s);
         expect(serialized).not.toContain(s);
       }
-      expect(accessedValue).toBe('postgresql://[REDACTED]');
+
+      const queryTexts = clientQueries.map((q) => q.text);
+      expect(queryTexts).toContain('BEGIN');
+      expect(queryTexts).toContain('ROLLBACK');
+      expect(queryTexts).not.toContain('COMMIT');
     });
 
     it('handles cyclic Error.cause without throwing RangeError or leaking credentials through withTransaction', async () => {
@@ -849,17 +873,19 @@ describe('Database client and transaction manager (unit tests with fakes)', () =
       expect(cast.message).toContain('postgresql://[REDACTED]');
     });
 
-    it('handles throwing accessors safely without crashing or replacing primary error through withTransaction', async () => {
+    it('handles throwing accessors safely by replacing with safe DatabaseError without executing getter through withTransaction', async () => {
+      let getterCalls = 0;
       const err = new Error('Throwing accessor base error');
       Object.defineProperty(err, 'explodingProp', {
         get() {
+          getterCalls++;
           throw new Error('Getter explosion!');
         },
         enumerable: true,
         configurable: true,
       });
 
-      const { mockPool } = createMockPool();
+      const { mockPool, clientQueries } = createMockPool();
       const db = createDatabase(dummyConfig, { poolFactory: () => mockPool });
 
       let caught: unknown;
@@ -871,11 +897,18 @@ describe('Database client and transaction manager (unit tests with fakes)', () =
         caught = e;
       }
 
-      expect(caught).toBe(err);
-      expect((caught as Error).message).toBe('Throwing accessor base error');
-      expect(() => (caught as Record<string, unknown>)['explodingProp']).toThrow(
-        'Getter explosion!',
-      );
+      expect(caught).not.toBe(err);
+      expect(caught).toBeInstanceOf(DatabaseError);
+      expect(getterCalls).toBe(0);
+
+      const cast = caught as DatabaseError;
+      expect(cast.message).toBe('Transaction callback failed');
+      expect(cast.cause).toBeUndefined();
+
+      const queryTexts = clientQueries.map((q) => q.text);
+      expect(queryTexts).toContain('BEGIN');
+      expect(queryTexts).toContain('ROLLBACK');
+      expect(queryTexts).not.toContain('COMMIT');
     });
 
     it('prevents credential disclosure in child-process output', async () => {
