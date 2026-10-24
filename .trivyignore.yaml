@@ -1,0 +1,9 @@
+vulnerabilities:
+  - id: CVE-2025-68121
+    paths:
+      - usr/local/bin/gosu
+    expired_at: 2026-12-31
+    statement: >-
+      TASK-003-CVE-2025-68121-GOSU: temporary non-reachability exception for
+      upstream gosu 1.19 in the exact pinned PostgreSQL image; see
+      security/exceptions/TASK-003-CVE-2025-68121-GOSU.md.

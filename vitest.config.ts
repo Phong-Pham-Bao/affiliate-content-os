@@ -11,6 +11,10 @@ export default defineConfig({
   resolve: {
     alias: {
       '@affiliate-content-os/config': path.resolve(__dirname, 'packages/config/src/index.ts'),
+      '@affiliate-content-os/infrastructure/database': path.resolve(
+        __dirname,
+        'packages/infrastructure/src/database/index.ts',
+      ),
     },
   },
   test: {
@@ -24,5 +28,6 @@ export default defineConfig({
       'apps/**/*.spec.ts',
       'test/**/*.test.ts',
     ],
+    exclude: ['**/node_modules/**', '**/dist/**', 'packages/infrastructure/test/integration/**'],
   },
 });

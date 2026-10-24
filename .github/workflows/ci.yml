@@ -17,21 +17,120 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@7088e561eb65bb68695d245aa206f005ef30921d # v4.1.0
         with:
           version: 12.4.2
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@1d0ff469b7ec7b3cb9d8673fde0c81c44821de2a # v4.2.0
         with:
           node-version-file: '.nvmrc'
           cache: 'pnpm'
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: corepack pnpm install --frozen-lockfile
 
       - name: Run verification checks
-        run: pnpm check
+        run: corepack pnpm check
+
+      - name: Audit production dependencies
+        if: success() || failure()
+        run: corepack pnpm audit --prod --audit-level high
+
+      - name: Verify Compose config
+        if: success() || failure()
+        env:
+          POSTGRES_USER: ci_validation_user
+          POSTGRES_PASSWORD: ci_validation_password
+          POSTGRES_DB: ci_validation_db
+        run: docker compose config --quiet
+
+      - name: Verify infrastructure pins
+        if: success() || failure()
+        run: corepack pnpm verify:infrastructure-pins
+
+  security_scan:
+    name: Container Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Trivy
+        uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
+        with:
+          version: v0.76.1
+
+      - name: Verify Trivy version
+        run: |
+          TRIVY_VERSION=$(trivy --version | head -n 1)
+          echo "Detected $TRIVY_VERSION"
+          echo "$TRIVY_VERSION" | grep -q '0.76.1'
+
+      - name: Verify security exception policy
+        run: node scripts/verify-trivy-exception.mjs
+
+      - name: Run container vulnerability scan
+        timeout-minutes: 15
+        env:
+          POSTGRES_IMAGE: postgres:18.6-bookworm@sha256:bbf83594798e144bff365a9c191c5d779f181fb3135902064ab8ff11918020fc
+        run: |
+          trivy image --scanners vuln --timeout 10m --no-progress --format table --severity HIGH,CRITICAL --exit-code 0 --ignorefile .trivyignore.yaml --show-suppressed "$POSTGRES_IMAGE"
+          trivy image --scanners vuln --timeout 10m --no-progress --format table --severity CRITICAL --ignore-unfixed --exit-code 1 --ignorefile .trivyignore.yaml --show-suppressed "$POSTGRES_IMAGE"
+
+  postgres_integration:
+    name: PostgreSQL Integration
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18.6-bookworm@sha256:bbf83594798e144bff365a9c191c5d779f181fb3135902064ab8ff11918020fc
+        env:
+          POSTGRES_USER: acos_ci_user
+          POSTGRES_PASSWORD: acos_ci_password_only
+          POSTGRES_DB: acos_ci_dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U acos_ci_user -d acos_ci_dev"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 10
+          --health-start-period 5s
+    env:
+      CI: 'true'
+      NODE_ENV: test
+      LOG_LEVEL: info
+      DATABASE_URL: postgresql://acos_ci_user:acos_ci_password_only@127.0.0.1:5432/acos_ci_dev
+      MIGRATION_DATABASE_URL: postgresql://acos_ci_user:acos_ci_password_only@127.0.0.1:5432/acos_ci_dev
+      TEST_DATABASE_ADMIN_URL: postgresql://acos_ci_user:acos_ci_password_only@127.0.0.1:5432/postgres
+      TEST_DATABASE_DISPOSABLE: YES_I_UNDERSTAND_TEST_DATABASES_WILL_BE_DROPPED
+      DATABASE_SSL_MODE: disable
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@7088e561eb65bb68695d245aa206f005ef30921d # v4.1.0
+        with:
+          version: 12.4.2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@1d0ff469b7ec7b3cb9d8673fde0c81c44821de2a # v4.2.0
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: corepack pnpm install --frozen-lockfile
+
+      - name: Build workspace
+        run: corepack pnpm build
+
+      - name: Validate migrations from clean database
+        run: corepack pnpm db:migrate:validate
+
+      - name: Run PostgreSQL integration tests
+        run: corepack pnpm test:integration

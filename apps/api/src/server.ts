@@ -1,37 +1,68 @@
 import type { FastifyInstance } from 'fastify';
 import type { AppConfig } from '@affiliate-content-os/config';
+import type { Database } from '@affiliate-content-os/infrastructure/database';
 import { createApp } from './app.js';
+import {
+  raceWithDeadline,
+  type ClearTimerFn,
+  type SetTimerFn,
+  type TimeoutOptions,
+} from './timeout.js';
 
 export interface ApiServerHandle {
   readonly app: FastifyInstance;
   readonly config: AppConfig;
+  readonly database: Database;
   readonly close: () => Promise<void>;
 }
 
 export interface StartServerOptions {
   readonly config: AppConfig;
+  readonly database: Database;
   readonly app?: FastifyInstance | undefined;
   readonly installSignalHandlers?: boolean | undefined;
   readonly shutdownTimeoutMs?: number | undefined;
-  readonly listener?: ((app: FastifyInstance, config: AppConfig) => Promise<void>) | undefined;
+  readonly listener?:
+    ((app: FastifyInstance, config: AppConfig, signal?: AbortSignal) => Promise<void>) | undefined;
   readonly terminate?: ((exitCode: number) => void) | undefined;
+  readonly now?: (() => number) | undefined;
+  readonly setTimer?: SetTimerFn | undefined;
+  readonly clearTimer?: ClearTimerFn | undefined;
 }
 
-/**
- * Starts the API HTTP server with validated configuration and bounded signal handling.
- */
 export async function startApiServer(options: StartServerOptions): Promise<ApiServerHandle> {
-  const { config } = options;
-  const app = options.app ?? createApp({ config });
+  const { config, database } = options;
   const timeoutMs = options.shutdownTimeoutMs ?? 5000;
   const terminate = options.terminate ?? ((exitCode: number): void => process.exit(exitCode));
+  const getNow = options.now ?? (() => performance.now());
+  const timerOptions: TimeoutOptions = {
+    setTimer: options.setTimer,
+    clearTimer: options.clearTimer,
+  };
+
+  const app = options.app ?? createApp({ config });
 
   type ServerState = 'starting' | 'running' | 'closing' | 'closed';
   let state: ServerState = 'starting';
   let closePromise: Promise<void> | undefined;
-  let closeRequestedDuringStartup = false;
   let terminated = false;
   let signalHandlersInstalled = false;
+  let absoluteDeadline: number | undefined;
+  let abortedBySignal = false;
+
+  let probePromise: Promise<void> | undefined;
+  let probeSettled = false;
+  let listenerPromise: Promise<void> | undefined;
+  let listenerSettled = false;
+
+  const startupAbortController = new AbortController();
+
+  const getRemainingMs = (): number => {
+    if (absoluteDeadline === undefined) {
+      absoluteDeadline = getNow() + timeoutMs;
+    }
+    return Math.max(0, absoluteDeadline - getNow());
+  };
 
   const invokeTerminate = (exitCode: number): void => {
     if (terminated) {
@@ -50,12 +81,14 @@ export async function startApiServer(options: StartServerOptions): Promise<ApiSe
   };
 
   const handleSignal = (): void => {
+    abortedBySignal = true;
+    startupAbortController.abort();
     void close()
       .then(() => {
         invokeTerminate(0);
       })
       .catch(() => {
-        // executeClose or timeout handler already logged failure and invoked invokeTerminate(1)
+        invokeTerminate(1);
       });
   };
 
@@ -68,35 +101,71 @@ export async function startApiServer(options: StartServerOptions): Promise<ApiSe
     process.on('SIGTERM', handleSigterm);
   }
 
-  let rejectStartup: ((err: Error) => void) | undefined;
-  const startupAbortPromise = new Promise<never>((_, reject) => {
-    rejectStartup = reject;
-  });
-
-  const defaultListener = async (fastifyApp: FastifyInstance, cfg: AppConfig): Promise<void> => {
+  const defaultListener = async (
+    fastifyApp: FastifyInstance,
+    cfg: AppConfig,
+    signal?: AbortSignal,
+  ): Promise<void> => {
+    if (signal?.aborted) {
+      throw new Error('API server listener aborted before listen');
+    }
     await fastifyApp.listen({
       host: cfg.apiHost,
       port: cfg.apiPort,
     });
+    if (signal?.aborted) {
+      await fastifyApp.close().catch(() => {});
+      throw new Error('API server listener aborted after listen');
+    }
   };
-
   const listener = options.listener ?? defaultListener;
-  const startupPromise = listener(app, config);
 
   const executeClose = async (): Promise<void> => {
     removeSignalHandlers();
     state = 'closing';
+    startupAbortController.abort();
 
-    let timer: NodeJS.Timeout | undefined;
+    if (absoluteDeadline === undefined) {
+      absoluteDeadline = getNow() + timeoutMs;
+    }
+
     try {
-      await Promise.race([
+      // 1. Wait for in-flight startup probe to settle within deadline budget if still pending
+      if (probePromise && !probeSettled) {
+        await raceWithDeadline(
+          probePromise.catch(() => {}),
+          getRemainingMs(),
+          `API server graceful shutdown timed out after ${timeoutMs}ms while waiting for probe settlement`,
+          timerOptions,
+        );
+      }
+
+      // 2. Wait for in-flight startup listener to settle within deadline budget if still pending
+      if (listenerPromise && !listenerSettled) {
+        await raceWithDeadline(
+          listenerPromise.catch(() => {}),
+          getRemainingMs(),
+          `API server graceful shutdown timed out after ${timeoutMs}ms while waiting for listener settlement`,
+          timerOptions,
+        );
+      }
+
+      // 3. Close Fastify listener if started
+      await raceWithDeadline(
         app.close(),
-        new Promise<void>((_, reject) => {
-          timer = setTimeout(() => {
-            reject(new Error(`API server graceful shutdown timed out after ${timeoutMs}ms`));
-          }, timeoutMs);
-        }),
-      ]);
+        getRemainingMs(),
+        `API server graceful shutdown timed out after ${timeoutMs}ms while closing HTTP listener`,
+        timerOptions,
+      );
+
+      // 4. Close Database pool within the remaining total budget
+      await raceWithDeadline(
+        database.close(),
+        getRemainingMs(),
+        `API server graceful shutdown timed out after ${timeoutMs}ms while closing database pool`,
+        timerOptions,
+      );
+
       state = 'closed';
     } catch (err) {
       state = 'closed';
@@ -104,10 +173,6 @@ export async function startApiServer(options: StartServerOptions): Promise<ApiSe
       console.error(`API server shutdown failure: ${message}`);
       invokeTerminate(1);
       throw err;
-    } finally {
-      if (timer) {
-        clearTimeout(timer);
-      }
     }
   };
 
@@ -118,64 +183,77 @@ export async function startApiServer(options: StartServerOptions): Promise<ApiSe
     if (closePromise) {
       return closePromise;
     }
-    if (state === 'starting') {
-      closeRequestedDuringStartup = true;
-      state = 'closing';
-      removeSignalHandlers();
-
-      closePromise = (async () => {
-        let shutdownTimer: NodeJS.Timeout | undefined;
-        const shutdownTimeoutPromise = new Promise<never>((_, reject) => {
-          shutdownTimer = setTimeout(() => {
-            reject(new Error(`API server graceful shutdown timed out after ${timeoutMs}ms`));
-          }, timeoutMs);
-        });
-
-        try {
-          // Bounded wait for startupPromise so hung startup listener cannot block shutdown indefinitely
-          await Promise.race([startupPromise, shutdownTimeoutPromise]);
-        } catch (err) {
-          state = 'closed';
-          removeSignalHandlers();
-          const message = err instanceof Error ? err.message : 'Unknown error';
-          console.error(`API server shutdown failure: ${message}`);
-          invokeTerminate(1);
-          const errorObj = err instanceof Error ? err : new Error(message);
-          rejectStartup?.(errorObj);
-          throw errorObj;
-        } finally {
-          if (shutdownTimer) {
-            clearTimeout(shutdownTimer);
-          }
-        }
-
-        // If startup completed within deadline, proceed to close the server
-        await executeClose();
-      })();
-
-      return closePromise;
-    }
-
     closePromise = executeClose();
     return closePromise;
   };
 
-  try {
-    await Promise.race([startupPromise, startupAbortPromise]);
-    state = 'running';
-  } catch (err) {
-    removeSignalHandlers();
-    state = 'closed';
-    throw err;
-  }
+  const startupAbortPromise = new Promise<never>((_, reject) => {
+    if (startupAbortController.signal.aborted) {
+      reject(new Error('API server startup aborted'));
+      return;
+    }
+    startupAbortController.signal.addEventListener(
+      'abort',
+      () => reject(new Error('API server startup aborted')),
+      { once: true },
+    );
+  });
 
-  if (closeRequestedDuringStartup) {
-    await close();
+  // Phase 1: Probe Database connection before listening
+  try {
+    if (startupAbortController.signal.aborted) {
+      throw new Error('API server startup aborted before database probe');
+    }
+    probePromise = database.probe(startupAbortController.signal).finally(() => {
+      probeSettled = true;
+    });
+    await Promise.race([probePromise, startupAbortPromise]);
+
+    // Phase 2: Start Fastify HTTP listener
+    if (startupAbortController.signal.aborted) {
+      throw new Error('API server startup aborted before listener bound');
+    }
+    listenerPromise = listener(app, config, startupAbortController.signal).finally(() => {
+      listenerSettled = true;
+    });
+    await Promise.race([listenerPromise, startupAbortPromise]);
+
+    if (startupAbortController.signal.aborted) {
+      throw new Error('API server startup aborted after listener bound');
+    }
+    state = 'running';
+  } catch (startupErr) {
+    removeSignalHandlers();
+
+    let cleanupTimedOut = false;
+    let cleanupError: unknown;
+    try {
+      await close();
+    } catch (err) {
+      cleanupTimedOut = true;
+      cleanupError = err;
+    }
+
+    if (cleanupTimedOut) {
+      invokeTerminate(1);
+      throw cleanupError ?? startupErr;
+    }
+
+    if (abortedBySignal) {
+      invokeTerminate(0);
+      throw startupErr;
+    }
+
+    const message = startupErr instanceof Error ? startupErr.message : 'API server startup failure';
+    console.error(`API server startup failure: ${message}`);
+    invokeTerminate(1);
+    throw startupErr;
   }
 
   return {
     app,
     config,
+    database,
     close,
   };
 }
