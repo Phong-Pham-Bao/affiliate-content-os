@@ -7,6 +7,7 @@ Branch: agy/task-003-persistence-foundation
 ## Summary
 
 Remediated the two HIGH security findings from the latest TASK-003 review:
+
 1. **Finding 1 (Rejection sanitization invokes untrusted hooks)**: Eliminated untrusted getter invocations, stringification, inspection, and JSON serialization during rejection sanitization. Eliminated runtime wrappers around `toJSON`, `toString`, `inspect`, and property getters. Any object with an accessor, executable observability hook, custom prototype behavior, or hostile Proxy trap is replaced with a safe `DatabaseError` without attaching the original.
 2. **Finding 2 (Raw database-error classification invokes hostile properties)**: Replaced direct property access (`err['code']`, `err['message']`) with a safe, total, non-throwing own-data-descriptor reader (`getSafeOwnStringProperty`). Hardened `classifyRawError` and `sanitizeDatabaseError` with total fail-safe boundaries that ignore hostile getters and Proxies, preventing trap exceptions from escaping and defaulting cleanly to generic `DatabaseError`.
 
