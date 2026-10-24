@@ -1,6 +1,6 @@
 # TASK-004 - Workspace Tenancy Core and PostgreSQL Isolation
 
-Status:  Approved by Product Owner
+Status: Approved by Product Owner
 
 Owner: Antigravity (Implementation Engineer)
 
