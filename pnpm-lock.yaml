@@ -270,13 +270,41 @@ importers:
         specifier: ^5.8.3
         version: 5.9.3
 
+  packages/application:
+    dependencies:
+      '@affiliate-content-os/domain':
+        specifier: workspace:*
+        version: link:../domain
+    devDependencies:
+      '@types/node':
+        specifier: ^24.19.1
+        version: 24.19.1
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+
   packages/config: {}
+
+  packages/domain:
+    devDependencies:
+      '@types/node':
+        specifier: ^24.19.1
+        version: 24.19.1
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
 
   packages/infrastructure:
     dependencies:
+      '@affiliate-content-os/application':
+        specifier: workspace:*
+        version: link:../application
       '@affiliate-content-os/config':
         specifier: workspace:*
         version: link:../config
+      '@affiliate-content-os/domain':
+        specifier: workspace:*
+        version: link:../domain
       pg:
         specifier: 8.23.1
         version: 8.23.1
