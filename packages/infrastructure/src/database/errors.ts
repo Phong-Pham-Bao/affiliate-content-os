@@ -1,6 +1,19 @@
-import { stripCredentials, sanitizeCallbackError } from './sanitization.js';
+import {
+  getDatabaseError,
+  hasSensitiveUrl,
+  sanitizeCallbackError,
+  sanitizeRejection,
+  setDatabaseErrorFactory,
+  stripCredentials,
+} from './sanitization.js';
 
-export { stripCredentials, sanitizeCallbackError };
+export {
+  getDatabaseError,
+  hasSensitiveUrl,
+  sanitizeCallbackError,
+  sanitizeRejection,
+  stripCredentials,
+};
 
 export class DatabaseError extends Error {
   public readonly code?: string | undefined;
@@ -41,6 +54,10 @@ export class DatabaseError extends Error {
     return this.toJSON();
   }
 }
+
+setDatabaseErrorFactory(
+  (message: string) => new DatabaseError(message, { code: 'DATABASE_ERROR' }),
+);
 
 interface KnownErrorClassification {
   readonly code: string;
@@ -146,6 +163,15 @@ export function sanitizeDatabaseError(
   contextMessage?: string | undefined,
 ): DatabaseError {
   if (err instanceof DatabaseError) {
+    if (hasSensitiveUrl(err.message) || (err.stack && hasSensitiveUrl(err.stack))) {
+      const safeMsg = stripCredentials(err.message);
+      return new DatabaseError(
+        contextMessage && !safeMsg.startsWith(contextMessage)
+          ? `${contextMessage}: ${safeMsg}`
+          : safeMsg,
+        { code: err.code },
+      );
+    }
     if (contextMessage && !err.message.startsWith(contextMessage)) {
       return new DatabaseError(`${contextMessage}: ${err.message}`, { code: err.code });
     }

@@ -980,5 +980,196 @@ describe('Database client and transaction manager (unit tests with fakes)', () =
       }
       expect(inspected).toContain('postgresql://[REDACTED]');
     });
+
+    it('handles frozen immutable Error with credentials safely without mutation crashes, replaces with safe DatabaseError, rolls back, and prevents credential exposure', async () => {
+      const { spawn } = await import('node:child_process');
+
+      const sentinels = {
+        username: 'sentinel_tx_imm_user',
+        password: 'sentinel_tx_imm_secret_pwd',
+        ipv4Host: '198.51.100.44',
+        ipv6Host: '2001:db8:85a3::8a2e:370:7334',
+        port: '54329',
+        databaseName: 'sentinel_tx_imm_db',
+        query: 'sentinel_query_param=frozen_supersecret',
+        fragment: 'sentinel_frag_frozen_anchor',
+      };
+      const sentinelList = Object.values(sentinels);
+
+      const ipv4Url = `postgresql://${sentinels.username}:${sentinels.password}@${sentinels.ipv4Host}:${sentinels.port}/${sentinels.databaseName}?${sentinels.query}#${sentinels.fragment}`;
+      const ipv6Url = `postgresql://${sentinels.username}:${sentinels.password}@[${sentinels.ipv6Host}]:${sentinels.port}/${sentinels.databaseName}?${sentinels.query}#${sentinels.fragment}`;
+
+      const rawMessage = `Transaction failed with connection to ${ipv4Url} and fallback ${ipv6Url}`;
+      const rawStack = `Error: Transaction failed with connection to ${ipv4Url} and fallback ${ipv6Url}\n    at customStackTracer (/app/src/service.ts:42:15)`;
+
+      const frozenErr = new Error(rawMessage);
+      frozenErr.stack = rawStack;
+      Object.freeze(frozenErr);
+
+      const { mockPool, mockClient, clientQueries } = createMockPool();
+      const db = createDatabase(dummyConfig, {
+        poolFactory: () => mockPool,
+      });
+
+      const mockLogger = {
+        error: vi.fn(),
+      };
+
+      let caughtErr: unknown;
+      try {
+        await db.withTransaction(async () => {
+          throw frozenErr;
+        });
+      } catch (err) {
+        caughtErr = err;
+        mockLogger.error('Transaction failed:', err);
+      }
+
+      // 1. Transaction execution assertions
+      const queryTexts = clientQueries.map((q) => q.text);
+      expect(queryTexts).toContain('BEGIN');
+      expect(queryTexts).toContain('ROLLBACK');
+      expect(queryTexts).not.toContain('COMMIT');
+      expect(mockClient.release).toHaveBeenCalledTimes(1);
+
+      // 2. Identity and type assertions
+      expect(caughtErr).not.toBe(frozenErr);
+      expect(caughtErr).toBeInstanceOf(DatabaseError);
+
+      const safeDbErr = caughtErr as DatabaseError;
+
+      // 3. String, inspect, JSON, logger observables
+      const message = safeDbErr.message;
+      const stack = safeDbErr.stack ?? '';
+      const stringified = String(safeDbErr);
+      const inspected = util.inspect(safeDbErr);
+      const json = JSON.stringify(safeDbErr);
+
+      expect(mockLogger.error).toHaveBeenCalledTimes(1);
+      const loggerArgs = mockLogger.error.mock.calls[0]!;
+      const loggerInspected = util.inspect(loggerArgs);
+      const loggerJson = JSON.stringify(loggerArgs);
+
+      for (const sentinel of sentinelList) {
+        expect(message).not.toContain(sentinel);
+        expect(stack).not.toContain(sentinel);
+        expect(stringified).not.toContain(sentinel);
+        expect(inspected).not.toContain(sentinel);
+        if (json) {
+          expect(json).not.toContain(sentinel);
+        }
+        expect(loggerInspected).not.toContain(sentinel);
+        expect(loggerJson).not.toContain(sentinel);
+      }
+
+      // 4. Original frozen Error is not exposed through cause or any property
+      expect(safeDbErr.cause).toBeUndefined();
+      for (const key of Reflect.ownKeys(safeDbErr)) {
+        expect((safeDbErr as unknown as Record<string | symbol, unknown>)[key]).not.toBe(frozenErr);
+      }
+
+      // 5. Child-process verification: neither stdout nor stderr exposes any sentinel
+      const childScript = `
+        import { createDatabase, DatabaseError } from './packages/infrastructure/src/database/index.ts';
+        const dummyConfig = {
+          databaseUrl: 'postgresql://acos_local:acos_local_only@127.0.0.1:5432/acos_dev',
+          poolMax: 2,
+          connectionTimeoutMs: 1000,
+          idleTimeoutMs: 1000,
+          statementTimeoutMs: 1000,
+          sslMode: 'disable',
+        };
+        const mockPool = {
+          on: () => {},
+          connect: async () => ({
+            query: async () => ({ rows: [], rowCount: 0, command: 'SELECT' }),
+            release: () => {},
+            on: () => {},
+            removeListener: () => {},
+          }),
+        };
+        const db = createDatabase(dummyConfig, { poolFactory: () => mockPool });
+        try {
+          await db.withTransaction(async () => {
+            const err = new Error(${JSON.stringify(rawMessage)});
+            err.stack = ${JSON.stringify(rawStack)};
+            Object.freeze(err);
+            throw err;
+          });
+        } catch (err) {
+          console.log('STDOUT_ERR:', err);
+          console.error('STDERR_ERR:', err);
+          if (err instanceof DatabaseError) {
+            process.exit(1);
+          }
+          process.exit(2);
+        }
+      `;
+
+      const child = spawn(
+        process.execPath,
+        ['--conditions=development', '--import', 'tsx', '-e', childScript],
+        {
+          cwd: process.cwd(),
+          stdio: ['pipe', 'pipe', 'pipe'],
+        },
+      );
+
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (d) => {
+        stdout += d.toString();
+      });
+      child.stderr.on('data', (d) => {
+        stderr += d.toString();
+      });
+
+      const exitCode = await new Promise<number>((resolve) => {
+        child.on('close', resolve);
+      });
+
+      expect(exitCode).toBe(1);
+      const combinedOutput = stdout + stderr;
+      for (const sentinel of sentinelList) {
+        expect(combinedOutput).not.toContain(sentinel);
+      }
+    });
+
+    it('preserves exact rejection identity for already-safe frozen Error through withTransaction', async () => {
+      const { mockPool, clientQueries } = createMockPool();
+      const db = createDatabase(dummyConfig, { poolFactory: () => mockPool });
+      const safeFrozenErr = Object.freeze(new Error('Already safe business error'));
+
+      let caught: unknown;
+      try {
+        await db.withTransaction(async () => {
+          throw safeFrozenErr;
+        });
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBe(safeFrozenErr);
+      const queryTexts = clientQueries.map((q) => q.text);
+      expect(queryTexts).toContain('ROLLBACK');
+      expect(queryTexts).not.toContain('COMMIT');
+    });
+
+    it('preserves exact rejection identity for already-safe frozen plain object through withTransaction', async () => {
+      const { mockPool } = createMockPool();
+      const db = createDatabase(dummyConfig, { poolFactory: () => mockPool });
+      const safeFrozenObj = Object.freeze({ status: 'rejected', reason: 'validation_failed' });
+
+      let caught: unknown;
+      try {
+        await db.withTransaction(async () => {
+          throw safeFrozenObj;
+        });
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBe(safeFrozenObj);
+    });
   });
 });

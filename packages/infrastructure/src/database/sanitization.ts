@@ -1,108 +1,256 @@
+import util from 'node:util';
+
 const REDACT_URL_REGEX = /postgres(ql)?:\/\/[^\s"'<>]+/gi;
 
 export function stripCredentials(text: string): string {
   return text.replace(REDACT_URL_REGEX, 'postgresql://[REDACTED]');
 }
 
+export function hasSensitiveUrl(text: string): boolean {
+  return stripCredentials(text) !== text;
+}
+
+export type SanitizationResult<T = unknown> =
+  | { readonly status: 'safe'; readonly value: T }
+  | { readonly status: 'sanitized'; readonly value: T }
+  | { readonly status: 'unsanitizable' };
+
+type DatabaseErrorFactory = (message: string) => Error;
+
+let databaseErrorFactory: DatabaseErrorFactory = (message: string) => {
+  const err = new Error(message);
+  err.name = 'DatabaseError';
+  return err;
+};
+
+export function setDatabaseErrorFactory(factory: DatabaseErrorFactory): void {
+  databaseErrorFactory = factory;
+}
+
+export function getDatabaseError(message: string): Error {
+  return databaseErrorFactory(message);
+}
+
 const customInspectSymbol = Symbol.for('nodejs.util.inspect.custom');
 
-/**
- * Sanitizes a single value recursively, scrubbing credential-bearing URLs from all
- * observable surfaces (messages, stacks, properties, accessors, toJSON, util.inspect).
- */
-function sanitizeValue<T>(val: T, visited: Set<unknown>): T {
-  if (val === null || val === undefined) {
-    return val;
-  }
-
-  if (typeof val === 'string') {
-    return stripCredentials(val) as T;
-  }
-
-  if (typeof val !== 'object' && typeof val !== 'function') {
-    return val;
-  }
-
-  if (visited.has(val)) {
-    return val;
-  }
+export function isValueSafe(val: unknown, visited = new Set<unknown>()): boolean {
+  if (val === null || val === undefined) return true;
+  if (typeof val === 'string') return !hasSensitiveUrl(val);
+  if (typeof val !== 'object' && typeof val !== 'function') return true;
+  if (visited.has(val)) return true;
   visited.add(val);
 
   const obj = val as Record<string | symbol, unknown>;
+  if (typeof obj['message'] === 'string' && hasSensitiveUrl(obj['message'])) return false;
+  if (typeof obj['stack'] === 'string' && hasSensitiveUrl(obj['stack'])) return false;
+  if (typeof obj['cause'] === 'string' && hasSensitiveUrl(obj['cause'])) return false;
+  if (
+    typeof obj['cause'] === 'object' &&
+    obj['cause'] !== null &&
+    !isValueSafe(obj['cause'], visited)
+  ) {
+    return false;
+  }
 
-  // 1. Sanitize standard Error fields if present
-  if (typeof obj['message'] === 'string') {
+  for (const key of Reflect.ownKeys(obj)) {
+    if (
+      key === 'message' ||
+      key === 'stack' ||
+      key === 'cause' ||
+      key === 'toJSON' ||
+      key === customInspectSymbol ||
+      key === 'toString'
+    ) {
+      continue;
+    }
+    let desc: PropertyDescriptor | undefined;
     try {
-      obj['message'] = stripCredentials(obj['message']);
+      desc = Object.getOwnPropertyDescriptor(obj, key);
     } catch {
-      // accessor or non-writable
+      continue;
+    }
+    if (!desc) continue;
+    if (desc.get) {
+      try {
+        const v = desc.get.call(obj);
+        if (typeof v === 'string' && hasSensitiveUrl(v)) return false;
+        if (typeof v === 'object' && v !== null && !isValueSafe(v, visited)) return false;
+      } catch {
+        // ignore getter read error
+      }
+    } else if (desc.value !== undefined) {
+      if (typeof desc.value === 'string' && hasSensitiveUrl(desc.value)) return false;
+      if (
+        typeof desc.value === 'object' &&
+        desc.value !== null &&
+        !isValueSafe(desc.value, visited)
+      ) {
+        return false;
+      }
     }
   }
 
-  if (typeof obj['stack'] === 'string') {
-    try {
-      obj['stack'] = stripCredentials(obj['stack']);
-    } catch {
-      // accessor or non-writable
+  const proto = Object.getPrototypeOf(obj);
+  if (proto && proto !== Object.prototype && proto !== Error.prototype) {
+    for (const key of Reflect.ownKeys(proto)) {
+      if (
+        key === 'constructor' ||
+        key === 'toJSON' ||
+        key === customInspectSymbol ||
+        key === 'toString'
+      ) {
+        continue;
+      }
+      let desc: PropertyDescriptor | undefined;
+      try {
+        desc = Object.getOwnPropertyDescriptor(proto, key);
+      } catch {
+        continue;
+      }
+      if (desc?.get) {
+        try {
+          const v = desc.get.call(obj);
+          if (typeof v === 'string' && hasSensitiveUrl(v)) return false;
+          if (typeof v === 'object' && v !== null && !isValueSafe(v, visited)) return false;
+        } catch {
+          // ignore getter read error
+        }
+      }
     }
   }
 
-  if (typeof obj['cause'] === 'string') {
+  try {
+    if (hasSensitiveUrl(String(obj))) return false;
+  } catch {
+    // ignore toString error
+  }
+  try {
+    if (hasSensitiveUrl(util.inspect(obj, { depth: 5, showHidden: false }))) return false;
+  } catch {
+    // ignore inspect error
+  }
+  try {
+    const json = JSON.stringify(obj);
+    if (json && hasSensitiveUrl(json)) return false;
+  } catch {
+    // ignore circular json error
+  }
+
+  return true;
+}
+
+function trySetOrDefine(
+  obj: Record<string | symbol, unknown>,
+  key: string | symbol,
+  value: unknown,
+  enumerable = false,
+): boolean {
+  try {
+    obj[key] = value;
+    if (obj[key] === value) return true;
+  } catch {
+    // ignore assignment failure
+  }
+  try {
+    Object.defineProperty(obj, key, { value, writable: true, configurable: true, enumerable });
+    if (obj[key] === value) return true;
+  } catch {
+    // ignore defineProperty failure
+  }
+  return false;
+}
+
+function sanitizeValuePure(val: unknown, visited: Set<unknown>): unknown {
+  if (val === null || val === undefined) return val;
+  if (typeof val === 'string') return stripCredentials(val);
+  if (typeof val !== 'object' && typeof val !== 'function') return val;
+  if (visited.has(val)) return val;
+  visited.add(val);
+  if (Array.isArray(val)) return val.map((item) => sanitizeValuePure(item, visited));
+  const result: Record<string | symbol, unknown> = {};
+  for (const key of Reflect.ownKeys(val)) {
     try {
-      obj['cause'] = stripCredentials(obj['cause']);
+      const desc = Object.getOwnPropertyDescriptor(val, key);
+      if (desc && desc.enumerable && desc.value !== undefined) {
+        result[key] = sanitizeValuePure(desc.value, visited);
+      }
     } catch {
-      // accessor or non-writable
+      // ignore descriptor read error
     }
-  } else if (obj['cause'] !== undefined) {
-    try {
-      obj['cause'] = sanitizeValue(obj['cause'], visited);
-    } catch {
-      // accessor or non-writable
+  }
+  return result;
+}
+
+function sanitizeInPlace(val: unknown, visited: Set<unknown>): boolean {
+  if (val === null || val === undefined || (typeof val !== 'object' && typeof val !== 'function')) {
+    return true;
+  }
+  if (visited.has(val)) return true;
+  visited.add(val);
+  if (Object.isFrozen(val)) return isValueSafe(val, new Set<unknown>());
+
+  const obj = val as Record<string | symbol, unknown>;
+  if (typeof obj['message'] === 'string' && hasSensitiveUrl(obj['message'])) {
+    if (!trySetOrDefine(obj, 'message', stripCredentials(obj['message']), false)) return false;
+  }
+  if (typeof obj['stack'] === 'string' && hasSensitiveUrl(obj['stack'])) {
+    if (!trySetOrDefine(obj, 'stack', stripCredentials(obj['stack']), false)) return false;
+  }
+  if (typeof obj['cause'] === 'string' && hasSensitiveUrl(obj['cause'])) {
+    if (!trySetOrDefine(obj, 'cause', stripCredentials(obj['cause']), false)) return false;
+  } else if (typeof obj['cause'] === 'object' && obj['cause'] !== null) {
+    if (!sanitizeInPlace(obj['cause'], visited)) {
+      const replacement = getDatabaseError('Database operation failed');
+      if (!trySetOrDefine(obj, 'cause', replacement, false)) return false;
     }
   }
 
-  // 2. Wrap custom toJSON if function exists on obj or prototype
   if (typeof obj['toJSON'] === 'function') {
     const originalToJSON = obj['toJSON'] as (this: unknown, ...args: unknown[]) => unknown;
     try {
       Object.defineProperty(obj, 'toJSON', {
         value: function (this: unknown, ...args: unknown[]) {
           const res = originalToJSON.apply(this, args);
-          return sanitizeValue(res, new Set<unknown>());
+          return sanitizeValuePure(res, new Set<unknown>());
         },
         writable: true,
         enumerable: false,
         configurable: true,
       });
     } catch {
-      // non-configurable or frozen
+      try {
+        const res = (obj['toJSON'] as (this: unknown, ...args: unknown[]) => unknown).call(obj);
+        if (!isValueSafe(res, new Set<unknown>())) return false;
+      } catch {
+        // ignore toJSON error
+      }
     }
   }
 
-  // 3. Wrap custom inspect function if present
   const customInspectFn = (obj[customInspectSymbol] ?? obj['inspect']) as
     ((this: unknown, ...args: unknown[]) => unknown) | undefined;
-
   if (typeof customInspectFn === 'function') {
     try {
       Object.defineProperty(obj, customInspectSymbol, {
         value: function (this: unknown, ...args: unknown[]) {
           const res = customInspectFn.apply(this, args);
-          if (typeof res === 'string') {
-            return stripCredentials(res);
-          }
-          return sanitizeValue(res, new Set<unknown>());
+          if (typeof res === 'string') return stripCredentials(res);
+          return sanitizeValuePure(res, new Set<unknown>());
         },
         writable: true,
         enumerable: false,
         configurable: true,
       });
     } catch {
-      // non-configurable or frozen
+      try {
+        const res = customInspectFn.call(obj);
+        if (!isValueSafe(res, new Set<unknown>())) return false;
+      } catch {
+        // ignore inspect error
+      }
     }
   }
 
-  // 4. Wrap custom toString if present and distinct from Object/Error prototype
   if (
     typeof obj['toString'] === 'function' &&
     obj['toString'] !== Object.prototype.toString &&
@@ -120,14 +268,23 @@ function sanitizeValue<T>(val: T, visited: Set<unknown>): T {
         configurable: true,
       });
     } catch {
-      // non-configurable or frozen
+      try {
+        if (hasSensitiveUrl(originalToString.call(obj))) return false;
+      } catch {
+        // ignore toString error
+      }
     }
   }
 
-  // 5. Inspect and sanitize own properties and accessors
-  const ownKeys = Reflect.ownKeys(obj);
-  for (const key of ownKeys) {
-    if (key === 'toJSON' || key === customInspectSymbol || key === 'toString') {
+  for (const key of Reflect.ownKeys(obj)) {
+    if (
+      key === 'message' ||
+      key === 'stack' ||
+      key === 'cause' ||
+      key === 'toJSON' ||
+      key === customInspectSymbol ||
+      key === 'toString'
+    ) {
       continue;
     }
     let desc: PropertyDescriptor | undefined;
@@ -136,70 +293,52 @@ function sanitizeValue<T>(val: T, visited: Set<unknown>): T {
     } catch {
       continue;
     }
-    if (!desc) {
-      continue;
-    }
-
+    if (!desc) continue;
     if (desc.get) {
-      // Accessor property
-      const originalGet = desc.get;
-      if (desc.configurable) {
+      let v: unknown;
+      try {
+        v = desc.get.call(obj);
+      } catch {
+        continue;
+      }
+      if (typeof v === 'string' && hasSensitiveUrl(v)) {
+        if (!desc.configurable) return false;
+        const originalGet = desc.get;
         try {
-          const newDesc: PropertyDescriptor = {
-            configurable: desc.configurable,
+          const accDesc: PropertyDescriptor = {
+            configurable: true,
             get: function (this: unknown) {
               const res = originalGet.call(this);
-              return sanitizeValue(res, visited);
+              return typeof res === 'string' ? stripCredentials(res) : res;
             },
           };
           if (desc.enumerable !== undefined) {
-            newDesc.enumerable = desc.enumerable;
+            accDesc.enumerable = desc.enumerable;
           }
           if (desc.set !== undefined) {
-            newDesc.set = desc.set;
+            accDesc.set = desc.set;
           }
-          Object.defineProperty(obj, key, newDesc);
+          Object.defineProperty(obj, key, accDesc);
         } catch {
-          // ignore defineProperty error
+          return false;
         }
+      } else if (typeof v === 'object' && v !== null) {
+        if (!sanitizeInPlace(v, visited)) return false;
       }
     } else if (desc.value !== undefined) {
-      if (typeof desc.value === 'string') {
-        const sanitized = stripCredentials(desc.value);
-        if (sanitized !== desc.value) {
-          try {
-            if (desc.writable) {
-              obj[key] = sanitized;
-            } else if (desc.configurable) {
-              const valDesc: PropertyDescriptor = {
-                value: sanitized,
-              };
-              if (desc.writable !== undefined) {
-                valDesc.writable = desc.writable;
-              }
-              if (desc.enumerable !== undefined) {
-                valDesc.enumerable = desc.enumerable;
-              }
-              if (desc.configurable !== undefined) {
-                valDesc.configurable = desc.configurable;
-              }
-              Object.defineProperty(obj, key, valDesc);
-            }
-          } catch {
-            // ignore non-writable
-          }
+      if (typeof desc.value === 'string' && hasSensitiveUrl(desc.value)) {
+        if (!trySetOrDefine(obj, key, stripCredentials(desc.value), desc.enumerable ?? true)) {
+          return false;
         }
       } else if (typeof desc.value === 'object' && desc.value !== null) {
-        sanitizeValue(desc.value, visited);
+        if (!sanitizeInPlace(desc.value, visited)) return false;
       }
     }
   }
 
-  // 6. Inspect custom class prototype accessors (below Error.prototype / Object.prototype)
   const proto = Object.getPrototypeOf(obj);
   if (proto && proto !== Object.prototype && proto !== Error.prototype) {
-    const protoKeys = Reflect.ownKeys(proto);
-    for (const key of protoKeys) {
+    for (const key of Reflect.ownKeys(proto)) {
       if (
         key === 'constructor' ||
         key === 'toJSON' ||
@@ -214,38 +353,78 @@ function sanitizeValue<T>(val: T, visited: Set<unknown>): T {
       } catch {
         continue;
       }
-      if (desc && desc.get) {
-        const originalGet = desc.get;
+      if (desc?.get) {
+        let v: unknown;
         try {
-          const protoDesc: PropertyDescriptor = {
-            configurable: true,
-            get: function (this: unknown) {
-              const res = originalGet.call(this);
-              return sanitizeValue(res, visited);
-            },
-          };
-          if (desc.enumerable !== undefined) {
-            protoDesc.enumerable = desc.enumerable;
-          }
-          Object.defineProperty(obj, key, protoDesc);
+          v = desc.get.call(obj);
         } catch {
-          // ignore
+          continue;
+        }
+        if (typeof v === 'string' && hasSensitiveUrl(v)) {
+          if (!Object.isExtensible(obj)) return false;
+          const originalGet = desc.get;
+          try {
+            const protoDesc: PropertyDescriptor = {
+              configurable: true,
+              get: function (this: unknown) {
+                const res = originalGet.call(this);
+                return typeof res === 'string' ? stripCredentials(res) : res;
+              },
+            };
+            if (desc.enumerable !== undefined) {
+              protoDesc.enumerable = desc.enumerable;
+            }
+            Object.defineProperty(obj, key, protoDesc);
+          } catch {
+            return false;
+          }
         }
       }
     }
   }
 
-  return val;
+  return true;
 }
 
-export function sanitizeCallbackError<E = unknown>(err: E): E {
-  if (err === undefined) {
-    return undefined as E;
+export function sanitizeRejection<T = unknown>(val: T): SanitizationResult<T> {
+  if (val === null || val === undefined) {
+    return { status: 'safe', value: val };
   }
+  if (
+    typeof val === 'boolean' ||
+    typeof val === 'number' ||
+    typeof val === 'bigint' ||
+    typeof val === 'symbol'
+  ) {
+    return { status: 'safe', value: val };
+  }
+  if (typeof val === 'string') {
+    return hasSensitiveUrl(val) ? { status: 'unsanitizable' } : { status: 'safe', value: val };
+  }
+
+  if (isValueSafe(val, new Set<unknown>())) {
+    return { status: 'safe', value: val };
+  }
+
+  if (Object.isFrozen(val)) {
+    return { status: 'unsanitizable' };
+  }
+
   try {
-    return sanitizeValue(err, new Set<unknown>());
+    const success = sanitizeInPlace(val, new Set<unknown>());
+    if (!success || !isValueSafe(val, new Set<unknown>())) {
+      return { status: 'unsanitizable' };
+    }
+    return { status: 'sanitized', value: val };
   } catch {
-    // A sanitizer failure must never erase or replace the primary transaction failure with undefined
-    return err;
+    return { status: 'unsanitizable' };
   }
+}
+
+export function sanitizeCallbackError<E = unknown>(err: E): E | Error {
+  const result = sanitizeRejection(err);
+  if (result.status === 'safe' || result.status === 'sanitized') {
+    return result.value;
+  }
+  return getDatabaseError('Transaction callback failed');
 }
