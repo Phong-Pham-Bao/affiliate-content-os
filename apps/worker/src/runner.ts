@@ -156,6 +156,7 @@ export async function startWorker(options: StartWorkerOptions): Promise<void> {
       absoluteDeadline = getNow() + timeoutMs;
     }
 
+    let hasCleanupError = false;
     let cleanupError: unknown;
     try {
       await raceWithDeadline(
@@ -165,10 +166,11 @@ export async function startWorker(options: StartWorkerOptions): Promise<void> {
         timerOptions,
       );
     } catch (err) {
+      hasCleanupError = true;
       cleanupError = err;
     }
 
-    if (cleanupError) {
+    if (hasCleanupError) {
       const message =
         cleanupError instanceof Error ? cleanupError.message : 'Database cleanup failed';
       console.error(`Worker startup cleanup failure: ${message}`);

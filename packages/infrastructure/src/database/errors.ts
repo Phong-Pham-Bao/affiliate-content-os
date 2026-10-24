@@ -1,53 +1,21 @@
-const REDACT_URL_REGEX = /postgres(ql)?:\/\/[^\s"'<>]+/gi;
+import { stripCredentials, sanitizeCallbackError } from './sanitization.js';
 
-export function stripCredentials(text: string): string {
-  return text.replace(REDACT_URL_REGEX, 'postgresql://[REDACTED]');
-}
-
-export function sanitizeCallbackError<E = unknown>(err: E): E {
-  if (err instanceof DatabaseError) {
-    return err;
-  }
-  if (err instanceof Error) {
-    if (typeof err.message === 'string') {
-      err.message = stripCredentials(err.message);
-    }
-    if (typeof err.stack === 'string') {
-      err.stack = stripCredentials(err.stack);
-    }
-    if (err.cause instanceof Error) {
-      sanitizeCallbackError(err.cause);
-    } else if (typeof err.cause === 'string') {
-      err.cause = stripCredentials(err.cause);
-    }
-    for (const key of Object.getOwnPropertyNames(err)) {
-      if (key !== 'message' && key !== 'stack' && key !== 'cause' && key !== 'name') {
-        try {
-          const val = (err as Record<string, unknown>)[key];
-          if (typeof val === 'string') {
-            (err as Record<string, unknown>)[key] = stripCredentials(val);
-          }
-        } catch {
-          // ignore accessor error
-        }
-      }
-    }
-    return err;
-  }
-  if (typeof err === 'string') {
-    return stripCredentials(err) as E;
-  }
-  return err;
-}
+export { stripCredentials, sanitizeCallbackError };
 
 export class DatabaseError extends Error {
   public readonly code?: string | undefined;
 
-  constructor(message: string, options?: { readonly code?: string | undefined }) {
+  constructor(
+    message: string,
+    options?: { readonly code?: string | undefined; readonly cause?: unknown },
+  ) {
     super(stripCredentials(message));
     this.name = 'DatabaseError';
     if (options?.code !== undefined) {
       this.code = options.code;
+    }
+    if (options?.cause !== undefined) {
+      this.cause = sanitizeCallbackError(options.cause);
     }
 
     if (this.stack) {
@@ -55,11 +23,12 @@ export class DatabaseError extends Error {
     }
   }
 
-  public toJSON(): { name: string; message: string; code?: string } {
+  public toJSON(): { name: string; message: string; code?: string; cause?: unknown } {
     return {
       name: this.name,
       message: this.message,
       ...(this.code ? { code: this.code } : {}),
+      ...(this.cause !== undefined ? { cause: this.cause } : {}),
     };
   }
 
@@ -67,6 +36,7 @@ export class DatabaseError extends Error {
     name: string;
     message: string;
     code?: string;
+    cause?: unknown;
   } {
     return this.toJSON();
   }

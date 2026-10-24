@@ -432,6 +432,70 @@ describe('apps/worker - startWorker lifecycle', () => {
     consoleErrorSpy.mockRestore();
   });
 
+  const falsyCleanupRejections = [
+    { name: 'undefined', value: undefined },
+    { name: 'null', value: null },
+    { name: 'false', value: false },
+    { name: '0', value: 0 },
+    { name: 'NaN', value: Number.NaN },
+    { name: 'empty string', value: '' },
+    { name: 'Error', value: new Error('Explicit close error') },
+  ];
+
+  for (const { name, value } of falsyCleanupRejections) {
+    it(`forces exit code 1 and logs exactly one safe failure when pool close rejects with ${name} during probe abort`, async () => {
+      const terminateSpy = vi.fn();
+      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      const controller = new AbortController();
+      const mockDb = createMockDatabase({
+        probe: vi.fn(async (signal?: AbortSignal) => {
+          if (signal?.aborted) {
+            throw new Error('Probe aborted');
+          }
+          return new Promise<void>((_, rej) => {
+            signal?.addEventListener('abort', () => rej(new Error('Probe aborted')));
+          });
+        }),
+        close: vi.fn(() => Promise.reject(value)),
+      });
+
+      const workerPromise = startWorker({
+        config: mockConfig,
+        database: mockDb,
+        abortController: controller,
+        shutdownTimeoutMs: 5000,
+        terminate: terminateSpy,
+        installSignalHandlers: false,
+      });
+
+      controller.abort();
+
+      let caughtErr: unknown;
+      try {
+        await workerPromise;
+      } catch (err) {
+        caughtErr = err;
+      }
+
+      if (Number.isNaN(value)) {
+        expect(Number.isNaN(caughtErr)).toBe(true);
+      } else {
+        expect(caughtErr).toBe(value);
+      }
+
+      expect(terminateSpy).toHaveBeenCalledTimes(1);
+      expect(terminateSpy).toHaveBeenCalledWith(1);
+      expect(terminateSpy).not.toHaveBeenCalledWith(0);
+
+      expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+      const loggedMsg = consoleErrorSpy.mock.calls[0]?.join(' ') ?? '';
+      expect(loggedMsg).toContain('Worker startup cleanup failure:');
+
+      consoleErrorSpy.mockRestore();
+    });
+  }
+
   it('forces exit code 1 when pool close rejects during probe abort', async () => {
     const terminateSpy = vi.fn();
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});

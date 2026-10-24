@@ -387,6 +387,55 @@ describe('Scripts unit verification', () => {
       }
     });
 
+    it('rejects unexpected or extra fields such as unexpected_broadening: accepted', () => {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'acos_trivy_extra_'));
+      try {
+        const ignorePath = path.join(tempDir, '.trivyignore.yaml');
+        fs.writeFileSync(
+          ignorePath,
+          `vulnerabilities:\n  - id: ${REQUIRED_CVE}\n    paths:\n      - ${REQUIRED_PATH}\n    expired_at: ${REQUIRED_EXPIRY}\n    statement: see security/exceptions/TASK-003-CVE-2025-68121-GOSU.md\n    unexpected_broadening: accepted\n`,
+        );
+
+        expect(() => verifyTrivyExceptionPolicy({ ignorePath })).toThrow(
+          /unexpected or unknown field 'unexpected_broadening'/,
+        );
+      } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    it('rejects duplicate fields in vulnerability item', () => {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'acos_trivy_dup_'));
+      try {
+        const ignorePath = path.join(tempDir, '.trivyignore.yaml');
+        fs.writeFileSync(
+          ignorePath,
+          `vulnerabilities:\n  - id: ${REQUIRED_CVE}\n    id: ${REQUIRED_CVE}\n    paths:\n      - ${REQUIRED_PATH}\n    expired_at: ${REQUIRED_EXPIRY}\n    statement: see security/exceptions/TASK-003-CVE-2025-68121-GOSU.md\n`,
+        );
+
+        expect(() => verifyTrivyExceptionPolicy({ ignorePath })).toThrow(/duplicate field 'id'/);
+      } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    it('rejects alternate field names in vulnerability item', () => {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'acos_trivy_alt_'));
+      try {
+        const ignorePath = path.join(tempDir, '.trivyignore.yaml');
+        fs.writeFileSync(
+          ignorePath,
+          `vulnerabilities:\n  - cve: ${REQUIRED_CVE}\n    paths:\n      - ${REQUIRED_PATH}\n    expired_at: ${REQUIRED_EXPIRY}\n    statement: see security/exceptions/TASK-003-CVE-2025-68121-GOSU.md\n`,
+        );
+
+        expect(() => verifyTrivyExceptionPolicy({ ignorePath })).toThrow(
+          /unexpected or unknown field 'cve'/,
+        );
+      } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    });
+
     it('rejects wildcard paths in .trivyignore.yaml', () => {
       const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'acos_trivy_wildcard_'));
       try {

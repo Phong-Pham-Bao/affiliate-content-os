@@ -22,6 +22,8 @@ export const REQUIRED_EVIDENCE_URLS = Object.freeze([
   'https://github.com/docker-library/postgres/blob/master/18/bookworm/Dockerfile',
 ]);
 
+export const APPROVED_ITEM_FIELDS = Object.freeze(['id', 'paths', 'expired_at', 'statement']);
+
 /**
  * Parses a simple .trivyignore.yaml file strictly ensuring only the approved schema.
  */
@@ -30,6 +32,7 @@ export function parseTrivyIgnoreYaml(content) {
   const topLevelKeys = [];
   const entries = [];
   let currentEntry = null;
+  let currentSeenKeys = null;
   let currentKey = null;
 
   for (let i = 0; i < lines.length; i++) {
@@ -40,47 +43,104 @@ export function parseTrivyIgnoreYaml(content) {
     }
 
     const topLevelMatch = rawLine.match(/^([a-zA-Z0-9_-]+):/);
-    if (topLevelMatch) {
+    if (topLevelMatch && !rawLine.startsWith(' ') && !rawLine.startsWith('\t')) {
       const key = topLevelMatch[1];
+      if (topLevelKeys.includes(key)) {
+        throw new Error(`.trivyignore.yaml contains duplicate top-level key '${key}'`);
+      }
       topLevelKeys.push(key);
       currentKey = key;
       continue;
     }
 
     if (currentKey === 'vulnerabilities') {
-      const itemStartMatch = rawLine.match(/^\s*-\s+([a-zA-Z0-9_-]+):\s*(.*)$/);
+      const itemStartMatch = rawLine.match(/^\s{2,4}-\s+([a-zA-Z0-9_-]+):\s*(.*)$/);
       if (itemStartMatch) {
-        currentEntry = { paths: [] };
+        currentEntry = { inBlockScalar: false };
+        currentSeenKeys = new Set();
         entries.push(currentEntry);
         const propKey = itemStartMatch[1];
         const propVal = itemStartMatch[2].trim();
-        currentEntry[propKey] = propVal;
-        continue;
-      }
-
-      const propMatch = rawLine.match(/^\s+([a-zA-Z0-9_-]+):\s*(.*)$/);
-      if (propMatch && currentEntry) {
-        const propKey = propMatch[1];
-        const propVal = propMatch[2].trim();
-        if (propKey === 'paths' && propVal === '') {
-          currentEntry.paths = [];
+        if (!APPROVED_ITEM_FIELDS.includes(propKey)) {
+          throw new Error(
+            `.trivyignore.yaml item contains unexpected or unknown field '${propKey}'`,
+          );
+        }
+        currentSeenKeys.add(propKey);
+        if (propKey === 'paths') {
+          currentEntry.paths = propVal ? [propVal] : [];
         } else {
           currentEntry[propKey] = propVal;
         }
         continue;
       }
 
-      const pathItemMatch = rawLine.match(/^\s+-\s+([^\s#]+)$/);
+      if (currentEntry && currentEntry.inBlockScalar) {
+        if (rawLine.startsWith('      ')) {
+          if (currentEntry.statement) {
+            currentEntry.statement += ' ' + trimmed;
+          } else {
+            currentEntry.statement = trimmed;
+          }
+          continue;
+        } else {
+          currentEntry.inBlockScalar = false;
+        }
+      }
+
+      const pathItemMatch = rawLine.match(/^\s{6}-\s+([^\s#]+)$/);
       if (pathItemMatch && currentEntry) {
+        if (!Array.isArray(currentEntry.paths)) {
+          throw new Error(`.trivyignore.yaml contains list item before 'paths:' declaration`);
+        }
         currentEntry.paths.push(pathItemMatch[1]);
         continue;
       }
 
-      if (rawLine.startsWith('    ') && currentEntry && currentEntry.statement !== undefined) {
-        currentEntry.statement += ' ' + trimmed;
+      const propMatch = rawLine.match(/^\s{4}([a-zA-Z0-9_-]+):\s*(.*)$/);
+      if (propMatch && currentEntry) {
+        const propKey = propMatch[1];
+        const propVal = propMatch[2].trim();
+        if (!APPROVED_ITEM_FIELDS.includes(propKey)) {
+          throw new Error(
+            `.trivyignore.yaml item contains unexpected or unknown field '${propKey}'`,
+          );
+        }
+        if (currentSeenKeys.has(propKey)) {
+          throw new Error(`.trivyignore.yaml item contains duplicate field '${propKey}'`);
+        }
+        currentSeenKeys.add(propKey);
+        if (propKey === 'paths' && propVal === '') {
+          currentEntry.paths = [];
+        } else if (propKey === 'statement') {
+          if (propVal === '>-' || propVal === '>' || propVal === '|') {
+            currentEntry.statement = '';
+            currentEntry.inBlockScalar = true;
+          } else {
+            currentEntry.statement = propVal;
+          }
+        } else {
+          currentEntry[propKey] = propVal;
+        }
         continue;
       }
+
+      if (rawLine.startsWith('    ') && currentEntry && currentEntry.statement !== undefined) {
+        if (currentEntry.statement) {
+          currentEntry.statement += ' ' + trimmed;
+        } else {
+          currentEntry.statement = trimmed;
+        }
+        continue;
+      }
+
+      throw new Error(`.trivyignore.yaml contains malformed or unexpected line: '${trimmed}'`);
     }
+  }
+
+  // Clean internal tracking property
+  for (const entry of entries) {
+    delete entry.inBlockScalar;
   }
 
   return { topLevelKeys, entries };
@@ -112,6 +172,19 @@ export function verifyTrivyExceptionPolicy({
   }
 
   const item = entries[0];
+  const itemKeys = Object.keys(item).sort();
+  const expectedKeys = [...APPROVED_ITEM_FIELDS].sort();
+  for (const expectedKey of expectedKeys) {
+    if (!itemKeys.includes(expectedKey)) {
+      throw new Error(`.trivyignore.yaml item missing required field '${expectedKey}'`);
+    }
+  }
+  for (const itemKey of itemKeys) {
+    if (!APPROVED_ITEM_FIELDS.includes(itemKey)) {
+      throw new Error(`.trivyignore.yaml item contains unexpected or unknown field '${itemKey}'`);
+    }
+  }
+
   if (item.id !== REQUIRED_CVE) {
     throw new Error(`.trivyignore.yaml item id must be '${REQUIRED_CVE}', but got '${item.id}'`);
   }

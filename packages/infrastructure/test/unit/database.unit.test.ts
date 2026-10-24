@@ -631,5 +631,354 @@ describe('Database client and transaction manager (unit tests with fakes)', () =
       }
       expect(err.message).toContain('postgresql://[REDACTED]');
     });
+
+    it('sanitizes DatabaseError with credential-bearing stack and cause through withTransaction', async () => {
+      const sentinels = ['db_err_user', 'db_err_secret_pwd', '192.168.1.100', 'db_err_db'];
+      const secretUrl = 'postgresql://db_err_user:db_err_secret_pwd@192.168.1.100:5432/db_err_db';
+
+      const { mockPool } = createMockPool();
+      const db = createDatabase(dummyConfig, { poolFactory: () => mockPool });
+
+      const dbErr = new DatabaseError(`DatabaseError failure with ${secretUrl}`, {
+        code: 'DATABASE_ERROR',
+      });
+      dbErr.stack = `DatabaseError: query failed\n    at postgresql://db_err_user:db_err_secret_pwd@192.168.1.100:5432/db_err_db\n    at query (/app/src/db.ts:1:1)`;
+      const causeErr = new Error(`Cause connection error to ${secretUrl}`);
+      causeErr.stack = `Error: Cause connection error to ${secretUrl}\n    at connect (/app/src/conn.ts:2:2)`;
+      dbErr.cause = causeErr;
+
+      let caught: unknown;
+      try {
+        await db.withTransaction(async () => {
+          throw dbErr;
+        });
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBe(dbErr);
+      const res = caught as DatabaseError;
+      const json = JSON.stringify(res);
+      const inspected = util.inspect(res);
+
+      for (const sentinel of sentinels) {
+        expect(res.message).not.toContain(sentinel);
+        expect(res.stack).not.toContain(sentinel);
+        expect(inspected).not.toContain(sentinel);
+        if (json) {
+          expect(json).not.toContain(sentinel);
+        }
+        if (res.cause instanceof Error) {
+          expect(res.cause.message).not.toContain(sentinel);
+          expect(res.cause.stack).not.toContain(sentinel);
+          expect(util.inspect(res.cause)).not.toContain(sentinel);
+        }
+      }
+      expect(res.message).toContain('postgresql://[REDACTED]');
+      expect(res.stack).toContain('postgresql://[REDACTED]');
+    });
+
+    it('sanitizes custom Error inspection and JSON serialization through withTransaction', async () => {
+      const sentinels = ['custom_user', 'custom_pass', '172.16.0.5', 'custom_db'];
+      const secretUrl = 'postgresql://custom_user:custom_pass@172.16.0.5:5432/custom_db';
+
+      class CustomTestError extends Error {
+        public secret = secretUrl;
+        constructor() {
+          super(`Custom failure connecting to ${secretUrl}`);
+          this.name = 'CustomTestError';
+        }
+        public toJSON() {
+          return {
+            name: this.name,
+            message: this.message,
+            secretUrl: this.secret,
+          };
+        }
+        public [Symbol.for('nodejs.util.inspect.custom')]() {
+          return `[CustomTestError: ${this.message} (url: ${this.secret})]`;
+        }
+      }
+
+      const { mockPool } = createMockPool();
+      const db = createDatabase(dummyConfig, { poolFactory: () => mockPool });
+
+      const customErr = new CustomTestError();
+      customErr.stack = `CustomTestError: Custom failure connecting to ${secretUrl}\n    at run (/app/test.ts:5:5)`;
+
+      let caught: unknown;
+      try {
+        await db.withTransaction(async () => {
+          throw customErr;
+        });
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBe(customErr);
+      const cast = caught as CustomTestError;
+
+      const inspected = util.inspect(cast);
+      const serialized = JSON.stringify(cast);
+      const stringified = String(cast);
+
+      for (const s of sentinels) {
+        expect(cast.message).not.toContain(s);
+        expect(cast.stack).not.toContain(s);
+        expect(cast.secret).not.toContain(s);
+        expect(inspected).not.toContain(s);
+        expect(serialized).not.toContain(s);
+        expect(stringified).not.toContain(s);
+      }
+      expect(inspected).toContain('postgresql://[REDACTED]');
+      expect(serialized).toContain('postgresql://[REDACTED]');
+    });
+
+    it('sanitizes plain-object rejection through withTransaction', async () => {
+      const sentinels = ['plain_user', 'plain_pass', '10.10.10.10', 'plain_db'];
+      const secretUrl = 'postgresql://plain_user:plain_pass@10.10.10.10:5432/plain_db';
+
+      const plainObj = {
+        status: 'error',
+        message: `Plain object failure with ${secretUrl}`,
+        url: secretUrl,
+        nested: {
+          connection: secretUrl,
+        },
+      };
+
+      const { mockPool } = createMockPool();
+      const db = createDatabase(dummyConfig, { poolFactory: () => mockPool });
+
+      let caught: unknown;
+      try {
+        await db.withTransaction(async () => {
+          throw plainObj;
+        });
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBe(plainObj);
+      const cast = caught as typeof plainObj;
+
+      const inspected = util.inspect(cast);
+      const serialized = JSON.stringify(cast);
+
+      for (const s of sentinels) {
+        expect(cast.message).not.toContain(s);
+        expect(cast.url).not.toContain(s);
+        expect(cast.nested.connection).not.toContain(s);
+        expect(inspected).not.toContain(s);
+        expect(serialized).not.toContain(s);
+      }
+      expect(cast.url).toBe('postgresql://[REDACTED]');
+      expect(cast.nested.connection).toBe('postgresql://[REDACTED]');
+    });
+
+    it('sanitizes accessor-backed properties through withTransaction', async () => {
+      const sentinels = ['acc_user', 'acc_pass', '10.20.30.40', 'acc_db'];
+      const secretUrl = 'postgresql://acc_user:acc_pass@10.20.30.40:5432/acc_db';
+
+      const err = new Error('Accessor error');
+      Object.defineProperty(err, 'secretProp', {
+        get() {
+          return secretUrl;
+        },
+        enumerable: true,
+        configurable: true,
+      });
+
+      const { mockPool } = createMockPool();
+      const db = createDatabase(dummyConfig, { poolFactory: () => mockPool });
+
+      let caught: unknown;
+      try {
+        await db.withTransaction(async () => {
+          throw err;
+        });
+      } catch (e) {
+        caught = e;
+      }
+
+      expect(caught).toBe(err);
+      const cast = caught as Error & { secretProp: string };
+
+      const inspected = util.inspect(cast);
+      const serialized = JSON.stringify(cast);
+      const accessedValue = cast.secretProp;
+
+      for (const s of sentinels) {
+        expect(accessedValue).not.toContain(s);
+        expect(inspected).not.toContain(s);
+        expect(serialized).not.toContain(s);
+      }
+      expect(accessedValue).toBe('postgresql://[REDACTED]');
+    });
+
+    it('handles cyclic Error.cause without throwing RangeError or leaking credentials through withTransaction', async () => {
+      const sentinels = ['cyclic_user', 'cyclic_pass', '10.30.40.50', 'cyclic_db'];
+      const secretUrl = 'postgresql://cyclic_user:cyclic_pass@10.30.40.50:5432/cyclic_db';
+
+      const errA = new Error(`Cyclic A error: ${secretUrl}`);
+      const errB = new Error(`Cyclic B error: ${secretUrl}`);
+      errA.cause = errB;
+      errB.cause = errA;
+
+      const { mockPool } = createMockPool();
+      const db = createDatabase(dummyConfig, { poolFactory: () => mockPool });
+
+      let caught: unknown;
+      try {
+        await db.withTransaction(async () => {
+          throw errA;
+        });
+      } catch (e) {
+        caught = e;
+      }
+
+      expect(caught).toBe(errA);
+      const cast = caught as Error & { cause: Error & { cause: Error } };
+
+      for (const s of sentinels) {
+        expect(cast.message).not.toContain(s);
+        expect(cast.cause.message).not.toContain(s);
+        expect(util.inspect(cast)).not.toContain(s);
+      }
+      expect(cast.cause.cause).toBe(cast); // cycle preserved
+      expect(cast.message).toContain('postgresql://[REDACTED]');
+    });
+
+    it('handles throwing accessors safely without crashing or replacing primary error through withTransaction', async () => {
+      const err = new Error('Throwing accessor base error');
+      Object.defineProperty(err, 'explodingProp', {
+        get() {
+          throw new Error('Getter explosion!');
+        },
+        enumerable: true,
+        configurable: true,
+      });
+
+      const { mockPool } = createMockPool();
+      const db = createDatabase(dummyConfig, { poolFactory: () => mockPool });
+
+      let caught: unknown;
+      try {
+        await db.withTransaction(async () => {
+          throw err;
+        });
+      } catch (e) {
+        caught = e;
+      }
+
+      expect(caught).toBe(err);
+      expect((caught as Error).message).toBe('Throwing accessor base error');
+      expect(() => (caught as Record<string, unknown>)['explodingProp']).toThrow(
+        'Getter explosion!',
+      );
+    });
+
+    it('prevents credential disclosure in child-process output', async () => {
+      const { spawn } = await import('node:child_process');
+
+      const sentinels = ['child_user', 'child_secret_pass', '192.168.99.88', 'child_db'];
+      const secretUrl = 'postgresql://child_user:child_secret_pass@192.168.99.88:5432/child_db';
+
+      const script = `
+        import { createDatabase } from './packages/infrastructure/src/database/index.ts';
+        const dummyConfig = {
+          databaseUrl: '${secretUrl}',
+          poolMax: 2,
+          connectionTimeoutMs: 1000,
+          idleTimeoutMs: 1000,
+          statementTimeoutMs: 1000,
+          sslMode: 'disable',
+        };
+        const mockPool = {
+          on: () => {},
+          connect: async () => ({
+            query: async () => ({ rows: [], rowCount: 0, command: 'SELECT' }),
+            release: () => {},
+            on: () => {},
+            removeListener: () => {},
+          }),
+        };
+        const db = createDatabase(dummyConfig, { poolFactory: () => mockPool });
+        try {
+          await db.withTransaction(async () => {
+            const err = new Error('Failed inside child transaction: ${secretUrl}');
+            err.stack = 'Error: Failed inside child transaction: ${secretUrl}\\n    at child:1:1';
+            throw err;
+          });
+        } catch (err) {
+          console.error(err);
+          process.exit(1);
+        }
+      `;
+
+      const child = spawn(
+        process.execPath,
+        ['--conditions=development', '--import', 'tsx', '-e', script],
+        {
+          cwd: process.cwd(),
+          stdio: ['pipe', 'pipe', 'pipe'],
+        },
+      );
+
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (d) => {
+        stdout += d.toString();
+      });
+      child.stderr.on('data', (d) => {
+        stderr += d.toString();
+      });
+
+      const exitCode = await new Promise<number>((resolve) => {
+        child.on('close', resolve);
+      });
+
+      expect(exitCode).toBe(1);
+      const combined = stdout + stderr;
+      for (const s of sentinels) {
+        expect(combined).not.toContain(s);
+      }
+      expect(combined).toContain('postgresql://[REDACTED]');
+    });
+
+    it('prevents credential disclosure in logger output arguments', async () => {
+      const sentinels = ['log_user', 'log_secret_password', '10.50.60.70', 'log_db'];
+      const secretUrl = 'postgresql://log_user:log_secret_password@10.50.60.70:5432/log_db';
+
+      const { mockPool } = createMockPool();
+      const db = createDatabase(dummyConfig, { poolFactory: () => mockPool });
+
+      const logger = {
+        error: vi.fn(),
+        warn: vi.fn(),
+        info: vi.fn(),
+      };
+
+      try {
+        await db.withTransaction(async () => {
+          const err = new Error(`Transaction error for logger: ${secretUrl}`);
+          err.stack = `Error: Transaction error for logger: ${secretUrl}\n    at log:1:1`;
+          throw err;
+        });
+      } catch (err) {
+        logger.error('Transaction execution encountered an error:', err);
+      }
+
+      expect(logger.error).toHaveBeenCalledTimes(1);
+      const loggedArgs = logger.error.mock.calls[0]!;
+      const serialized = JSON.stringify(loggedArgs);
+      const inspected = util.inspect(loggedArgs);
+
+      for (const s of sentinels) {
+        expect(serialized).not.toContain(s);
+        expect(inspected).not.toContain(s);
+      }
+      expect(inspected).toContain('postgresql://[REDACTED]');
+    });
   });
 });
