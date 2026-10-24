@@ -1,6 +1,7 @@
 import util from 'node:util';
 import {
   getDatabaseError,
+  hasProxyInPrototypeChain,
   hasSensitiveUrl,
   registerDatabaseErrorPrototype,
   sanitizeCallbackError,
@@ -21,8 +22,21 @@ const V8_ERROR_STACK_DESCRIPTOR = Object.getOwnPropertyDescriptor(new Error(), '
 const V8_NATIVE_STACK_GETTER = V8_ERROR_STACK_DESCRIPTOR?.get;
 const V8_NATIVE_STACK_SETTER = V8_ERROR_STACK_DESCRIPTOR?.set;
 
+const GENUINE_DATABASE_ERRORS = new WeakSet<object>();
+
+export function isDatabaseError(value: unknown): value is DatabaseError {
+  return typeof value === 'object' && value !== null && GENUINE_DATABASE_ERRORS.has(value);
+}
+
 export class DatabaseError extends Error {
   public readonly code?: string | undefined;
+
+  public static override [Symbol.hasInstance](this: object, value: unknown): boolean {
+    if (this === DatabaseError) {
+      return isDatabaseError(value);
+    }
+    return isDatabaseError(value) && Function.prototype[Symbol.hasInstance].call(this, value);
+  }
 
   constructor(
     message: string,
@@ -30,6 +44,7 @@ export class DatabaseError extends Error {
   ) {
     super(stripCredentials(message));
     this.name = 'DatabaseError';
+    GENUINE_DATABASE_ERRORS.add(this);
     if (options?.code !== undefined) {
       this.code = options.code;
     }
@@ -123,6 +138,9 @@ const KNOWN_CODES: Readonly<Record<string, KnownErrorClassification>> = {
 };
 
 function getSafeOwnStringProperty(obj: object, prop: string): string | undefined {
+  if (util.types.isProxy(obj)) {
+    return undefined;
+  }
   try {
     const desc = Object.getOwnPropertyDescriptor(obj, prop);
     if (!desc) return undefined;
@@ -136,7 +154,7 @@ function getSafeOwnStringProperty(obj: object, prop: string): string | undefined
 
 function classifyRawError(err: unknown): KnownErrorClassification {
   try {
-    if (!err || typeof err !== 'object' || util.types.isProxy(err)) {
+    if (!err || typeof err !== 'object' || hasProxyInPrototypeChain(err as object)) {
       return { code: 'DATABASE_ERROR', message: 'Database operation failed' };
     }
 
@@ -203,16 +221,16 @@ export function sanitizeDatabaseError(
     : 'Database operation failed';
 
   try {
-    if (err === null || err === undefined || typeof err !== 'object' || util.types.isProxy(err)) {
+    if (
+      err === null ||
+      err === undefined ||
+      typeof err !== 'object' ||
+      hasProxyInPrototypeChain(err as object)
+    ) {
       return new DatabaseError(fallbackMessage, { code: 'DATABASE_ERROR' });
     }
 
-    let isDbError = false;
-    try {
-      isDbError = err instanceof DatabaseError;
-    } catch {
-      isDbError = false;
-    }
+    const isDbError = isDatabaseError(err);
 
     if (isDbError) {
       let msgDesc: PropertyDescriptor | undefined;

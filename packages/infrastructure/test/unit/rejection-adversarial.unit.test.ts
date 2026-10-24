@@ -522,4 +522,179 @@ describe('Finding 1: Adversarial Rejection Sanitization Tests', () => {
       expect(combinedOutput).not.toContain(sentinel);
     }
   });
+
+  it('Case A: replaces rejection of ordinary object with Proxy in prototype chain without invoking any traps', async () => {
+    let ownKeysCalls = 0;
+    let getProtoCalls = 0;
+    let getDescCalls = 0;
+    let getCalls = 0;
+    const proxy = new Proxy(
+      {},
+      {
+        ownKeys() {
+          ownKeysCalls++;
+          throw new Error(`Trap ownKeys with ${secretUrl}`);
+        },
+        getPrototypeOf() {
+          getProtoCalls++;
+          throw new Error(`Trap getPrototypeOf with ${secretUrl}`);
+        },
+        getOwnPropertyDescriptor() {
+          getDescCalls++;
+          throw new Error(`Trap getOwnPropertyDescriptor with ${secretUrl}`);
+        },
+        get() {
+          getCalls++;
+          throw new Error(`Trap get with ${secretUrl}`);
+        },
+      },
+    );
+
+    const ordinaryObj = {};
+    Object.setPrototypeOf(ordinaryObj, proxy);
+
+    const { mockPool, mockClient, clientQueries } = createMockPool();
+    const db = createDatabase(dummyConfig, { poolFactory: () => mockPool });
+
+    let caught: unknown;
+    try {
+      await db.withTransaction(async () => {
+        throw ordinaryObj;
+      });
+    } catch (e) {
+      caught = e;
+    }
+
+    assertSafeRejectionResult({
+      caughtErr: caught,
+      originalErr: ordinaryObj,
+      sentinels,
+      clientQueries,
+      mockClient,
+      hookCounters: [ownKeysCalls, getProtoCalls, getDescCalls, getCalls],
+    });
+  });
+
+  it('Case A: replaces rejection of ordinary object with multi-level Proxy in prototype chain without invoking any traps', async () => {
+    let ownKeysCalls = 0;
+    let getProtoCalls = 0;
+    let getDescCalls = 0;
+    let getCalls = 0;
+    const proxy = new Proxy(
+      {},
+      {
+        ownKeys() {
+          ownKeysCalls++;
+          throw new Error(`Trap ownKeys with ${secretUrl}`);
+        },
+        getPrototypeOf() {
+          getProtoCalls++;
+          throw new Error(`Trap getPrototypeOf with ${secretUrl}`);
+        },
+        getOwnPropertyDescriptor() {
+          getDescCalls++;
+          throw new Error(`Trap getOwnPropertyDescriptor with ${secretUrl}`);
+        },
+        get() {
+          getCalls++;
+          throw new Error(`Trap get with ${secretUrl}`);
+        },
+      },
+    );
+
+    const mid = Object.create(proxy);
+    const ordinaryObj = Object.create(mid);
+
+    const { mockPool, mockClient, clientQueries } = createMockPool();
+    const db = createDatabase(dummyConfig, { poolFactory: () => mockPool });
+
+    let caught: unknown;
+    try {
+      await db.withTransaction(async () => {
+        throw ordinaryObj;
+      });
+    } catch (e) {
+      caught = e;
+    }
+
+    assertSafeRejectionResult({
+      caughtErr: caught,
+      originalErr: ordinaryObj,
+      sentinels,
+      clientQueries,
+      mockClient,
+      hookCounters: [ownKeysCalls, getProtoCalls, getDescCalls, getCalls],
+    });
+  });
+
+  it('Case A child-process regression: ordinary object with Proxy prototype never triggers traps and no credential reaches stdout or stderr', async () => {
+    const childScript = `
+      import { createDatabase, DatabaseError } from './packages/infrastructure/src/database/index.ts';
+      const dummyConfig = {
+        databaseUrl: 'postgresql://acos_local:acos_local_only@127.0.0.1:5432/acos_dev',
+        poolMax: 2,
+        connectionTimeoutMs: 1000,
+        idleTimeoutMs: 1000,
+        statementTimeoutMs: 1000,
+        sslMode: 'disable',
+      };
+      const mockPool = {
+        on: () => {},
+        connect: async () => ({
+          query: async () => ({ rows: [], rowCount: 0, command: 'SELECT' }),
+          release: () => {},
+          on: () => {},
+          removeListener: () => {},
+        }),
+      };
+      const db = createDatabase(dummyConfig, { poolFactory: () => mockPool });
+      let trapCalls = 0;
+      const proxy = new Proxy({}, {
+        ownKeys() { trapCalls++; console.error('${secretUrl}'); throw new Error('TRAP_OWNKEYS'); },
+        getPrototypeOf() { trapCalls++; console.error('${secretUrl}'); throw new Error('TRAP_GETPROTO'); },
+        getOwnPropertyDescriptor() { trapCalls++; console.error('${secretUrl}'); throw new Error('TRAP_DESC'); },
+        get() { trapCalls++; console.error('${secretUrl}'); throw new Error('TRAP_GET'); },
+      });
+      const ordinaryObj = {};
+      Object.setPrototypeOf(ordinaryObj, proxy);
+      try {
+        await db.withTransaction(async () => {
+          throw ordinaryObj;
+        });
+      } catch (caught) {
+        if (caught instanceof DatabaseError && trapCalls === 0) {
+          process.exit(0);
+        }
+        process.exit(2);
+      }
+    `;
+
+    const child = spawn(
+      process.execPath,
+      ['--conditions=development', '--import', 'tsx', '-e', childScript],
+      {
+        cwd: process.cwd(),
+        stdio: ['pipe', 'pipe', 'pipe'],
+      },
+    );
+
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (d) => {
+      stdout += d.toString();
+    });
+    child.stderr.on('data', (d) => {
+      stderr += d.toString();
+    });
+
+    const exitCode = await new Promise<number>((resolve) => {
+      child.on('close', resolve);
+    });
+
+    expect(exitCode).toBe(0);
+    const combinedOutput = stdout + stderr;
+    for (const sentinel of sentinels) {
+      expect(combinedOutput).not.toContain(sentinel);
+    }
+  });
 });

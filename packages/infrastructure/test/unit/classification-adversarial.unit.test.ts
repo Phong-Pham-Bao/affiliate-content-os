@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import util from 'node:util';
 import type { DatabaseConfig } from '@affiliate-content-os/config';
 import type pg from 'pg';
@@ -48,6 +49,45 @@ function createHostileProxyError() {
     },
   });
   return { proxy, getTrapCalls: () => trapCalls };
+}
+
+function createHostilePrototypeProxyError() {
+  let getCalls = 0;
+  let getProtoCalls = 0;
+  let ownKeysCalls = 0;
+  let getDescCalls = 0;
+  const proxy = new Proxy(
+    {},
+    {
+      get(_t, prop) {
+        getCalls++;
+        throw new Error(`Proxy trap get [${String(prop)}] with ${secretUrl}`);
+      },
+      getPrototypeOf() {
+        getProtoCalls++;
+        throw new Error(`Proxy trap getPrototypeOf with ${secretUrl}`);
+      },
+      ownKeys() {
+        ownKeysCalls++;
+        throw new Error(`Proxy trap ownKeys with ${secretUrl}`);
+      },
+      getOwnPropertyDescriptor() {
+        getDescCalls++;
+        throw new Error(`Proxy trap getOwnPropertyDescriptor with ${secretUrl}`);
+      },
+    },
+  );
+  const err = Object.create(proxy);
+  return {
+    err,
+    proxy,
+    getTraps: () => ({
+      get: getCalls,
+      getPrototypeOf: getProtoCalls,
+      ownKeys: ownKeysCalls,
+      getOwnPropertyDescriptor: getDescCalls,
+    }),
+  };
 }
 
 function assertSafeDatabaseError(err: unknown, original: unknown) {
@@ -464,6 +504,223 @@ describe('Finding 2: Hostile Raw Database-Error Classification Regression Covera
       expect(capturedSafeError).toBeDefined();
       assertSafeDatabaseError(capturedSafeError, err);
       expect(getCodeCalls()).toBe(0);
+    });
+  });
+
+  describe('Case B: Ordinary object with Proxy prototype regression coverage', () => {
+    it('sanitizes ordinary object with Proxy prototype in direct sanitizeDatabaseError with zero trap invocations', () => {
+      const { err, getTraps } = createHostilePrototypeProxyError();
+      const sanitized = sanitizeDatabaseError(err, 'Direct context');
+
+      assertSafeDatabaseError(sanitized, err);
+      const traps = getTraps();
+      expect(traps.getPrototypeOf).toBe(0);
+      expect(traps.ownKeys).toBe(0);
+      expect(traps.getOwnPropertyDescriptor).toBe(0);
+      expect(traps.get).toBe(0);
+      expect(sanitized.code).toBe('DATABASE_ERROR');
+      expect(sanitized.message).toBe('Direct context: Database operation failed');
+    });
+
+    it('handles ordinary object with Proxy prototype in database.query with zero trap invocations', async () => {
+      const { err, getTraps } = createHostilePrototypeProxyError();
+      const mockPool = {
+        query: vi.fn(async () => {
+          throw err;
+        }),
+        connect: vi.fn(),
+        end: vi.fn(),
+        on: vi.fn(),
+      };
+      const db = createDatabase(dummyConfig, { poolFactory: () => mockPool as unknown as pg.Pool });
+
+      let caught: unknown;
+      try {
+        await db.query('SELECT 1');
+      } catch (e) {
+        caught = e;
+      }
+
+      assertSafeDatabaseError(caught, err);
+      const traps = getTraps();
+      expect(traps.getPrototypeOf).toBe(0);
+      expect(traps.ownKeys).toBe(0);
+      expect(traps.getOwnPropertyDescriptor).toBe(0);
+      expect(traps.get).toBe(0);
+    });
+
+    it('handles ordinary object with Proxy prototype in database.probe with zero trap invocations', async () => {
+      const { err, getTraps } = createHostilePrototypeProxyError();
+      const mockPool = {
+        connect: vi.fn(async () => {
+          throw err;
+        }),
+        query: vi.fn(),
+        end: vi.fn(),
+        on: vi.fn(),
+      };
+      const db = createDatabase(dummyConfig, { poolFactory: () => mockPool as unknown as pg.Pool });
+
+      let caught: unknown;
+      try {
+        await db.probe();
+      } catch (e) {
+        caught = e;
+      }
+
+      assertSafeDatabaseError(caught, err);
+      const traps = getTraps();
+      expect(traps.getPrototypeOf).toBe(0);
+      expect(traps.ownKeys).toBe(0);
+      expect(traps.getOwnPropertyDescriptor).toBe(0);
+      expect(traps.get).toBe(0);
+    });
+
+    it('handles ordinary object with Proxy prototype in withTransaction connect failure with zero trap invocations', async () => {
+      const { err, getTraps } = createHostilePrototypeProxyError();
+      const mockPool = {
+        connect: vi.fn(async () => {
+          throw err;
+        }),
+        query: vi.fn(),
+        end: vi.fn(),
+        on: vi.fn(),
+      };
+      const db = createDatabase(dummyConfig, { poolFactory: () => mockPool as unknown as pg.Pool });
+
+      let caught: unknown;
+      try {
+        await db.withTransaction(async () => 'ok');
+      } catch (e) {
+        caught = e;
+      }
+
+      assertSafeDatabaseError(caught, err);
+      const traps = getTraps();
+      expect(traps.getPrototypeOf).toBe(0);
+      expect(traps.ownKeys).toBe(0);
+      expect(traps.getOwnPropertyDescriptor).toBe(0);
+      expect(traps.get).toBe(0);
+    });
+
+    it('handles ordinary object with Proxy prototype in withTransaction tx.query failure with zero trap invocations', async () => {
+      const { err, getTraps } = createHostilePrototypeProxyError();
+      const mockClient = {
+        query: vi.fn(async (text: string) => {
+          if (text === 'SELECT 1') {
+            throw err;
+          }
+          return { rows: [], rowCount: 0, command: 'SELECT' };
+        }),
+        release: vi.fn(),
+        on: vi.fn(),
+        removeListener: vi.fn(),
+      };
+      const mockPool = {
+        connect: vi.fn(async () => mockClient),
+        query: vi.fn(),
+        end: vi.fn(),
+        on: vi.fn(),
+      };
+      const db = createDatabase(dummyConfig, { poolFactory: () => mockPool as unknown as pg.Pool });
+
+      let caught: unknown;
+      try {
+        await db.withTransaction(async (tx) => {
+          await tx.query('SELECT 1');
+        });
+      } catch (e) {
+        caught = e;
+      }
+
+      assertSafeDatabaseError(caught, err);
+      const traps = getTraps();
+      expect(traps.getPrototypeOf).toBe(0);
+      expect(traps.ownKeys).toBe(0);
+      expect(traps.getOwnPropertyDescriptor).toBe(0);
+      expect(traps.get).toBe(0);
+    });
+
+    it('handles ordinary object with Proxy prototype in pool idle client error with zero trap invocations', () => {
+      const { err, getTraps } = createHostilePrototypeProxyError();
+      let capturedSafeError: Error | undefined;
+      let poolErrorHandler: ((e: unknown) => void) | undefined;
+
+      const mockPool = {
+        connect: vi.fn(),
+        query: vi.fn(),
+        end: vi.fn(),
+        on: vi.fn((event: string, handler: (e: unknown) => void) => {
+          if (event === 'error') {
+            poolErrorHandler = handler;
+          }
+        }),
+      };
+
+      createDatabase(dummyConfig, {
+        poolFactory: () => mockPool as unknown as pg.Pool,
+        onPoolError: (safeErr) => {
+          capturedSafeError = safeErr;
+        },
+      });
+
+      expect(poolErrorHandler).toBeDefined();
+      poolErrorHandler!(err);
+
+      expect(capturedSafeError).toBeDefined();
+      assertSafeDatabaseError(capturedSafeError, err);
+      const traps = getTraps();
+      expect(traps.getPrototypeOf).toBe(0);
+      expect(traps.ownKeys).toBe(0);
+      expect(traps.getOwnPropertyDescriptor).toBe(0);
+      expect(traps.get).toBe(0);
+    });
+
+    it('Case B child-process regression: ordinary object with Proxy prototype never triggers traps and no credential reaches stdout or stderr', async () => {
+      const childScript = `
+        import { sanitizeDatabaseError, DatabaseError } from './packages/infrastructure/src/database/errors.ts';
+        let trapCalls = 0;
+        const proxy = new Proxy({}, {
+          get() { trapCalls++; console.error('${secretUrl}'); throw new Error('TRAP_GET'); },
+          getPrototypeOf() { trapCalls++; console.error('${secretUrl}'); throw new Error('TRAP_GETPROTO'); },
+          ownKeys() { trapCalls++; console.error('${secretUrl}'); throw new Error('TRAP_OWNKEYS'); },
+          getOwnPropertyDescriptor() { trapCalls++; console.error('${secretUrl}'); throw new Error('TRAP_DESC'); },
+        });
+        const ordinaryErr = Object.create(proxy);
+        const sanitized = sanitizeDatabaseError(ordinaryErr, 'ChildContext');
+        if (sanitized instanceof DatabaseError && trapCalls === 0) {
+          process.exit(0);
+        }
+        process.exit(2);
+      `;
+
+      const child = spawn(
+        process.execPath,
+        ['--conditions=development', '--import', 'tsx', '-e', childScript],
+        {
+          cwd: process.cwd(),
+          stdio: ['pipe', 'pipe', 'pipe'],
+        },
+      );
+
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (d) => {
+        stdout += d.toString();
+      });
+      child.stderr.on('data', (d) => {
+        stderr += d.toString();
+      });
+
+      const exitCode = await new Promise<number>((resolve) => {
+        child.on('close', resolve);
+      });
+
+      expect(exitCode).toBe(0);
+      const combinedOutput = stdout + stderr;
+      for (const sentinel of sentinels) {
+        expect(combinedOutput).not.toContain(sentinel);
+      }
     });
   });
 });

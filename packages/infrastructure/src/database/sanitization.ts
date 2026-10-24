@@ -65,7 +65,33 @@ const ALLOWED_BUILTIN_PROTOS = new Set<object>([
   EvalError.prototype,
 ]);
 
+export function hasProxyInPrototypeChain(obj: object): boolean {
+  if (util.types.isProxy(obj)) {
+    return true;
+  }
+  const visited = new Set<object>();
+  let current: object | null = obj;
+  while (current !== null) {
+    if (util.types.isProxy(current)) {
+      return true;
+    }
+    if (visited.has(current)) {
+      return true;
+    }
+    visited.add(current);
+    try {
+      current = Object.getPrototypeOf(current);
+    } catch {
+      return true;
+    }
+  }
+  return false;
+}
+
 function safeGetPrototypeOf(obj: object): object | null | undefined {
+  if (util.types.isProxy(obj)) {
+    return undefined;
+  }
   try {
     return Object.getPrototypeOf(obj);
   } catch {
@@ -74,6 +100,9 @@ function safeGetPrototypeOf(obj: object): object | null | undefined {
 }
 
 function safeOwnKeys(obj: object): (string | symbol)[] | null {
+  if (util.types.isProxy(obj)) {
+    return null;
+  }
   try {
     return Reflect.ownKeys(obj);
   } catch {
@@ -85,6 +114,9 @@ function safeGetOwnPropertyDescriptor(
   obj: object,
   key: string | symbol,
 ): PropertyDescriptor | null | undefined {
+  if (util.types.isProxy(obj)) {
+    return null;
+  }
   try {
     return Object.getOwnPropertyDescriptor(obj, key);
   } catch {
@@ -93,6 +125,9 @@ function safeGetOwnPropertyDescriptor(
 }
 
 function safeIsFrozen(obj: object): boolean | null {
+  if (util.types.isProxy(obj)) {
+    return null;
+  }
   try {
     return Object.isFrozen(obj);
   } catch {
@@ -102,6 +137,9 @@ function safeIsFrozen(obj: object): boolean | null {
 
 function sanitizeObjectInPlace(obj: object, visited: Set<unknown>): boolean {
   if (util.types.isProxy(obj)) {
+    return false;
+  }
+  if (hasProxyInPrototypeChain(obj)) {
     return false;
   }
   if (visited.has(obj)) {
@@ -115,11 +153,21 @@ function sanitizeObjectInPlace(obj: object, visited: Set<unknown>): boolean {
     return false;
   }
 
-  while (
-    currentProto !== null &&
-    !ALLOWED_BUILTIN_PROTOS.has(currentProto) &&
-    currentProto !== databaseErrorPrototype
-  ) {
+  const protoVisited = new Set<object>();
+
+  while (currentProto !== null) {
+    if (util.types.isProxy(currentProto)) {
+      return false;
+    }
+    if (protoVisited.has(currentProto)) {
+      return false;
+    }
+    protoVisited.add(currentProto);
+
+    if (ALLOWED_BUILTIN_PROTOS.has(currentProto) || currentProto === databaseErrorPrototype) {
+      break;
+    }
+
     const protoKeys = safeOwnKeys(currentProto);
     if (!protoKeys) return false;
     for (const pKey of protoKeys) {
