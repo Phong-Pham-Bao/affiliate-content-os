@@ -1,4 +1,7 @@
 import type { MembershipId, UserId, WorkspaceId } from './ids.js';
+import type { IsoTimestamp } from './timestamps.js';
+
+export type { IsoTimestamp };
 
 export const USER_STATUSES = ['active', 'disabled', 'deletion_pending'] as const;
 export type UserStatus = (typeof USER_STATUSES)[number];
@@ -35,8 +38,8 @@ export interface UserSnapshot {
   readonly email: string | null;
   readonly displayName: string | null;
   readonly status: UserStatus;
-  readonly createdAt: Date;
-  readonly updatedAt: Date;
+  readonly createdAt: IsoTimestamp;
+  readonly updatedAt: IsoTimestamp;
   readonly version: number;
 }
 
@@ -49,8 +52,8 @@ export interface WorkspaceSnapshot {
   readonly defaultDisclosure: string | null;
   readonly aiEnabled: boolean;
   readonly status: WorkspaceStatus;
-  readonly createdAt: Date;
-  readonly updatedAt: Date;
+  readonly createdAt: IsoTimestamp;
+  readonly updatedAt: IsoTimestamp;
   readonly version: number;
 }
 
@@ -61,8 +64,8 @@ export interface WorkspaceMembershipSnapshot {
   readonly role: WorkspaceRole;
   readonly status: MembershipStatus;
   readonly invitedByUserId: UserId | null;
-  readonly joinedAt: Date | null;
-  readonly createdAt: Date;
-  readonly updatedAt: Date;
+  readonly joinedAt: IsoTimestamp | null;
+  readonly createdAt: IsoTimestamp;
+  readonly updatedAt: IsoTimestamp;
   readonly version: number;
 }

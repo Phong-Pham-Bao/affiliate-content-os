@@ -1,7 +1,9 @@
 import {
+  parseIsoTimestamp,
   parseMembershipId,
   parseUserId,
   parseWorkspaceId,
+  type IsoTimestamp,
   type MembershipStatus,
   type UserSnapshot,
   type UserStatus,
@@ -10,6 +12,7 @@ import {
   type WorkspaceSnapshot,
   type WorkspaceStatus,
 } from '@affiliate-content-os/domain';
+import { DatabaseError } from '../database/errors.js';
 
 export interface RawUserRow {
   readonly id: string;
@@ -50,6 +53,30 @@ export interface RawMembershipRow {
   readonly version: string | number | bigint;
 }
 
+function mapRowTimestamp(value: unknown, fieldName: string): IsoTimestamp {
+  try {
+    if (value instanceof Date) {
+      if (Number.isNaN(value.getTime())) {
+        throw new DatabaseError(`Invalid timestamp value for field "${fieldName}"`);
+      }
+      return parseIsoTimestamp(value.toISOString());
+    }
+    if (typeof value === 'string') {
+      const d = new Date(value);
+      if (Number.isNaN(d.getTime())) {
+        throw new DatabaseError(`Invalid timestamp value for field "${fieldName}"`);
+      }
+      return parseIsoTimestamp(d.toISOString());
+    }
+    throw new DatabaseError(`Invalid timestamp value for field "${fieldName}"`);
+  } catch (err) {
+    if (err instanceof DatabaseError) {
+      throw err;
+    }
+    throw new DatabaseError(`Invalid timestamp value for field "${fieldName}"`);
+  }
+}
+
 export function mapUserRow(row: RawUserRow): UserSnapshot {
   return Object.freeze({
     id: parseUserId(row.id),
@@ -58,8 +85,8 @@ export function mapUserRow(row: RawUserRow): UserSnapshot {
     email: row.email,
     displayName: row.display_name,
     status: row.status as UserStatus,
-    createdAt: new Date(row.created_at),
-    updatedAt: new Date(row.updated_at),
+    createdAt: mapRowTimestamp(row.created_at, 'created_at'),
+    updatedAt: mapRowTimestamp(row.updated_at, 'updated_at'),
     version: Number(row.version),
   });
 }
@@ -74,8 +101,8 @@ export function mapWorkspaceRow(row: RawWorkspaceRow): WorkspaceSnapshot {
     defaultDisclosure: row.default_disclosure,
     aiEnabled: Boolean(row.ai_enabled),
     status: row.status as WorkspaceStatus,
-    createdAt: new Date(row.created_at),
-    updatedAt: new Date(row.updated_at),
+    createdAt: mapRowTimestamp(row.created_at, 'created_at'),
+    updatedAt: mapRowTimestamp(row.updated_at, 'updated_at'),
     version: Number(row.version),
   });
 }
@@ -88,9 +115,12 @@ export function mapMembershipRow(row: RawMembershipRow): WorkspaceMembershipSnap
     role: row.role as WorkspaceRole,
     status: row.status as MembershipStatus,
     invitedByUserId: row.invited_by_user_id ? parseUserId(row.invited_by_user_id) : null,
-    joinedAt: row.joined_at ? new Date(row.joined_at) : null,
-    createdAt: new Date(row.created_at),
-    updatedAt: new Date(row.updated_at),
+    joinedAt:
+      row.joined_at !== null && row.joined_at !== undefined
+        ? mapRowTimestamp(row.joined_at, 'joined_at')
+        : null,
+    createdAt: mapRowTimestamp(row.created_at, 'created_at'),
+    updatedAt: mapRowTimestamp(row.updated_at, 'updated_at'),
     version: Number(row.version),
   });
 }

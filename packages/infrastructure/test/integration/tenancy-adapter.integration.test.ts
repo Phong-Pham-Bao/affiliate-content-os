@@ -1,6 +1,7 @@
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  parseIsoTimestamp,
   parseMembershipId,
   parseUserId,
   parseWorkspaceId,
@@ -8,6 +9,7 @@ import {
   type WorkspaceSnapshot,
 } from '@affiliate-content-os/domain';
 import { SlugConflictError } from '@affiliate-content-os/application';
+import { DatabaseError } from '../../src/database/errors.js';
 import { createDatabase } from '../../src/database/index.js';
 import { createPostgresTenancyAdapter } from '../../src/tenancy/index.js';
 import { setupIsolatedTestDatabase, type TestDatabaseContext } from './helpers/setup.js';
@@ -15,6 +17,8 @@ import { setupIsolatedTestDatabase, type TestDatabaseContext } from './helpers/s
 describe('Real PostgreSQL Tenancy Adapter & Isolation Matrix Integration', () => {
   let context: TestDatabaseContext;
   let client: pg.Client;
+  const nowIso = '2026-10-25T12:00:00.000Z';
+  const now = parseIsoTimestamp(nowIso);
 
   beforeAll(async () => {
     context = await setupIsolatedTestDatabase();
@@ -45,13 +49,12 @@ describe('Real PostgreSQL Tenancy Adapter & Isolation Matrix Integration', () =>
     const userId = parseUserId('0192b012-3456-789a-8bcd-ef0123456801');
     const wsId = parseWorkspaceId('0192b012-3456-789a-8bcd-ef0123456802');
     const memId = parseMembershipId('0192b012-3456-789a-8bcd-ef0123456803');
-    const now = new Date('2026-10-25T12:00:00Z');
 
     // Seed active user
     await client.query(
       `INSERT INTO users (id, identity_provider, identity_subject, email, display_name, status, created_at, updated_at, version)
        VALUES ($1, 'idp.example.com', 'user-801', 'u801@example.com', 'User 801', 'active', $2, $2, 1);`,
-      [userId, now.toISOString()],
+      [userId, nowIso],
     );
 
     const workspace: WorkspaceSnapshot = Object.freeze({
@@ -128,7 +131,6 @@ describe('Real PostgreSQL Tenancy Adapter & Isolation Matrix Integration', () =>
       sslMode: 'disable',
     });
     const adapter = createPostgresTenancyAdapter(database);
-    const now = new Date('2026-10-25T12:00:00Z');
 
     const u1 = parseUserId('0192b012-3456-789a-8bcd-ef0123456811');
     const u2 = parseUserId('0192b012-3456-789a-8bcd-ef0123456812');
@@ -136,7 +138,7 @@ describe('Real PostgreSQL Tenancy Adapter & Isolation Matrix Integration', () =>
       `INSERT INTO users (id, identity_provider, identity_subject, email, display_name, status, created_at, updated_at, version) VALUES
        ($1, 'idp.example.com', 'sub-811', null, null, 'active', $3, $3, 1),
        ($2, 'idp.example.com', 'sub-812', null, null, 'active', $3, $3, 1);`,
-      [u1, u2, now.toISOString()],
+      [u1, u2, nowIso],
     );
 
     const collisionSlug = 'colliding-workspace-slug';
@@ -207,6 +209,82 @@ describe('Real PostgreSQL Tenancy Adapter & Isolation Matrix Integration', () =>
     await database.close();
   });
 
+  it('proves duplicate membership unique violation maps to safe DatabaseError and NOT SlugConflictError in real PostgreSQL', async () => {
+    const database = createDatabase({
+      databaseUrl: context.dbUrl,
+      poolMax: 5,
+      connectionTimeoutMs: 5000,
+      idleTimeoutMs: 10000,
+      statementTimeoutMs: 10000,
+      sslMode: 'disable',
+    });
+    const adapter = createPostgresTenancyAdapter(database);
+
+    const dupUserId = parseUserId('0192b012-3456-789a-8bcd-ef0123456891');
+    const existingMemId = parseMembershipId('0192b012-3456-789a-8bcd-ef0123456892');
+    const newWsId = parseWorkspaceId('0192b012-3456-789a-8bcd-ef0123456893');
+
+    // Seed active user
+    await client.query(
+      `INSERT INTO users (id, identity_provider, identity_subject, email, display_name, status, created_at, updated_at, version) VALUES
+       ($1, 'idp.example.com', 'sub-dup-mem', null, null, 'active', $2, $2, 1);`,
+      [dupUserId, nowIso],
+    );
+
+    // Seed an existing workspace with membership using existingMemId
+    const seedWsId = parseWorkspaceId('0192b012-3456-789a-8bcd-ef0123456894');
+    await client.query(
+      `INSERT INTO workspaces (id, name, slug, timezone, brand_voice, default_disclosure, ai_enabled, status, created_at, updated_at, version) VALUES
+       ($1, 'Seed WS', 'seed-ws-for-dup-mem', 'UTC', null, null, false, 'active', $2, $2, 1);`,
+      [seedWsId, nowIso],
+    );
+    await client.query(
+      `INSERT INTO workspace_memberships (id, workspace_id, user_id, role, status, invited_by_user_id, joined_at, created_at, updated_at, version) VALUES
+       ($1, $2, $3, 'owner', 'active', null, $4, $4, $4, 1);`,
+      [existingMemId, seedWsId, dupUserId, nowIso],
+    );
+
+    // Attempt createWorkspaceWithOwner with new workspace but duplicate membership ID (violates workspace_memberships_pkey)
+    const newWs: WorkspaceSnapshot = {
+      id: newWsId,
+      name: 'New WS With Dup Mem PK',
+      slug: 'new-ws-dup-mem-pk',
+      timezone: 'UTC',
+      brandVoice: null,
+      defaultDisclosure: null,
+      aiEnabled: false,
+      status: 'active',
+      createdAt: now,
+      updatedAt: now,
+      version: 1,
+    };
+    const dupMem: WorkspaceMembershipSnapshot = {
+      id: existingMemId, // Collides with existing membership PK!
+      workspaceId: newWsId,
+      userId: dupUserId,
+      role: 'owner',
+      status: 'active',
+      invitedByUserId: null,
+      joinedAt: now,
+      createdAt: now,
+      updatedAt: now,
+      version: 1,
+    };
+
+    const error = await adapter
+      .createWorkspaceWithOwner({ workspace: newWs, membership: dupMem })
+      .catch((e) => e);
+
+    expect(error).toBeInstanceOf(DatabaseError);
+    expect(error).not.toBeInstanceOf(SlugConflictError);
+
+    // Verify new workspace was rolled back
+    const checkWs = await client.query('SELECT id FROM workspaces WHERE id = $1;', [newWsId]);
+    expect(checkWs.rows).toHaveLength(0);
+
+    await database.close();
+  });
+
   it('enforces two-user two-workspace isolation matrix in both directions', async () => {
     const database = createDatabase({
       databaseUrl: context.dbUrl,
@@ -217,7 +295,6 @@ describe('Real PostgreSQL Tenancy Adapter & Isolation Matrix Integration', () =>
       sslMode: 'disable',
     });
     const adapter = createPostgresTenancyAdapter(database);
-    const now = new Date('2026-10-25T12:00:00Z');
 
     const userA = parseUserId('0192b012-3456-789a-8bcd-ef0123456821');
     const userB = parseUserId('0192b012-3456-789a-8bcd-ef0123456822');
@@ -233,7 +310,7 @@ describe('Real PostgreSQL Tenancy Adapter & Isolation Matrix Integration', () =>
        ($1, 'idp.example.com', 'user-a', 'a@example.com', 'User A', 'active', $4, $4, 1),
        ($2, 'idp.example.com', 'user-b', 'b@example.com', 'User B', 'active', $4, $4, 1),
        ($3, 'idp.example.com', 'user-c', 'c@example.com', 'User C', 'active', $4, $4, 1);`,
-      [userA, userB, userC, now.toISOString()],
+      [userA, userB, userC, nowIso],
     );
 
     // Seed 2 workspaces
@@ -241,7 +318,7 @@ describe('Real PostgreSQL Tenancy Adapter & Isolation Matrix Integration', () =>
       `INSERT INTO workspaces (id, name, slug, timezone, brand_voice, default_disclosure, ai_enabled, status, created_at, updated_at, version) VALUES
        ($1, 'Workspace One', 'workspace-one', 'UTC', null, null, false, 'active', $3, $3, 1),
        ($2, 'Workspace Two', 'workspace-two', 'UTC', null, null, false, 'active', $3, $3, 1);`,
-      [ws1, ws2, now.toISOString()],
+      [ws1, ws2, nowIso],
     );
 
     // Seed memberships:
@@ -254,7 +331,7 @@ describe('Real PostgreSQL Tenancy Adapter & Isolation Matrix Integration', () =>
        ('0192b012-3456-789a-8bcd-ef0123456832', $2, $3, 'editor', 'suspended', null, $5, $5, $5, 1),
        ('0192b012-3456-789a-8bcd-ef0123456833', $2, $4, 'owner', 'active', null, $5, $5, $5, 1),
        ('0192b012-3456-789a-8bcd-ef0123456834', $1, $4, 'viewer', 'removed', null, $5, $5, $5, 1);`,
-      [ws1, ws2, userA, userB, now.toISOString()],
+      [ws1, ws2, userA, userB, nowIso],
     );
 
     // --- User A Reads ---

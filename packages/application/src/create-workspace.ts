@@ -1,4 +1,5 @@
 import {
+  dateToIsoTimestamp,
   DomainValidationError,
   normalizeAndValidateSlug,
   normalizeOptionalText,
@@ -60,7 +61,14 @@ export async function createWorkspace(
     throw err;
   }
 
-  const aiEnabled = Boolean(command.aiEnabled ?? false);
+  let aiEnabled: boolean;
+  if (command.aiEnabled === undefined) {
+    aiEnabled = false;
+  } else if (typeof command.aiEnabled === 'boolean') {
+    aiEnabled = command.aiEnabled;
+  } else {
+    throw new ValidationError('Field "aiEnabled" must be a boolean or undefined', 'aiEnabled');
+  }
 
   const initiatingUser = await deps.userDirectory.findUserById(validUserId);
   if (!initiatingUser) {
@@ -70,7 +78,12 @@ export async function createWorkspace(
     throw new InactiveUserError(validUserId, initiatingUser.status);
   }
 
-  const now = deps.clock.now();
+  const clockDate = deps.clock.now();
+  if (!(clockDate instanceof Date) || Number.isNaN(clockDate.getTime())) {
+    throw new ValidationError('Clock returned an invalid Date', 'clock');
+  }
+  const now = dateToIsoTimestamp(clockDate);
+
   const workspaceId = deps.idGenerator.generateWorkspaceId();
   const membershipId = deps.idGenerator.generateMembershipId();
 

@@ -38,6 +38,17 @@ export function normalizeAndValidateSlug(rawSlug: unknown): string {
   return validateSlug(normalized);
 }
 
+const EXPLICITLY_APPROVED_TIMEZONES: ReadonlySet<string> = new Set([
+  'UTC',
+  'Etc/UTC',
+  'Asia/Ho_Chi_Minh',
+]);
+
+const CANONICAL_TIMEZONES: ReadonlySet<string> = new Set([
+  ...Intl.supportedValuesOf('timeZone'),
+  ...EXPLICITLY_APPROVED_TIMEZONES,
+]);
+
 export function isValidIanaTimezone(tz: unknown): boolean {
   if (typeof tz !== 'string') {
     return false;
@@ -46,15 +57,7 @@ export function isValidIanaTimezone(tz: unknown): boolean {
   if (trimmed.length === 0) {
     return false;
   }
-  if (trimmed !== 'UTC' && trimmed !== 'Etc/UTC' && !trimmed.includes('/')) {
-    return false;
-  }
-  try {
-    const formatter = new Intl.DateTimeFormat('en-US', { timeZone: trimmed });
-    return typeof formatter.resolvedOptions().timeZone === 'string';
-  } catch {
-    return false;
-  }
+  return CANONICAL_TIMEZONES.has(trimmed);
 }
 
 export function validateIanaTimezone(tz: unknown): string {
@@ -65,9 +68,9 @@ export function validateIanaTimezone(tz: unknown): string {
   if (trimmed.length === 0) {
     throw new DomainValidationError('Timezone cannot be empty', 'timezone');
   }
-  if (!isValidIanaTimezone(trimmed)) {
+  if (!CANONICAL_TIMEZONES.has(trimmed)) {
     throw new DomainValidationError(
-      `Invalid IANA timezone: ${trimmed}. Must be a valid IANA timezone identifier (e.g. 'UTC', 'Asia/Ho_Chi_Minh')`,
+      `Invalid IANA timezone: ${trimmed}. Must be a canonical IANA timezone identifier (e.g. 'UTC', 'Asia/Ho_Chi_Minh')`,
       'timezone',
     );
   }

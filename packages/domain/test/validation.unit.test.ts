@@ -86,22 +86,44 @@ describe('Domain Validation Rules', () => {
       'Europe/London',
       'Asia/Tokyo',
       'Australia/Sydney',
+      'Africa/Cairo',
     ];
 
-    it.each(validTimezones)('accepts canonical IANA timezone: %s', (tz) => {
+    it.each(validTimezones)('accepts canonical / approved IANA timezone: %s', (tz) => {
       expect(isValidIanaTimezone(tz)).toBe(true);
       expect(validateIanaTimezone(tz)).toBe(tz);
     });
 
-    it('trims whitespace around valid timezone', () => {
+    it('accepts all timezones in the runtime supportedValuesOf set', () => {
+      const canonicalSet = Intl.supportedValuesOf('timeZone');
+      expect(canonicalSet.length).toBeGreaterThan(0);
+      for (const tz of canonicalSet.slice(0, 20)) {
+        expect(isValidIanaTimezone(tz)).toBe(true);
+        expect(validateIanaTimezone(tz)).toBe(tz);
+      }
+    });
+
+    it('trims whitespace around valid timezone and preserves approved identifier without rewrite', () => {
       expect(validateIanaTimezone('  Asia/Ho_Chi_Minh  ')).toBe('Asia/Ho_Chi_Minh');
       expect(isValidIanaTimezone('  Asia/Ho_Chi_Minh  ')).toBe(true);
+      expect(validateIanaTimezone('  UTC  ')).toBe('UTC');
+      expect(validateIanaTimezone('  Etc/UTC  ')).toBe('Etc/UTC');
     });
 
     const invalidTimezones: Array<[string, unknown]> = [
+      ['legacy alias US/Eastern', 'US/Eastern'],
+      ['legacy alias US/Pacific', 'US/Pacific'],
+      ['legacy alias US/Central', 'US/Central'],
       ['3-letter abbreviation EST', 'EST'],
       ['3-letter abbreviation PST', 'PST'],
       ['3-letter abbreviation CST', 'CST'],
+      ['3-letter abbreviation ICT', 'ICT'],
+      ['case variant utc', 'utc'],
+      ['case variant Utc', 'Utc'],
+      ['case variant asia/ho_chi_minh', 'asia/ho_chi_minh'],
+      ['case variant america/new_york', 'america/new_york'],
+      ['fixed offset +07:00', '+07:00'],
+      ['fixed offset -05:00', '-05:00'],
       ['Windows name Eastern Standard Time', 'Eastern Standard Time'],
       ['Windows name Pacific Standard Time', 'Pacific Standard Time'],
       ['Windows name SE Asia Standard Time', 'SE Asia Standard Time'],
@@ -112,9 +134,12 @@ describe('Domain Validation Rules', () => {
       ['null', null],
       ['undefined', undefined],
       ['number', 123],
+      ['boolean true', true],
+      ['object', {}],
+      ['array', ['UTC']],
     ];
 
-    it.each(invalidTimezones)('rejects non-canonical / platform alias: %s', (_, tz) => {
+    it.each(invalidTimezones)('rejects non-canonical / alias / invalid value: %s', (_, tz) => {
       expect(isValidIanaTimezone(tz)).toBe(false);
       expect(() => validateIanaTimezone(tz)).toThrow(DomainValidationError);
     });

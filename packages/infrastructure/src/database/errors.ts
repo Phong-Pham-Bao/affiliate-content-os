@@ -30,6 +30,7 @@ export function isDatabaseError(value: unknown): value is DatabaseError {
 
 export class DatabaseError extends Error {
   public readonly code?: string | undefined;
+  public readonly constraint?: string | undefined;
 
   public static override [Symbol.hasInstance](this: object, value: unknown): boolean {
     if (this === DatabaseError) {
@@ -40,13 +41,20 @@ export class DatabaseError extends Error {
 
   constructor(
     message: string,
-    options?: { readonly code?: string | undefined; readonly cause?: unknown },
+    options?: {
+      readonly code?: string | undefined;
+      readonly constraint?: string | undefined;
+      readonly cause?: unknown;
+    },
   ) {
     super(stripCredentials(message));
     this.name = 'DatabaseError';
     GENUINE_DATABASE_ERRORS.add(this);
     if (options?.code !== undefined) {
       this.code = options.code;
+    }
+    if (options?.constraint !== undefined) {
+      this.constraint = options.constraint;
     }
     if (options?.cause !== undefined) {
       this.cause = sanitizeCallbackError(options.cause);
@@ -67,11 +75,18 @@ export class DatabaseError extends Error {
     }
   }
 
-  public toJSON(): { name: string; message: string; code?: string; cause?: unknown } {
+  public toJSON(): {
+    name: string;
+    message: string;
+    code?: string;
+    constraint?: string;
+    cause?: unknown;
+  } {
     return {
       name: this.name,
       message: this.message,
       ...(this.code ? { code: this.code } : {}),
+      ...(this.constraint ? { constraint: this.constraint } : {}),
       ...(this.cause !== undefined ? { cause: this.cause } : {}),
     };
   }
@@ -80,6 +95,7 @@ export class DatabaseError extends Error {
     name: string;
     message: string;
     code?: string;
+    constraint?: string;
     cause?: unknown;
   } {
     return this.toJSON();
@@ -273,27 +289,33 @@ export function sanitizeDatabaseError(
         }
       }
 
+      const rawConstraint = getSafeOwnStringProperty(err as object, 'constraint');
+
       if (needsSanitizeMsg || needsSanitizeStack) {
         const safeMsg = stripCredentials(rawMsg);
         return new DatabaseError(
           safeContext && !safeMsg.startsWith(safeContext) ? `${safeContext}: ${safeMsg}` : safeMsg,
-          { code: rawCode },
+          { code: rawCode, constraint: rawConstraint },
         );
       }
 
       if (safeContext && !rawMsg.startsWith(safeContext)) {
-        return new DatabaseError(`${safeContext}: ${rawMsg}`, { code: rawCode });
+        return new DatabaseError(`${safeContext}: ${rawMsg}`, {
+          code: rawCode,
+          constraint: rawConstraint,
+        });
       }
 
       return err as DatabaseError;
     }
 
     const classification = classifyRawError(err);
+    const rawConstraint = getSafeOwnStringProperty(err as object, 'constraint');
     const message = safeContext
       ? `${safeContext}: ${classification.message}`
       : classification.message;
 
-    return new DatabaseError(message, { code: classification.code });
+    return new DatabaseError(message, { code: classification.code, constraint: rawConstraint });
   } catch {
     return new DatabaseError(fallbackMessage, { code: 'DATABASE_ERROR' });
   }

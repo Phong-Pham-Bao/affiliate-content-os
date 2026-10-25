@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  parseIsoTimestamp,
   parseMembershipId,
   parseUserId,
   parseWorkspaceId,
@@ -27,22 +28,27 @@ import {
 } from '../src/index.js';
 
 class FakeClock implements ClockPort {
-  constructor(private readonly fixedTime: Date) {}
+  constructor(public fixedTime: Date) {}
   public now(): Date {
     return new Date(this.fixedTime.getTime());
   }
 }
 
 class FakeIdGenerator implements IdGeneratorPort {
+  public generateWorkspaceCalls = 0;
+  public generateMembershipCalls = 0;
+
   constructor(
     private readonly workspaceId: WorkspaceId,
     private readonly membershipId: MembershipId,
     private readonly userId: UserId,
   ) {}
   public generateWorkspaceId(): WorkspaceId {
+    this.generateWorkspaceCalls++;
     return this.workspaceId;
   }
   public generateMembershipId(): MembershipId {
+    this.generateMembershipCalls++;
     return this.membershipId;
   }
   public generateUserId(): UserId {
@@ -87,7 +93,8 @@ class FakeWorkspacePersistence implements WorkspacePersistencePort {
 }
 
 describe('CreateWorkspace Use Case', () => {
-  const fixedDate = new Date('2026-10-25T12:00:00.000Z');
+  const fixedDateIso = '2026-10-25T12:00:00.000Z';
+  const fixedDate = new Date(fixedDateIso);
   const validUserId = parseUserId('0192b012-3456-789a-8bcd-ef0123456780');
   const validWorkspaceId = parseWorkspaceId('0192b012-3456-789a-8bcd-ef0123456781');
   const validMembershipId = parseMembershipId('0192b012-3456-789a-8bcd-ef0123456782');
@@ -105,8 +112,8 @@ describe('CreateWorkspace Use Case', () => {
       email: 'user@example.com',
       displayName: 'Test User',
       status: 'active',
-      createdAt: new Date('2026-10-01T00:00:00Z'),
-      updatedAt: new Date('2026-10-01T00:00:00Z'),
+      createdAt: parseIsoTimestamp('2026-10-01T00:00:00.000Z'),
+      updatedAt: parseIsoTimestamp('2026-10-01T00:00:00.000Z'),
       version: 1,
     });
     userDirectory.users.set(validUserId, activeUser);
@@ -128,10 +135,10 @@ describe('CreateWorkspace Use Case', () => {
       aiEnabled: true,
     };
 
-    return { deps, userDirectory, workspacePersistence, baseCommand };
+    return { deps, userDirectory, workspacePersistence, idGenerator, clock, baseCommand };
   }
 
-  it('creates workspace and active owner membership with normalized values', async () => {
+  it('creates workspace and active owner membership with normalized values and immutable timestamps', async () => {
     const { deps, workspacePersistence, baseCommand } = setupTestDeps();
 
     const result = await createWorkspace(baseCommand, deps);
@@ -145,8 +152,8 @@ describe('CreateWorkspace Use Case', () => {
       defaultDisclosure: '#affiliate',
       aiEnabled: true,
       status: 'active',
-      createdAt: fixedDate,
-      updatedAt: fixedDate,
+      createdAt: fixedDateIso,
+      updatedAt: fixedDateIso,
       version: 1,
     });
 
@@ -157,16 +164,59 @@ describe('CreateWorkspace Use Case', () => {
       role: 'owner',
       status: 'active',
       invitedByUserId: null,
-      joinedAt: fixedDate,
-      createdAt: fixedDate,
-      updatedAt: fixedDate,
+      joinedAt: fixedDateIso,
+      createdAt: fixedDateIso,
+      updatedAt: fixedDateIso,
       version: 1,
     });
+
+    expect(typeof result.workspace.createdAt).toBe('string');
+    expect(typeof result.workspace.updatedAt).toBe('string');
+    expect(typeof result.membership.joinedAt).toBe('string');
+    expect(typeof result.membership.createdAt).toBe('string');
+    expect(typeof result.membership.updatedAt).toBe('string');
+
+    // Values match expected instant
+    expect(result.workspace.createdAt).toBe(fixedDateIso);
+    expect(result.workspace.updatedAt).toBe(result.workspace.createdAt);
+    expect(result.membership.joinedAt).toBe(result.workspace.createdAt);
 
     expect(workspacePersistence.createCalls).toHaveLength(1);
     expect(workspacePersistence.createCalls[0]?.workspace.slug).toBe('acme-marketing-01');
     expect(workspacePersistence.createCalls[0]?.membership.role).toBe('owner');
-    expect(workspacePersistence.createCalls[0]?.membership.joinedAt).toEqual(fixedDate);
+    expect(workspacePersistence.createCalls[0]?.membership.joinedAt).toBe(fixedDateIso);
+  });
+
+  it('proves snapshot timestamp values are immutable and mutation on clock date does not affect snapshot', async () => {
+    const { deps, clock, baseCommand } = setupTestDeps();
+
+    const result = await createWorkspace(baseCommand, deps);
+
+    // Mutate the clock date that was passed into the fake
+    clock.fixedTime.setFullYear(2000);
+
+    // Snapshot timestamp must remain unchanged
+    expect(result.workspace.createdAt).toBe(fixedDateIso);
+    expect(result.workspace.updatedAt).toBe(fixedDateIso);
+    expect(result.membership.joinedAt).toBe(fixedDateIso);
+
+    // Attempted modification of snapshot properties is prevented by Object.freeze
+    expect(Object.isFrozen(result.workspace)).toBe(true);
+    expect(Object.isFrozen(result.membership)).toBe(true);
+    expect(() => {
+      (result.workspace as unknown as Record<string, unknown>).createdAt =
+        '2000-01-01T00:00:00.000Z';
+    }).toThrow();
+  });
+
+  it('fails cleanly before persistence when clock returns an invalid Date', async () => {
+    const { deps, clock, workspacePersistence, userDirectory, baseCommand } = setupTestDeps();
+    clock.fixedTime = new Date('invalid');
+
+    await expect(createWorkspace(baseCommand, deps)).rejects.toThrow(ValidationError);
+    expect(workspacePersistence.createCalls).toHaveLength(0);
+    // User directory was checked, but persistence was never reached
+    expect(userDirectory.calls).toHaveLength(1);
   });
 
   it('converts blank optional fields to null and defaults aiEnabled to false', async () => {
@@ -185,6 +235,76 @@ describe('CreateWorkspace Use Case', () => {
     expect(result.workspace.brandVoice).toBeNull();
     expect(result.workspace.defaultDisclosure).toBeNull();
     expect(result.workspace.aiEnabled).toBe(false);
+  });
+
+  it('accepts explicit boolean false for aiEnabled', async () => {
+    const { deps, baseCommand } = setupTestDeps();
+
+    const result = await createWorkspace(
+      {
+        ...baseCommand,
+        aiEnabled: false,
+      },
+      deps,
+    );
+
+    expect(result.workspace.aiEnabled).toBe(false);
+  });
+
+  it('accepts explicit boolean true for aiEnabled', async () => {
+    const { deps, baseCommand } = setupTestDeps();
+
+    const result = await createWorkspace(
+      {
+        ...baseCommand,
+        aiEnabled: true,
+      },
+      deps,
+    );
+
+    expect(result.workspace.aiEnabled).toBe(true);
+  });
+
+  describe('Strict aiEnabled validation (Finding 2)', () => {
+    const invalidAiEnabledValues: Array<[string, unknown]> = [
+      ['null', null],
+      ['empty string', ''],
+      ['string "false"', 'false'],
+      ['string "true"', 'true'],
+      ['number 0', 0],
+      ['number 1', 1],
+      ['negative number -1', -1],
+      ['bigint 0n', 0n],
+      ['empty object', {}],
+      ['empty array', []],
+      ['array with boolean', [true]],
+      ['symbol', Symbol('ai')],
+      ['function', () => true],
+    ];
+
+    it.each(invalidAiEnabledValues)(
+      'rejects non-boolean aiEnabled (%s) before any dependency call',
+      async (_, invalidValue) => {
+        const { deps, userDirectory, workspacePersistence, idGenerator, baseCommand } =
+          setupTestDeps();
+
+        const invalidCommand = {
+          ...baseCommand,
+          aiEnabled: invalidValue as unknown as boolean,
+        };
+
+        const error = await createWorkspace(invalidCommand, deps).catch((e) => e);
+
+        expect(error).toBeInstanceOf(ValidationError);
+        expect((error as ValidationError).field).toBe('aiEnabled');
+
+        // Zero dependency calls
+        expect(userDirectory.calls).toHaveLength(0);
+        expect(workspacePersistence.createCalls).toHaveLength(0);
+        expect(idGenerator.generateWorkspaceCalls).toBe(0);
+        expect(idGenerator.generateMembershipCalls).toBe(0);
+      },
+    );
   });
 
   it('rejects missing user before calling persistence port', async () => {

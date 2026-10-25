@@ -1,3 +1,4 @@
+import util from 'node:util';
 import {
   type UserId,
   type UserSnapshot,
@@ -23,13 +24,32 @@ import {
   type RawWorkspaceRow,
 } from './mappers.js';
 
-interface PgDriverError {
-  code?: string;
-  constraint?: string;
-}
+function isSlugConflictError(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) {
+    return false;
+  }
+  if (util.types.isProxy(error)) {
+    return false;
+  }
 
-function isPgDriverError(error: unknown): error is PgDriverError {
-  return typeof error === 'object' && error !== null && 'code' in error;
+  let code: unknown;
+  let constraint: unknown;
+
+  try {
+    const codeDesc = Object.getOwnPropertyDescriptor(error, 'code');
+    if (codeDesc && codeDesc.get === undefined && codeDesc.set === undefined) {
+      code = codeDesc.value;
+    }
+    const constraintDesc = Object.getOwnPropertyDescriptor(error, 'constraint');
+    if (constraintDesc && constraintDesc.get === undefined && constraintDesc.set === undefined) {
+      constraint = constraintDesc.value;
+    }
+  } catch {
+    return false;
+  }
+
+  const isUniqueViolation = code === '23505' || code === 'UNIQUE_VIOLATION';
+  return isUniqueViolation && constraint === 'workspaces_slug_unique';
 }
 
 export class PostgresTenancyAdapter implements UserDirectoryPort, WorkspacePersistencePort {
@@ -74,12 +94,7 @@ export class PostgresTenancyAdapter implements UserDirectoryPort, WorkspacePersi
             ],
           );
         } catch (wsErr) {
-          if (
-            (isPgDriverError(wsErr) && wsErr.code === '23505') ||
-            (typeof wsErr === 'object' &&
-              wsErr !== null &&
-              (wsErr as { code?: string }).code === 'UNIQUE_VIOLATION')
-          ) {
+          if (isSlugConflictError(wsErr)) {
             throw new SlugConflictError(params.workspace.slug);
           }
           throw wsErr;
@@ -112,12 +127,7 @@ export class PostgresTenancyAdapter implements UserDirectoryPort, WorkspacePersi
       if (err instanceof SlugConflictError) {
         throw err;
       }
-      if (
-        (isPgDriverError(err) && err.code === '23505') ||
-        (typeof err === 'object' &&
-          err !== null &&
-          (err as { code?: string }).code === 'UNIQUE_VIOLATION')
-      ) {
+      if (isSlugConflictError(err)) {
         throw new SlugConflictError(params.workspace.slug);
       }
       throw sanitizeDatabaseError(err);
