@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import util from 'node:util';
 import { describe, expect, it } from 'vitest';
 import {
@@ -166,6 +167,148 @@ describe('Database error categorization and non-disclosure (unit tests)', () => 
       expect(sanitizedTainted).toBeInstanceOf(DatabaseError);
       expect(sanitizedTainted.message).not.toContain('secret_user');
       expect(sanitizedTainted.message).not.toContain('secret_pass');
+    });
+  });
+
+  describe('PostgreSQL constraint payloads privacy (Remediation 02 Finding 1)', () => {
+    it('proves DatabaseError has no public constraint property or options', () => {
+      const err = new DatabaseError('Standard message', {
+        code: 'UNIQUE_VIOLATION',
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ...({ constraint: 'hostile_constraint' } as any),
+      });
+
+      expect((err as unknown as { constraint?: unknown }).constraint).toBeUndefined();
+      expect('constraint' in err).toBe(false);
+      expect(Object.keys(err)).not.toContain('constraint');
+      expect(Reflect.ownKeys(err)).not.toContain('constraint');
+      expect(err.toJSON()).not.toHaveProperty('constraint');
+      expect(JSON.stringify(err)).not.toContain('hostile_constraint');
+      expect(util.inspect(err)).not.toContain('hostile_constraint');
+      expect(String(err)).not.toContain('hostile_constraint');
+    });
+
+    it('proves sanitizeDatabaseError never returns error with public constraint property', () => {
+      const driverErrors = [
+        { code: '23505', constraint: 'workspaces_slug_unique' },
+        { code: '23505', constraint: 'workspaces_pkey' },
+        { code: '42P01', constraint: 'some_relation_constraint' },
+        { message: 'failed', constraint: 'arbitrary_constraint' },
+      ];
+
+      for (const raw of driverErrors) {
+        const sanitized = sanitizeDatabaseError(raw);
+        expect(sanitized).toBeInstanceOf(DatabaseError);
+        expect((sanitized as unknown as { constraint?: unknown }).constraint).toBeUndefined();
+        expect('constraint' in sanitized).toBe(false);
+        expect(Object.keys(sanitized)).not.toContain('constraint');
+        expect(Reflect.ownKeys(sanitized)).not.toContain('constraint');
+        expect(sanitized.toJSON()).not.toHaveProperty('constraint');
+        expect(JSON.stringify(sanitized)).not.toContain(raw.constraint);
+        expect(util.inspect(sanitized)).not.toContain(raw.constraint);
+        expect(String(sanitized)).not.toContain(raw.constraint);
+      }
+    });
+
+    it('proves hostile constraint sentinels are completely absent from all observable surfaces', async () => {
+      const hostileConstraint =
+        'workspaces_slug_unique; postgresql://raw_user:raw_pass_secret@10.88.77.66:5432/raw_target_db; SELECT * FROM secrets; $1::text; newline\nstack\r\nat /app/secret.ts:1:1';
+      const sentinels = [
+        'raw_user',
+        'raw_pass_secret',
+        '10.88.77.66',
+        'raw_target_db',
+        'SELECT * FROM secrets',
+        '$1::text',
+        'newline\nstack',
+        '/app/secret.ts',
+      ];
+
+      const raw = {
+        name: 'error',
+        code: '23505',
+        message: 'duplicate key value violates unique constraint',
+        constraint: hostileConstraint,
+      };
+
+      const sanitized = sanitizeDatabaseError(raw);
+
+      // 1. Direct properties & keys
+      expect((sanitized as unknown as { constraint?: unknown }).constraint).toBeUndefined();
+      expect('constraint' in sanitized).toBe(false);
+      expect(Object.keys(sanitized)).not.toContain('constraint');
+
+      for (const key of Reflect.ownKeys(sanitized)) {
+        const val = String((sanitized as unknown as Record<string | symbol, unknown>)[key]);
+        for (const s of sentinels) {
+          expect(val).not.toContain(s);
+        }
+      }
+
+      // 2. JSON.stringify
+      const json = JSON.stringify(sanitized);
+      for (const s of sentinels) {
+        expect(json).not.toContain(s);
+      }
+
+      // 3. String & message & stack
+      const str = String(sanitized);
+      const msg = sanitized.message;
+      const stack = sanitized.stack ?? '';
+      for (const s of sentinels) {
+        expect(str).not.toContain(s);
+        expect(msg).not.toContain(s);
+        expect(stack).not.toContain(s);
+      }
+
+      // 4. util.inspect
+      const inspected = util.inspect(sanitized);
+      for (const s of sentinels) {
+        expect(inspected).not.toContain(s);
+      }
+
+      // 5. Child process execution to prove no leak to stdout/stderr or logger
+      const childScript = `
+        import { sanitizeDatabaseError, DatabaseError } from './packages/infrastructure/src/database/errors.ts';
+        import util from 'node:util';
+        const raw = {
+          code: '23505',
+          constraint: ${JSON.stringify(hostileConstraint)},
+          message: 'duplicate key value violates unique constraint'
+        };
+        const sanitized = sanitizeDatabaseError(raw);
+        console.log(JSON.stringify(sanitized));
+        console.error(String(sanitized));
+        console.log(util.inspect(sanitized));
+      `;
+
+      const child = spawn(
+        process.execPath,
+        ['--conditions=development', '--import', 'tsx', '-e', childScript],
+        {
+          cwd: process.cwd(),
+          stdio: ['pipe', 'pipe', 'pipe'],
+        },
+      );
+
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (d) => {
+        stdout += d.toString();
+      });
+      child.stderr.on('data', (d) => {
+        stderr += d.toString();
+      });
+
+      const exitCode = await new Promise<number>((resolve) => {
+        child.on('close', resolve);
+      });
+
+      expect(exitCode).toBe(0);
+      const combined = stdout + stderr;
+      for (const s of sentinels) {
+        expect(combined).not.toContain(s);
+      }
     });
   });
 });

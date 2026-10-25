@@ -188,16 +188,12 @@ export function createDatabase(config: DatabaseConfig, options?: CreateDatabaseO
         if (!active) {
           throw new DatabaseError('Cannot execute query: transaction has already completed');
         }
-        try {
-          const res = await client.query(text, params ? [...params] : undefined);
-          return {
-            rows: Object.freeze([...res.rows]) as readonly R[],
-            rowCount: res.rowCount ?? 0,
-            command: res.command,
-          };
-        } catch (err) {
-          throw sanitizeDatabaseError(err, 'Transaction query execution failed');
-        }
+        const res = await client.query(text, params ? [...params] : undefined);
+        return {
+          rows: Object.freeze([...res.rows]) as readonly R[],
+          rowCount: res.rowCount ?? 0,
+          command: res.command,
+        };
       },
     };
 

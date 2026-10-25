@@ -62,11 +62,7 @@ function mapRowTimestamp(value: unknown, fieldName: string): IsoTimestamp {
       return parseIsoTimestamp(value.toISOString());
     }
     if (typeof value === 'string') {
-      const d = new Date(value);
-      if (Number.isNaN(d.getTime())) {
-        throw new DatabaseError(`Invalid timestamp value for field "${fieldName}"`);
-      }
-      return parseIsoTimestamp(d.toISOString());
+      return parseIsoTimestamp(value);
     }
     throw new DatabaseError(`Invalid timestamp value for field "${fieldName}"`);
   } catch (err) {

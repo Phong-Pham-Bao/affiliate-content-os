@@ -30,7 +30,6 @@ export function isDatabaseError(value: unknown): value is DatabaseError {
 
 export class DatabaseError extends Error {
   public readonly code?: string | undefined;
-  public readonly constraint?: string | undefined;
 
   public static override [Symbol.hasInstance](this: object, value: unknown): boolean {
     if (this === DatabaseError) {
@@ -43,7 +42,6 @@ export class DatabaseError extends Error {
     message: string,
     options?: {
       readonly code?: string | undefined;
-      readonly constraint?: string | undefined;
       readonly cause?: unknown;
     },
   ) {
@@ -52,9 +50,6 @@ export class DatabaseError extends Error {
     GENUINE_DATABASE_ERRORS.add(this);
     if (options?.code !== undefined) {
       this.code = options.code;
-    }
-    if (options?.constraint !== undefined) {
-      this.constraint = options.constraint;
     }
     if (options?.cause !== undefined) {
       this.cause = sanitizeCallbackError(options.cause);
@@ -79,14 +74,12 @@ export class DatabaseError extends Error {
     name: string;
     message: string;
     code?: string;
-    constraint?: string;
     cause?: unknown;
   } {
     return {
       name: this.name,
       message: this.message,
       ...(this.code ? { code: this.code } : {}),
-      ...(this.constraint ? { constraint: this.constraint } : {}),
       ...(this.cause !== undefined ? { cause: this.cause } : {}),
     };
   }
@@ -95,7 +88,6 @@ export class DatabaseError extends Error {
     name: string;
     message: string;
     code?: string;
-    constraint?: string;
     cause?: unknown;
   } {
     return this.toJSON();
@@ -289,20 +281,17 @@ export function sanitizeDatabaseError(
         }
       }
 
-      const rawConstraint = getSafeOwnStringProperty(err as object, 'constraint');
-
       if (needsSanitizeMsg || needsSanitizeStack) {
         const safeMsg = stripCredentials(rawMsg);
         return new DatabaseError(
           safeContext && !safeMsg.startsWith(safeContext) ? `${safeContext}: ${safeMsg}` : safeMsg,
-          { code: rawCode, constraint: rawConstraint },
+          { code: rawCode },
         );
       }
 
       if (safeContext && !rawMsg.startsWith(safeContext)) {
         return new DatabaseError(`${safeContext}: ${rawMsg}`, {
           code: rawCode,
-          constraint: rawConstraint,
         });
       }
 
@@ -310,12 +299,11 @@ export function sanitizeDatabaseError(
     }
 
     const classification = classifyRawError(err);
-    const rawConstraint = getSafeOwnStringProperty(err as object, 'constraint');
     const message = safeContext
       ? `${safeContext}: ${classification.message}`
       : classification.message;
 
-    return new DatabaseError(message, { code: classification.code, constraint: rawConstraint });
+    return new DatabaseError(message, { code: classification.code });
   } catch {
     return new DatabaseError(fallbackMessage, { code: 'DATABASE_ERROR' });
   }

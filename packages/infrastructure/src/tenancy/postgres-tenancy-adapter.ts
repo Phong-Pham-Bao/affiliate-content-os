@@ -127,9 +127,6 @@ export class PostgresTenancyAdapter implements UserDirectoryPort, WorkspacePersi
       if (err instanceof SlugConflictError) {
         throw err;
       }
-      if (isSlugConflictError(err)) {
-        throw new SlugConflictError(params.workspace.slug);
-      }
       throw sanitizeDatabaseError(err);
     }
   }
