@@ -1205,4 +1205,316 @@ describe('Database client and transaction manager (unit tests with fakes)', () =
       expect(caught).toBe(safeFrozenObj);
     });
   });
+
+  describe('Sticky transaction query failure and safe boundary (Remediation 03 Findings 2 & 3)', () => {
+    it('sanitizes raw driver query error immediately before callback observation without credential or constraint leakage', async () => {
+      const { mockPool, mockClient } = createMockPool();
+      const rawDriverErr = {
+        name: 'error',
+        code: '23505',
+        constraint: 'hostile_constraint_sentinel_123',
+        message:
+          'duplicate key at postgresql://secret_user:secret_password@10.0.0.1:5432/secrets_db',
+        detail: 'Key (slug)=(secret_val) already exists',
+      };
+
+      mockClient.query = vi.fn(async (text: string) => {
+        if (text === 'BEGIN' || text === 'ROLLBACK') {
+          return { rows: [], rowCount: 0, command: text };
+        }
+        throw rawDriverErr;
+      });
+
+      const db = createDatabase(dummyConfig, { poolFactory: () => mockPool });
+
+      let observedInsideCallback: unknown;
+      await expect(
+        db.withTransaction(async (tx) => {
+          try {
+            await tx.query('INSERT INTO secrets VALUES ($1)', ['secret_bind']);
+          } catch (err) {
+            observedInsideCallback = err;
+            throw err;
+          }
+        }),
+      ).rejects.toBeInstanceOf(DatabaseError);
+
+      expect(observedInsideCallback).toBeInstanceOf(DatabaseError);
+      expect(observedInsideCallback).not.toBe(rawDriverErr);
+      expect(
+        (observedInsideCallback as unknown as { constraint?: unknown }).constraint,
+      ).toBeUndefined();
+      expect('constraint' in (observedInsideCallback as object)).toBe(false);
+
+      const sentinels = [
+        'hostile_constraint_sentinel_123',
+        'secret_user',
+        'secret_password',
+        '10.0.0.1',
+        'secrets_db',
+        'secret_bind',
+      ];
+
+      for (const s of sentinels) {
+        expect(String(observedInsideCallback)).not.toContain(s);
+        expect(JSON.stringify(observedInsideCallback)).not.toContain(s);
+        expect(util.inspect(observedInsideCallback)).not.toContain(s);
+        expect((observedInsideCallback as Error).message).not.toContain(s);
+        expect((observedInsideCallback as Error).stack ?? '').not.toContain(s);
+      }
+    });
+
+    it('rejects withTransaction with safe query error when callback does not catch query rejection', async () => {
+      const { mockPool, mockClient, clientQueries, getReleaseCalled } = createMockPool();
+      mockClient.query = vi.fn(async (text: string) => {
+        clientQueries.push({ text });
+        if (text === 'FAILING_QUERY') {
+          throw new Error('Database statement failure');
+        }
+        return { rows: [], rowCount: 0, command: text };
+      });
+
+      const db = createDatabase(dummyConfig, { poolFactory: () => mockPool });
+
+      const promise = db.withTransaction(async (tx) => {
+        await tx.query('FAILING_QUERY');
+      });
+
+      await expect(promise).rejects.toBeInstanceOf(DatabaseError);
+      expect(clientQueries.map((q) => q.text)).toEqual(['BEGIN', 'FAILING_QUERY', 'ROLLBACK']);
+      expect(clientQueries.some((q) => q.text === 'COMMIT')).toBe(false);
+      expect(getReleaseCalled()).toBe(true);
+      expect(mockClient.release).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejects withTransaction when callback catches query failure and returns normally (preventing fake success)', async () => {
+      const { mockPool, mockClient, clientQueries, getReleaseCalled } = createMockPool();
+      mockClient.query = vi.fn(async (text: string) => {
+        clientQueries.push({ text });
+        if (text === 'FAILING_QUERY') {
+          throw new Error('Database statement failure');
+        }
+        return { rows: [], rowCount: 0, command: text };
+      });
+
+      const db = createDatabase(dummyConfig, { poolFactory: () => mockPool });
+
+      let queryErrObserved: unknown;
+      let rejectedErr: unknown;
+      try {
+        await db.withTransaction(async (tx) => {
+          try {
+            await tx.query('FAILING_QUERY');
+          } catch (err) {
+            queryErrObserved = err;
+          }
+          return { pseudoSuccess: true, data: 12345 };
+        });
+      } catch (err) {
+        rejectedErr = err;
+      }
+
+      expect(rejectedErr).toBeDefined();
+      expect(rejectedErr).toBe(queryErrObserved);
+      expect(queryErrObserved).toBeInstanceOf(DatabaseError);
+
+      const executed = clientQueries.map((q) => q.text);
+      expect(executed).toEqual(['BEGIN', 'FAILING_QUERY', 'ROLLBACK']);
+      expect(executed).not.toContain('COMMIT');
+      expect(getReleaseCalled()).toBe(true);
+      expect(mockClient.release).toHaveBeenCalledTimes(1);
+    });
+
+    it('preserves first safe query failure when callback catches query failure and throws another error', async () => {
+      const { mockPool, mockClient, clientQueries, getReleaseCalled } = createMockPool();
+      mockClient.query = vi.fn(async (text: string) => {
+        clientQueries.push({ text });
+        if (text === 'FAILING_QUERY') {
+          throw new Error('Initial query failure');
+        }
+        return { rows: [], rowCount: 0, command: text };
+      });
+
+      const db = createDatabase(dummyConfig, { poolFactory: () => mockPool });
+
+      let firstErr: unknown;
+      let rejectedErr: unknown;
+      try {
+        await db.withTransaction(async (tx) => {
+          try {
+            await tx.query('FAILING_QUERY');
+          } catch (err) {
+            firstErr = err;
+          }
+          throw new Error(
+            'Subsequent replacement error that must not overwrite first query failure',
+          );
+        });
+      } catch (err) {
+        rejectedErr = err;
+      }
+
+      expect(rejectedErr).toBeDefined();
+      expect(rejectedErr).toBe(firstErr);
+      expect(firstErr).toBeInstanceOf(DatabaseError);
+
+      const executed = clientQueries.map((q) => q.text);
+      expect(executed).toEqual(['BEGIN', 'FAILING_QUERY', 'ROLLBACK']);
+      expect(executed).not.toContain('COMMIT');
+      expect(getReleaseCalled()).toBe(true);
+      expect(mockClient.release).toHaveBeenCalledTimes(1);
+    });
+
+    it('retains first safe query failure as primary when multiple queries fail in transaction', async () => {
+      const { mockPool, mockClient, clientQueries, getReleaseCalled } = createMockPool();
+      mockClient.query = vi.fn(async (text: string) => {
+        clientQueries.push({ text });
+        if (text === 'FAIL_1') {
+          throw new Error('Query failure 1');
+        }
+        if (text === 'FAIL_2') {
+          throw new Error('Query failure 2');
+        }
+        return { rows: [], rowCount: 0, command: text };
+      });
+
+      const db = createDatabase(dummyConfig, { poolFactory: () => mockPool });
+
+      let firstErr: unknown;
+      let secondErr: unknown;
+      let rejectedErr: unknown;
+      try {
+        await db.withTransaction(async (tx) => {
+          try {
+            await tx.query('FAIL_1');
+          } catch (err) {
+            firstErr = err;
+          }
+          try {
+            await tx.query('FAIL_2');
+          } catch (err) {
+            secondErr = err;
+          }
+          return 'done';
+        });
+      } catch (err) {
+        rejectedErr = err;
+      }
+
+      expect(rejectedErr).toBeDefined();
+      expect(rejectedErr).toBe(firstErr);
+      expect(firstErr).toBeInstanceOf(DatabaseError);
+      expect(secondErr).toBeInstanceOf(DatabaseError);
+      expect(firstErr).not.toBe(secondErr);
+
+      const executed = clientQueries.map((q) => q.text);
+      expect(executed).toEqual(['BEGIN', 'FAIL_1', 'FAIL_2', 'ROLLBACK']);
+      expect(executed).not.toContain('COMMIT');
+      expect(getReleaseCalled()).toBe(true);
+      expect(mockClient.release).toHaveBeenCalledTimes(1);
+    });
+
+    it('preserves first safe query failure when rollback query rejects', async () => {
+      const { mockPool, mockClient, clientQueries, getReleaseCalled } = createMockPool();
+      mockClient.query = vi.fn(async (text: string) => {
+        clientQueries.push({ text });
+        if (text === 'FAIL_QUERY') {
+          throw new Error('Query failure');
+        }
+        if (text === 'ROLLBACK') {
+          throw new Error('Rollback failed over network');
+        }
+        return { rows: [], rowCount: 0, command: text };
+      });
+
+      const db = createDatabase(dummyConfig, { poolFactory: () => mockPool });
+
+      let queryErr: unknown;
+      let rejectedErr: unknown;
+      try {
+        await db.withTransaction(async (tx) => {
+          try {
+            await tx.query('FAIL_QUERY');
+          } catch (err) {
+            queryErr = err;
+          }
+        });
+      } catch (err) {
+        rejectedErr = err;
+      }
+
+      expect(rejectedErr).toBeDefined();
+      expect(rejectedErr).toBe(queryErr);
+      expect(queryErr).toBeInstanceOf(DatabaseError);
+      expect(getReleaseCalled()).toBe(true);
+      expect(mockClient.release).toHaveBeenCalledTimes(1);
+    });
+
+    it('preserves first safe query failure when client release throws', async () => {
+      const { mockPool, mockClient } = createMockPool();
+      mockClient.query = vi.fn(async (text: string) => {
+        if (text === 'FAIL_QUERY') {
+          throw new Error('Query failure');
+        }
+        return { rows: [], rowCount: 0, command: text };
+      });
+      mockClient.release = vi.fn(() => {
+        throw new Error('Client release socket failure');
+      });
+
+      const db = createDatabase(dummyConfig, { poolFactory: () => mockPool });
+
+      let queryErr: unknown;
+      let rejectedErr: unknown;
+      try {
+        await db.withTransaction(async (tx) => {
+          try {
+            await tx.query('FAIL_QUERY');
+          } catch (err) {
+            queryErr = err;
+          }
+        });
+      } catch (err) {
+        rejectedErr = err;
+      }
+
+      expect(rejectedErr).toBeDefined();
+      expect(rejectedErr).toBe(queryErr);
+      expect(queryErr).toBeInstanceOf(DatabaseError);
+      expect(mockClient.release).toHaveBeenCalledTimes(1);
+    });
+
+    it('preserves first safe query failure when client error event fires after query rejection', async () => {
+      const { mockPool, mockClient, getReleasedWithDestroy } = createMockPool();
+      mockClient.query = vi.fn(async (text: string) => {
+        if (text === 'FAIL_QUERY') {
+          throw new Error('Query failure');
+        }
+        return { rows: [], rowCount: 0, command: text };
+      });
+
+      const db = createDatabase(dummyConfig, { poolFactory: () => mockPool });
+
+      let queryErr: unknown;
+      let rejectedErr: unknown;
+      try {
+        await db.withTransaction(async (tx) => {
+          try {
+            await tx.query('FAIL_QUERY');
+          } catch (err) {
+            queryErr = err;
+          }
+          mockClient.emit('error', new Error('Client connection reset'));
+        });
+      } catch (err) {
+        rejectedErr = err;
+      }
+
+      expect(rejectedErr).toBeDefined();
+      expect(rejectedErr).toBe(queryErr);
+      expect(queryErr).toBeInstanceOf(DatabaseError);
+      expect(getReleasedWithDestroy()).toBe(true);
+      expect(mockClient.release).toHaveBeenCalledTimes(1);
+    });
+  });
 });

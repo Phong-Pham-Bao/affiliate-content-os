@@ -311,4 +311,197 @@ describe('Database error categorization and non-disclosure (unit tests)', () => 
       }
     });
   });
+
+  describe('DatabaseError arbitrary cause removal and closed surface (Remediation 03 Finding 1)', () => {
+    it('proves DatabaseError constructor does not accept or store cause', () => {
+      const hostileCause = new Error('Hostile cause with postgresql://secret:pwd@host/db');
+      const err = new DatabaseError('Standard error', {
+        code: 'UNIQUE_VIOLATION',
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ...({ cause: hostileCause } as any),
+      });
+
+      expect('cause' in err).toBe(false);
+      expect((err as unknown as { cause?: unknown }).cause).toBeUndefined();
+      expect(Object.keys(err)).not.toContain('cause');
+      expect(Reflect.ownKeys(err)).not.toContain('cause');
+      expect(err.toJSON()).toEqual({
+        name: 'DatabaseError',
+        message: 'Standard error',
+        code: 'UNIQUE_VIOLATION',
+      });
+      expect(err.toJSON()).not.toHaveProperty('cause');
+      expect(JSON.stringify(err)).not.toContain('Hostile cause');
+      expect(JSON.stringify(err)).not.toContain('secret:pwd');
+      expect(util.inspect(err)).not.toContain('Hostile cause');
+      expect(String(err)).not.toContain('Hostile cause');
+    });
+
+    it('proves sanitizeDatabaseError never attaches input or metadata as cause', () => {
+      const rawErrorWithCause = {
+        name: 'error',
+        code: '23505',
+        message: 'duplicate key value violates unique constraint',
+        cause: {
+          secret: 'classified_credential_sentinel',
+          databaseUrl: 'postgresql://admin:super_secret@localhost:5432/secrets_db',
+        },
+      };
+
+      const sanitized = sanitizeDatabaseError(rawErrorWithCause);
+      expect(sanitized).toBeInstanceOf(DatabaseError);
+      expect('cause' in sanitized).toBe(false);
+      expect((sanitized as unknown as { cause?: unknown }).cause).toBeUndefined();
+      expect(Object.keys(sanitized)).not.toContain('cause');
+      expect(Reflect.ownKeys(sanitized)).not.toContain('cause');
+      expect(sanitized.toJSON()).not.toHaveProperty('cause');
+      expect(JSON.stringify(sanitized)).not.toContain('classified_credential_sentinel');
+      expect(JSON.stringify(sanitized)).not.toContain('super_secret');
+      expect(util.inspect(sanitized)).not.toContain('classified_credential_sentinel');
+      expect(String(sanitized)).not.toContain('classified_credential_sentinel');
+    });
+
+    it('executes zero hooks or traps on hostile cause objects with getters, proxies, and inspect hooks', () => {
+      let getterCalls = 0;
+      let trapCalls = 0;
+      let hookCalls = 0;
+
+      const hostile = new Proxy(
+        {},
+        {
+          get(target, prop) {
+            trapCalls++;
+            if (prop === 'toJSON' || prop === 'toString' || prop === 'valueOf') {
+              hookCalls++;
+              return () => 'hostile_string_sentinel';
+            }
+            if (prop === Symbol.for('nodejs.util.inspect.custom')) {
+              hookCalls++;
+              return () => 'hostile_inspect_sentinel';
+            }
+            if (prop === 'secret') {
+              getterCalls++;
+              return 'secret_getter_value';
+            }
+            return Reflect.get(target, prop);
+          },
+        },
+      );
+
+      const err = new DatabaseError('Standard message', {
+        code: 'DATABASE_ERROR',
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ...({ cause: hostile } as any),
+      });
+
+      expect(trapCalls).toBe(0);
+      expect(getterCalls).toBe(0);
+      expect(hookCalls).toBe(0);
+
+      // Inspect and serialize the DatabaseError
+      const json = JSON.stringify(err);
+      const inspected = util.inspect(err);
+      const str = String(err);
+
+      expect(trapCalls).toBe(0);
+      expect(getterCalls).toBe(0);
+      expect(hookCalls).toBe(0);
+      expect(json).not.toContain('hostile');
+      expect(inspected).not.toContain('hostile');
+      expect(str).not.toContain('hostile');
+    });
+
+    it('returns fresh DatabaseError when genuine DatabaseError has been tainted with cause or extra own properties', () => {
+      const genuine = new DatabaseError('Original safe message', { code: 'DATABASE_ERROR' });
+      // Taint with cause
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (genuine as any).cause = 'hostile_tainted_cause';
+
+      const sanitized = sanitizeDatabaseError(genuine);
+      expect(sanitized).toBeInstanceOf(DatabaseError);
+      expect(sanitized).not.toBe(genuine); // Must NOT return tainted instance
+      expect('cause' in sanitized).toBe(false);
+      expect((sanitized as unknown as { cause?: unknown }).cause).toBeUndefined();
+      expect(JSON.stringify(sanitized)).not.toContain('hostile_tainted_cause');
+
+      // Taint with arbitrary property
+      const genuine2 = new DatabaseError('Original safe message 2', { code: 'AUTH_FAILED' });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (genuine2 as any).secretField = 'secret_metadata';
+
+      const sanitized2 = sanitizeDatabaseError(genuine2);
+      expect(sanitized2).toBeInstanceOf(DatabaseError);
+      expect(sanitized2).not.toBe(genuine2);
+      expect('secretField' in sanitized2).toBe(false);
+      expect(JSON.stringify(sanitized2)).not.toContain('secret_metadata');
+    });
+
+    it('proves child-process execution outputs no hostile cause sentinels through stdout or stderr', async () => {
+      const hostileSentinels = [
+        'cause_sentinel_secret_user',
+        'cause_sentinel_secret_password',
+        'cause_sentinel_bind_param',
+        'cause_sentinel_sql_text',
+      ];
+
+      const childScript = `
+        import { sanitizeDatabaseError, DatabaseError } from './packages/infrastructure/src/database/errors.ts';
+        import util from 'node:util';
+
+        const hostileCause = {
+          user: '${hostileSentinels[0]}',
+          pwd: '${hostileSentinels[1]}',
+          bind: '${hostileSentinels[2]}',
+          sql: '${hostileSentinels[3]}'
+        };
+
+        const dbErr = new DatabaseError('Failed query', {
+          code: 'DATABASE_ERROR',
+          ...({ cause: hostileCause })
+        });
+
+        const fromSanitize = sanitizeDatabaseError({
+          code: '42P01',
+          message: 'table missing',
+          cause: hostileCause
+        });
+
+        console.log(JSON.stringify(dbErr));
+        console.log(util.inspect(dbErr));
+        console.error(String(dbErr));
+
+        console.log(JSON.stringify(fromSanitize));
+        console.log(util.inspect(fromSanitize));
+        console.error(String(fromSanitize));
+      `;
+
+      const child = spawn(
+        process.execPath,
+        ['--conditions=development', '--import', 'tsx', '-e', childScript],
+        {
+          cwd: process.cwd(),
+          stdio: ['pipe', 'pipe', 'pipe'],
+        },
+      );
+
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (d) => {
+        stdout += d.toString();
+      });
+      child.stderr.on('data', (d) => {
+        stderr += d.toString();
+      });
+
+      const exitCode = await new Promise<number>((resolve) => {
+        child.on('close', resolve);
+      });
+
+      expect(exitCode).toBe(0);
+      const combined = stdout + stderr;
+      for (const s of hostileSentinels) {
+        expect(combined).not.toContain(s);
+      }
+    });
+  });
 });

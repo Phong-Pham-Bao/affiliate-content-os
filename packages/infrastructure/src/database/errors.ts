@@ -42,7 +42,6 @@ export class DatabaseError extends Error {
     message: string,
     options?: {
       readonly code?: string | undefined;
-      readonly cause?: unknown;
     },
   ) {
     super(stripCredentials(message));
@@ -50,9 +49,6 @@ export class DatabaseError extends Error {
     GENUINE_DATABASE_ERRORS.add(this);
     if (options?.code !== undefined) {
       this.code = options.code;
-    }
-    if (options?.cause !== undefined) {
-      this.cause = sanitizeCallbackError(options.cause);
     }
 
     if (this.stack) {
@@ -74,13 +70,11 @@ export class DatabaseError extends Error {
     name: string;
     message: string;
     code?: string;
-    cause?: unknown;
   } {
     return {
       name: this.name,
       message: this.message,
       ...(this.code ? { code: this.code } : {}),
-      ...(this.cause !== undefined ? { cause: this.cause } : {}),
     };
   }
 
@@ -88,7 +82,6 @@ export class DatabaseError extends Error {
     name: string;
     message: string;
     code?: string;
-    cause?: unknown;
   } {
     return this.toJSON();
   }
@@ -281,7 +274,30 @@ export function sanitizeDatabaseError(
         }
       }
 
-      if (needsSanitizeMsg || needsSanitizeStack) {
+      let hasUnexpectedOwnKeys = false;
+      try {
+        const ownKeys = Reflect.ownKeys(err);
+        for (const k of ownKeys) {
+          if (k !== 'name' && k !== 'message' && k !== 'code' && k !== 'stack') {
+            hasUnexpectedOwnKeys = true;
+            break;
+          }
+        }
+      } catch {
+        hasUnexpectedOwnKeys = true;
+      }
+
+      let hasCause = false;
+      try {
+        const causeDesc = Object.getOwnPropertyDescriptor(err, 'cause');
+        if (causeDesc !== undefined || 'cause' in (err as object)) {
+          hasCause = true;
+        }
+      } catch {
+        hasCause = true;
+      }
+
+      if (needsSanitizeMsg || needsSanitizeStack || hasUnexpectedOwnKeys || hasCause) {
         const safeMsg = stripCredentials(rawMsg);
         return new DatabaseError(
           safeContext && !safeMsg.startsWith(safeContext) ? `${safeContext}: ${safeMsg}` : safeMsg,

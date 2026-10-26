@@ -1,4 +1,3 @@
-import util from 'node:util';
 import {
   type UserId,
   type UserSnapshot,
@@ -24,34 +23,6 @@ import {
   type RawWorkspaceRow,
 } from './mappers.js';
 
-function isSlugConflictError(error: unknown): boolean {
-  if (typeof error !== 'object' || error === null) {
-    return false;
-  }
-  if (util.types.isProxy(error)) {
-    return false;
-  }
-
-  let code: unknown;
-  let constraint: unknown;
-
-  try {
-    const codeDesc = Object.getOwnPropertyDescriptor(error, 'code');
-    if (codeDesc && codeDesc.get === undefined && codeDesc.set === undefined) {
-      code = codeDesc.value;
-    }
-    const constraintDesc = Object.getOwnPropertyDescriptor(error, 'constraint');
-    if (constraintDesc && constraintDesc.get === undefined && constraintDesc.set === undefined) {
-      constraint = constraintDesc.value;
-    }
-  } catch {
-    return false;
-  }
-
-  const isUniqueViolation = code === '23505' || code === 'UNIQUE_VIOLATION';
-  return isUniqueViolation && constraint === 'workspaces_slug_unique';
-}
-
 export class PostgresTenancyAdapter implements UserDirectoryPort, WorkspacePersistencePort {
   constructor(private readonly database: Database) {}
 
@@ -74,30 +45,29 @@ export class PostgresTenancyAdapter implements UserDirectoryPort, WorkspacePersi
   ): Promise<CreateWorkspaceResult> {
     try {
       return await this.database.withTransaction(async (tx) => {
-        try {
-          await tx.query(
-            `INSERT INTO workspaces (
-              id, name, slug, timezone, brand_voice, default_disclosure, ai_enabled, status, created_at, updated_at, version
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-            [
-              params.workspace.id,
-              params.workspace.name,
-              params.workspace.slug,
-              params.workspace.timezone,
-              params.workspace.brandVoice,
-              params.workspace.defaultDisclosure,
-              params.workspace.aiEnabled,
-              params.workspace.status,
-              params.workspace.createdAt,
-              params.workspace.updatedAt,
-              params.workspace.version,
-            ],
-          );
-        } catch (wsErr) {
-          if (isSlugConflictError(wsErr)) {
-            throw new SlugConflictError(params.workspace.slug);
-          }
-          throw wsErr;
+        const wsResult = await tx.query<{ readonly id: string }>(
+          `INSERT INTO workspaces (
+            id, name, slug, timezone, brand_voice, default_disclosure, ai_enabled, status, created_at, updated_at, version
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+          ON CONFLICT (slug) DO NOTHING
+          RETURNING id`,
+          [
+            params.workspace.id,
+            params.workspace.name,
+            params.workspace.slug,
+            params.workspace.timezone,
+            params.workspace.brandVoice,
+            params.workspace.defaultDisclosure,
+            params.workspace.aiEnabled,
+            params.workspace.status,
+            params.workspace.createdAt,
+            params.workspace.updatedAt,
+            params.workspace.version,
+          ],
+        );
+
+        if (wsResult.rowCount === 0) {
+          throw new SlugConflictError(params.workspace.slug);
         }
 
         await tx.query(

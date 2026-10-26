@@ -111,10 +111,7 @@ export function mapMembershipRow(row: RawMembershipRow): WorkspaceMembershipSnap
     role: row.role as WorkspaceRole,
     status: row.status as MembershipStatus,
     invitedByUserId: row.invited_by_user_id ? parseUserId(row.invited_by_user_id) : null,
-    joinedAt:
-      row.joined_at !== null && row.joined_at !== undefined
-        ? mapRowTimestamp(row.joined_at, 'joined_at')
-        : null,
+    joinedAt: row.joined_at === null ? null : mapRowTimestamp(row.joined_at, 'joined_at'),
     createdAt: mapRowTimestamp(row.created_at, 'created_at'),
     updatedAt: mapRowTimestamp(row.updated_at, 'updated_at'),
     version: Number(row.version),

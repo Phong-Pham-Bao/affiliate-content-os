@@ -29,6 +29,7 @@ class FakeDatabase implements Database {
   public txFailWith?: Error;
   public wsInsertFailWith?: Error;
   public memInsertFailWith?: Error;
+  public wsInsertRowCount = 1;
 
   public async query<T = unknown>(
     text: string,
@@ -50,8 +51,17 @@ class FakeDatabase implements Database {
         params?: readonly unknown[],
       ): Promise<DatabaseQueryResult<R>> => {
         this.txQueryCalls.push({ text, params });
-        if (text.includes('INSERT INTO workspaces') && this.wsInsertFailWith) {
-          throw this.wsInsertFailWith;
+        if (text.includes('INSERT INTO workspaces')) {
+          if (this.wsInsertFailWith) {
+            throw this.wsInsertFailWith;
+          }
+          return {
+            rows: (this.wsInsertRowCount > 0
+              ? [{ id: params?.[0] }]
+              : []) as unknown as readonly R[],
+            rowCount: this.wsInsertRowCount,
+            command: 'INSERT',
+          };
         }
         if (text.includes('INSERT INTO workspace_memberships') && this.memInsertFailWith) {
           throw this.memInsertFailWith;
@@ -160,37 +170,46 @@ describe('PostgresTenancyAdapter Unit Tests', () => {
     expect(fakeDb.txQueryCalls[1]?.params?.[0]).toBe(membershipId);
   });
 
-  describe('Constraint mapping matrix (Finding 1)', () => {
-    function makeUniqueViolation(constraintName?: unknown, ...codeArgs: [unknown?]): Error {
-      const code = codeArgs.length > 0 ? codeArgs[0] : '23505';
-      const err = new Error('duplicate key value violates unique constraint');
-      Object.assign(err, { code, constraint: constraintName });
-      return err;
-    }
-
-    it('maps workspaces_slug_unique from workspace-insert catch to SlugConflictError', async () => {
+  describe('Explicit SQL slug conflict and constraint safety (Remediation 03 Finding 2)', () => {
+    it('maps zero returned rows from ON CONFLICT (slug) DO NOTHING RETURNING id to SlugConflictError', async () => {
       const fakeDb = new FakeDatabase();
-      fakeDb.wsInsertFailWith = makeUniqueViolation('workspaces_slug_unique');
+      fakeDb.wsInsertRowCount = 0; // Conflict on slug triggers DO NOTHING RETURNING id -> 0 rows
 
       const adapter = createPostgresTenancyAdapter(fakeDb);
       await expect(adapter.createWorkspaceWithOwner({ workspace, membership })).rejects.toThrow(
         SlugConflictError,
       );
+
+      // Verify the query includes explicit ON CONFLICT (slug) DO NOTHING RETURNING id
+      const wsQuery = fakeDb.txQueryCalls.find((c) => c.text.includes('INSERT INTO workspaces'));
+      expect(wsQuery?.text).toContain('ON CONFLICT (slug) DO NOTHING');
+      expect(wsQuery?.text).toContain('RETURNING id');
+      // Membership insert was NOT executed because conflict was thrown
+      expect(
+        fakeDb.txQueryCalls.some((c) => c.text.includes('INSERT INTO workspace_memberships')),
+      ).toBe(false);
     });
 
-    it('maps sanitized UNIQUE_VIOLATION with workspaces_slug_unique to SlugConflictError', async () => {
+    it('continues to membership insert when ON CONFLICT (slug) inserts 1 row', async () => {
       const fakeDb = new FakeDatabase();
-      fakeDb.wsInsertFailWith = makeUniqueViolation('workspaces_slug_unique', 'UNIQUE_VIOLATION');
+      fakeDb.wsInsertRowCount = 1;
 
       const adapter = createPostgresTenancyAdapter(fakeDb);
-      await expect(adapter.createWorkspaceWithOwner({ workspace, membership })).rejects.toThrow(
-        SlugConflictError,
-      );
+      const res = await adapter.createWorkspaceWithOwner({ workspace, membership });
+      expect(res.workspace).toBe(workspace);
+      expect(res.membership).toBe(membership);
+
+      expect(fakeDb.txQueryCalls.some((c) => c.text.includes('INSERT INTO workspaces'))).toBe(true);
+      expect(
+        fakeDb.txQueryCalls.some((c) => c.text.includes('INSERT INTO workspace_memberships')),
+      ).toBe(true);
     });
 
-    it('rejects workspaces_slug_unique reaching outer catch as safe DatabaseError without broad fallback', async () => {
+    it('rejects workspaces_pkey collision as safe DatabaseError, not SlugConflictError', async () => {
       const fakeDb = new FakeDatabase();
-      fakeDb.txFailWith = makeUniqueViolation('workspaces_slug_unique');
+      fakeDb.wsInsertFailWith = new DatabaseError('Unique constraint violation', {
+        code: 'UNIQUE_VIOLATION',
+      });
 
       const adapter = createPostgresTenancyAdapter(fakeDb);
       const err = await adapter.createWorkspaceWithOwner({ workspace, membership }).catch((e) => e);
@@ -199,20 +218,11 @@ describe('PostgresTenancyAdapter Unit Tests', () => {
       expect(err).not.toBeInstanceOf(SlugConflictError);
     });
 
-    it('passes through previously constructed SlugConflictError from inner transaction boundary unchanged', async () => {
+    it('rejects workspace_memberships_pkey as safe DatabaseError, not SlugConflictError', async () => {
       const fakeDb = new FakeDatabase();
-      const conflict = new SlugConflictError(workspace.slug);
-      fakeDb.txFailWith = conflict;
-
-      const adapter = createPostgresTenancyAdapter(fakeDb);
-      await expect(adapter.createWorkspaceWithOwner({ workspace, membership })).rejects.toBe(
-        conflict,
-      );
-    });
-
-    it('rejects sanitized DatabaseError re-entering outer catch without raw metadata as safe DatabaseError', async () => {
-      const fakeDb = new FakeDatabase();
-      fakeDb.txFailWith = new DatabaseError('Transaction failed', { code: 'UNIQUE_VIOLATION' });
+      fakeDb.memInsertFailWith = new DatabaseError('Unique constraint violation', {
+        code: 'UNIQUE_VIOLATION',
+      });
 
       const adapter = createPostgresTenancyAdapter(fakeDb);
       const err = await adapter.createWorkspaceWithOwner({ workspace, membership }).catch((e) => e);
@@ -221,14 +231,43 @@ describe('PostgresTenancyAdapter Unit Tests', () => {
       expect(err).not.toBeInstanceOf(SlugConflictError);
     });
 
-    it('rejects workspaces_slug_unique with non-unique or invalid code as safe DatabaseError', async () => {
-      const invalidCodes = ['42P01', '28P01', 'UNKNOWN_CODE', undefined, 12345, null];
-      for (const code of invalidCodes) {
+    it('rejects workspace_memberships_workspace_user_unique as safe DatabaseError, not SlugConflictError', async () => {
+      const fakeDb = new FakeDatabase();
+      fakeDb.memInsertFailWith = new DatabaseError('Unique constraint violation', {
+        code: 'UNIQUE_VIOLATION',
+      });
+
+      const adapter = createPostgresTenancyAdapter(fakeDb);
+      const err = await adapter.createWorkspaceWithOwner({ workspace, membership }).catch((e) => e);
+
+      expect(err).toBeInstanceOf(DatabaseError);
+      expect(err).not.toBeInstanceOf(SlugConflictError);
+    });
+
+    it('rejects users_identity_provider_subject_unique as safe DatabaseError, not SlugConflictError', async () => {
+      const fakeDb = new FakeDatabase();
+      fakeDb.txFailWith = new DatabaseError('Unique constraint violation', {
+        code: 'UNIQUE_VIOLATION',
+      });
+
+      const adapter = createPostgresTenancyAdapter(fakeDb);
+      const err = await adapter.createWorkspaceWithOwner({ workspace, membership }).catch((e) => e);
+
+      expect(err).toBeInstanceOf(DatabaseError);
+      expect(err).not.toBeInstanceOf(SlugConflictError);
+    });
+
+    it('rejects foreign-key, check-constraint, connection, and unknown failures as safe DatabaseError, not SlugConflictError', async () => {
+      const failures = [
+        new DatabaseError('Foreign key violation', { code: 'FOREIGN_KEY_VIOLATION' }),
+        new DatabaseError('Check constraint violation', { code: 'CHECK_VIOLATION' }),
+        new DatabaseError('Connection refused', { code: 'CONNECTION_REFUSED' }),
+        new DatabaseError('Database operation failed', { code: 'DATABASE_ERROR' }),
+      ];
+
+      for (const failErr of failures) {
         const fakeDb = new FakeDatabase();
-        fakeDb.wsInsertFailWith = makeUniqueViolation(
-          'workspaces_slug_unique',
-          code as unknown as string,
-        );
+        fakeDb.wsInsertFailWith = failErr;
 
         const adapter = createPostgresTenancyAdapter(fakeDb);
         const err = await adapter
@@ -240,89 +279,38 @@ describe('PostgresTenancyAdapter Unit Tests', () => {
       }
     });
 
-    it('rejects workspaces_pkey as safe DatabaseError, not SlugConflictError', async () => {
+    it('passes through previously constructed SlugConflictError unchanged', async () => {
       const fakeDb = new FakeDatabase();
-      fakeDb.wsInsertFailWith = makeUniqueViolation('workspaces_pkey');
+      const conflict = new SlugConflictError(workspace.slug);
+      fakeDb.txFailWith = conflict;
 
       const adapter = createPostgresTenancyAdapter(fakeDb);
-      const err = await adapter.createWorkspaceWithOwner({ workspace, membership }).catch((e) => e);
-
-      expect(err).toBeInstanceOf(DatabaseError);
-      expect(err).not.toBeInstanceOf(SlugConflictError);
+      await expect(adapter.createWorkspaceWithOwner({ workspace, membership })).rejects.toBe(
+        conflict,
+      );
     });
 
-    it('rejects workspace_memberships_pkey as safe DatabaseError, not SlugConflictError', async () => {
+    it('proves no raw driver error object or constraint is needed or inspected by adapter', async () => {
       const fakeDb = new FakeDatabase();
-      fakeDb.memInsertFailWith = makeUniqueViolation('workspace_memberships_pkey');
-
-      const adapter = createPostgresTenancyAdapter(fakeDb);
-      const err = await adapter.createWorkspaceWithOwner({ workspace, membership }).catch((e) => e);
-
-      expect(err).toBeInstanceOf(DatabaseError);
-      expect(err).not.toBeInstanceOf(SlugConflictError);
-    });
-
-    it('rejects workspace_memberships_workspace_user_unique as safe DatabaseError, not SlugConflictError', async () => {
-      const fakeDb = new FakeDatabase();
-      fakeDb.memInsertFailWith = makeUniqueViolation('workspace_memberships_workspace_user_unique');
-
-      const adapter = createPostgresTenancyAdapter(fakeDb);
-      const err = await adapter.createWorkspaceWithOwner({ workspace, membership }).catch((e) => e);
-
-      expect(err).toBeInstanceOf(DatabaseError);
-      expect(err).not.toBeInstanceOf(SlugConflictError);
-    });
-
-    it('rejects users_identity_provider_subject_unique as safe DatabaseError, not SlugConflictError', async () => {
-      const fakeDb = new FakeDatabase();
-      fakeDb.txFailWith = makeUniqueViolation('users_identity_provider_subject_unique');
-
-      const adapter = createPostgresTenancyAdapter(fakeDb);
-      const err = await adapter.createWorkspaceWithOwner({ workspace, membership }).catch((e) => e);
-
-      expect(err).toBeInstanceOf(DatabaseError);
-      expect(err).not.toBeInstanceOf(SlugConflictError);
-    });
-
-    it.each([
-      ['missing constraint (undefined)', undefined],
-      ['null constraint', null],
-      ['numeric constraint', 12345],
-      ['unknown constraint', 'some_unknown_unique_idx'],
-      ['empty string constraint', ''],
-    ])('rejects unique violation with %s as safe DatabaseError', async (_, constraint) => {
-      const fakeDb = new FakeDatabase();
-      fakeDb.wsInsertFailWith = makeUniqueViolation(constraint);
-
-      const adapter = createPostgresTenancyAdapter(fakeDb);
-      const err = await adapter.createWorkspaceWithOwner({ workspace, membership }).catch((e) => e);
-
-      expect(err).toBeInstanceOf(DatabaseError);
-      expect(err).not.toBeInstanceOf(SlugConflictError);
-    });
-
-    it('handles hostile getter/proxy constraint safely without executing trap', async () => {
-      const fakeDb = new FakeDatabase();
-      let getterCalled = false;
-      const hostileErr = new Error('hostile');
-      (hostileErr as unknown as { code: string }).code = '23505';
-      Object.defineProperty(hostileErr, 'constraint', {
+      const rawDriverErr = new Error('raw driver error');
+      let constraintInspected = false;
+      Object.defineProperty(rawDriverErr, 'constraint', {
         get() {
-          getterCalled = true;
+          constraintInspected = true;
           return 'workspaces_slug_unique';
         },
       });
-      fakeDb.wsInsertFailWith = hostileErr;
+      fakeDb.wsInsertFailWith = rawDriverErr;
 
       const adapter = createPostgresTenancyAdapter(fakeDb);
       const err = await adapter.createWorkspaceWithOwner({ workspace, membership }).catch((e) => e);
 
-      expect(getterCalled).toBe(false);
+      expect(constraintInspected).toBe(false);
       expect(err).toBeInstanceOf(DatabaseError);
       expect(err).not.toBeInstanceOf(SlugConflictError);
     });
 
-    it('sanitizes non-unique database failures to safe DatabaseError', async () => {
+    it('sanitizes non-unique database failures to safe DatabaseError without secret disclosure', async () => {
       const fakeDb = new FakeDatabase();
       fakeDb.txFailWith = new Error('Connection terminated postgresql://user:secret@127.0.0.1/db');
 
@@ -475,15 +463,48 @@ describe('PostgresTenancyAdapter Unit Tests', () => {
       );
     });
 
-    it('preserves null for nullable WorkspaceMembershipSnapshot.joined_at', () => {
+    it('accepts exactly null for nullable WorkspaceMembershipSnapshot.joined_at and rejects undefined and invalid types safely', () => {
       const fromNull = mapMembershipRow({ ...validBaseMem, joined_at: null });
       expect(fromNull.joinedAt).toBeNull();
 
-      const fromUndefined = mapMembershipRow({
-        ...validBaseMem,
-        joined_at: undefined as unknown as null,
-      });
-      expect(fromUndefined.joinedAt).toBeNull();
+      expect(() => {
+        mapMembershipRow({
+          ...validBaseMem,
+          joined_at: undefined as unknown as null,
+        });
+      }).toThrow(DatabaseError);
+
+      try {
+        mapMembershipRow({
+          ...validBaseMem,
+          joined_at: undefined as unknown as null,
+        });
+      } catch (err) {
+        expect(err).toBeInstanceOf(DatabaseError);
+        expect((err as DatabaseError).message).toBe(
+          'Invalid timestamp value for field "joined_at"',
+        );
+        expect(String(err)).not.toContain('undefined');
+        expect(JSON.stringify(err)).not.toContain('undefined');
+      }
+
+      const invalidJoinedAtValues = [
+        ['empty string', ''],
+        ['space separated', '2026-10-25 12:00:00+00'],
+        ['number', 1700000000],
+        ['boolean', true],
+        ['plain object', {}],
+        ['array', []],
+      ];
+
+      for (const [, val] of invalidJoinedAtValues) {
+        expect(() => {
+          mapMembershipRow({
+            ...validBaseMem,
+            joined_at: val as unknown as string,
+          });
+        }).toThrow(DatabaseError);
+      }
     });
 
     it.each([
