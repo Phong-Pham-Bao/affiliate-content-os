@@ -318,7 +318,7 @@ Mutation tests must attempt to change the returned user, principal, nested sourc
 Assert exact SQL semantics and parameter arrays:
 
 - lookup has only provider/subject predicates, `LIMIT 2`, and exact two parameters;
-- insert has the exact `(identity_provider, identity_subject)` conflict target, `DO NOTHING RETURNING`, all ten user columns, and exact parameter order;
+- insert has the exact `(identity_provider, identity_subject)` conflict target, `DO NOTHING RETURNING`, all nine user columns, and exact parameter order;
 - no query contains email lookup, interpolated values, raw identity strings, or provider-specific SQL;
 - zero insert rows map to `null`; one maps through `mapUserRow`; more than one becomes safe `DatabaseError`;
 - malformed IDs, statuses, versions, timestamps, row values, getters, proxies, and hostile database results fail closed;
