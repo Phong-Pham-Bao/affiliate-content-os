@@ -11,6 +11,16 @@ export interface UserDirectoryPort {
   findUserById(userId: UserId): Promise<UserSnapshot | null>;
 }
 
+export interface IdentityLookupKey {
+  readonly identityProvider: string;
+  readonly identitySubject: string;
+}
+
+export interface UserIdentityDirectoryPort {
+  findUsersByIdentity(key: IdentityLookupKey): Promise<readonly UserSnapshot[]>;
+  insertUserIfAbsent(params: { readonly user: UserSnapshot }): Promise<UserSnapshot | null>;
+}
+
 export interface CreateWorkspaceWithOwnerParams {
   readonly workspace: WorkspaceSnapshot;
   readonly membership: WorkspaceMembershipSnapshot;
