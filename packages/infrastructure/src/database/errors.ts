@@ -12,7 +12,14 @@ import {
 
 export { getDatabaseError, hasSensitiveUrl, sanitizeRejection, stripCredentials };
 
+interface TrustedConstructionState {
+  readonly safeMessage: string;
+  readonly safeCode: string | undefined;
+  readonly originalStack: string | undefined;
+}
+
 const GENUINE_DATABASE_ERRORS = new WeakSet<object>();
+const TRUSTED_CONSTRUCTION_STATE = new WeakMap<object, TrustedConstructionState>();
 
 export function isDatabaseError(value: unknown): value is DatabaseError {
   return typeof value === 'object' && value !== null && GENUINE_DATABASE_ERRORS.has(value);
@@ -34,26 +41,54 @@ export class DatabaseError extends Error {
       readonly code?: string | undefined;
     },
   ) {
-    super(stripCredentials(message));
+    const safeMessage =
+      typeof message === 'string' ? stripCredentials(message) : 'Database operation failed';
+    super(safeMessage);
     this.name = 'DatabaseError';
-    GENUINE_DATABASE_ERRORS.add(this);
-    if (options?.code !== undefined) {
-      this.code = options.code;
+
+    let safeCode: string | undefined;
+    if (options && typeof options === 'object') {
+      try {
+        const desc = Object.getOwnPropertyDescriptor(options, 'code');
+        if (
+          desc &&
+          desc.get === undefined &&
+          desc.set === undefined &&
+          typeof desc.value === 'string'
+        ) {
+          if (APPROVED_CODES.has(desc.value) && !hasSensitiveUrl(desc.value)) {
+            safeCode = desc.value;
+          }
+        }
+      } catch {
+        safeCode = undefined;
+      }
+    }
+    if (safeCode !== undefined) {
+      this.code = safeCode;
     }
 
-    if (this.stack) {
-      const stripped = stripCredentials(this.stack);
+    let initialStack: string | undefined;
+    if (this.stack && typeof this.stack === 'string') {
+      initialStack = stripCredentials(this.stack);
       try {
         Object.defineProperty(this, 'stack', {
-          value: stripped,
+          value: initialStack,
           writable: true,
           configurable: true,
           enumerable: false,
         });
       } catch {
-        this.stack = stripped;
+        this.stack = initialStack;
       }
     }
+
+    GENUINE_DATABASE_ERRORS.add(this);
+    TRUSTED_CONSTRUCTION_STATE.set(this, {
+      safeMessage,
+      safeCode,
+      originalStack: initialStack,
+    });
   }
 
   public toJSON(): {
@@ -75,13 +110,111 @@ export class DatabaseError extends Error {
   } {
     return this.toJSON();
   }
+
+  public override toString(): string {
+    return this.message ? `${this.name}: ${this.message}` : this.name;
+  }
 }
 
-setDatabaseErrorFactory(
-  (message: string) => new DatabaseError(message, { code: 'DATABASE_ERROR' }),
-);
+const ORIGINAL_TO_JSON = DatabaseError.prototype.toJSON;
+const ORIGINAL_CUSTOM_INSPECT = (DatabaseError.prototype as unknown as Record<symbol, unknown>)[
+  Symbol.for('nodejs.util.inspect.custom')
+];
+const ORIGINAL_TO_STRING = DatabaseError.prototype.toString;
+const ORIGINAL_CONSTRUCTOR = DatabaseError;
+const ORIGINAL_ERROR_TO_STRING = Error.prototype.toString;
+
+const SAFE_DATABASE_ERROR_PROTOTYPE = Object.create(Error.prototype);
+Object.defineProperties(SAFE_DATABASE_ERROR_PROTOTYPE, {
+  name: {
+    value: 'DatabaseError',
+    writable: false,
+    configurable: false,
+    enumerable: false,
+  },
+  toJSON: {
+    value: ORIGINAL_TO_JSON,
+    writable: false,
+    configurable: false,
+    enumerable: false,
+  },
+  [Symbol.for('nodejs.util.inspect.custom')]: {
+    value: ORIGINAL_CUSTOM_INSPECT,
+    writable: false,
+    configurable: false,
+    enumerable: false,
+  },
+  toString: {
+    value: ORIGINAL_TO_STRING,
+    writable: false,
+    configurable: false,
+    enumerable: false,
+  },
+  constructor: {
+    value: DatabaseError,
+    writable: false,
+    configurable: false,
+    enumerable: false,
+  },
+});
+Object.freeze(SAFE_DATABASE_ERROR_PROTOTYPE);
 
 registerDatabaseErrorPrototype(DatabaseError.prototype);
+registerDatabaseErrorPrototype(SAFE_DATABASE_ERROR_PROTOTYPE);
+
+function isDatabaseErrorProtoClean(): boolean {
+  try {
+    const proto = DatabaseError.prototype;
+    const protoKeys = Reflect.ownKeys(proto);
+    for (const k of protoKeys) {
+      if (
+        k !== 'constructor' &&
+        k !== 'toJSON' &&
+        k !== Symbol.for('nodejs.util.inspect.custom') &&
+        k !== 'toString'
+      ) {
+        return false;
+      }
+      const desc = Object.getOwnPropertyDescriptor(proto, k);
+      if (!desc || desc.get !== undefined || desc.set !== undefined) {
+        return false;
+      }
+      if (k === 'constructor' && desc.value !== ORIGINAL_CONSTRUCTOR) {
+        return false;
+      }
+      if (k === 'toJSON' && desc.value !== ORIGINAL_TO_JSON) {
+        return false;
+      }
+      if (
+        k === Symbol.for('nodejs.util.inspect.custom') &&
+        desc.value !== ORIGINAL_CUSTOM_INSPECT
+      ) {
+        return false;
+      }
+      if (k === 'toString' && desc.value !== ORIGINAL_TO_STRING) {
+        return false;
+      }
+    }
+    if (Error.prototype.toString !== ORIGINAL_ERROR_TO_STRING) {
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function createFreshSafeDatabaseError(message: string, code: string | undefined): DatabaseError {
+  const fresh = new DatabaseError(message, { code });
+  if (!isDatabaseErrorProtoClean()) {
+    Object.setPrototypeOf(fresh, SAFE_DATABASE_ERROR_PROTOTYPE);
+  }
+  return fresh;
+}
+
+setDatabaseErrorFactory((message: string) =>
+  createFreshSafeDatabaseError(message, 'DATABASE_ERROR'),
+);
 
 export function sanitizeCallbackError<E = unknown>(err: E): E | Error {
   if (isDatabaseError(err)) {
@@ -242,18 +375,24 @@ export function sanitizeDatabaseError(
       err === null ||
       err === undefined ||
       typeof err !== 'object' ||
+      util.types.isProxy(err) ||
       hasProxyInPrototypeChain(err as object)
     ) {
-      return new DatabaseError(fallbackMessage, { code: 'DATABASE_ERROR' });
+      return createFreshSafeDatabaseError(fallbackMessage, 'DATABASE_ERROR');
     }
 
     const isDbError = isDatabaseError(err);
 
     if (isDbError) {
+      const trusted = TRUSTED_CONSTRUCTION_STATE.get(err as object);
+      if (!trusted) {
+        return createFreshSafeDatabaseError(fallbackMessage, 'DATABASE_ERROR');
+      }
+
       let isStandardProtoChain = false;
       try {
         const p1 = Object.getPrototypeOf(err);
-        if (p1 === DatabaseError.prototype) {
+        if (p1 === DatabaseError.prototype || p1 === SAFE_DATABASE_ERROR_PROTOTYPE) {
           const p2 = Object.getPrototypeOf(p1);
           if (p2 === Error.prototype) {
             const p3 = Object.getPrototypeOf(p2);
@@ -269,27 +408,7 @@ export function sanitizeDatabaseError(
         isStandardProtoChain = false;
       }
 
-      let protoClean = true;
-      try {
-        const protoKeys = Reflect.ownKeys(DatabaseError.prototype);
-        for (const k of protoKeys) {
-          if (
-            k !== 'constructor' &&
-            k !== 'toJSON' &&
-            k !== Symbol.for('nodejs.util.inspect.custom')
-          ) {
-            protoClean = false;
-            break;
-          }
-          const desc = Object.getOwnPropertyDescriptor(DatabaseError.prototype, k);
-          if (!desc || desc.get !== undefined || desc.set !== undefined) {
-            protoClean = false;
-            break;
-          }
-        }
-      } catch {
-        protoClean = false;
-      }
+      const protoClean = isDatabaseErrorProtoClean();
 
       let hasCause = false;
       try {
@@ -303,8 +422,12 @@ export function sanitizeDatabaseError(
 
       let hasUnexpectedOwnKeys = false;
       try {
-        const ownKeys = Reflect.ownKeys(err);
+        const ownKeys = Reflect.ownKeys(err as object);
         for (const k of ownKeys) {
+          if (typeof k !== 'string') {
+            hasUnexpectedOwnKeys = true;
+            break;
+          }
           if (k !== 'name' && k !== 'message' && k !== 'code' && k !== 'stack') {
             hasUnexpectedOwnKeys = true;
             break;
@@ -324,7 +447,7 @@ export function sanitizeDatabaseError(
         codeDesc = Object.getOwnPropertyDescriptor(err, 'code');
         stackDesc = Object.getOwnPropertyDescriptor(err, 'stack');
       } catch {
-        return new DatabaseError(fallbackMessage, { code: 'DATABASE_ERROR' });
+        return createFreshSafeDatabaseError(fallbackMessage, 'DATABASE_ERROR');
       }
 
       const isNameTainted =
@@ -337,30 +460,25 @@ export function sanitizeDatabaseError(
         !msgDesc ||
         msgDesc.get !== undefined ||
         msgDesc.set !== undefined ||
-        typeof msgDesc.value !== 'string' ||
-        hasSensitiveUrl(msgDesc.value);
+        msgDesc.value !== trusted.safeMessage;
 
-      let isCodeTainted = false;
-      if (codeDesc !== undefined) {
-        if (codeDesc.get !== undefined || codeDesc.set !== undefined) {
-          isCodeTainted = true;
-        } else if (codeDesc.value !== undefined) {
-          if (
-            typeof codeDesc.value !== 'string' ||
-            !APPROVED_CODES.has(codeDesc.value) ||
-            hasSensitiveUrl(codeDesc.value)
-          ) {
-            isCodeTainted = true;
-          }
-        }
-      }
+      const isCodeTainted =
+        trusted.safeCode !== undefined
+          ? !codeDesc ||
+            codeDesc.get !== undefined ||
+            codeDesc.set !== undefined ||
+            codeDesc.value !== trusted.safeCode
+          : codeDesc !== undefined &&
+            (codeDesc.get !== undefined ||
+              codeDesc.set !== undefined ||
+              codeDesc.value !== undefined);
 
       const isStackTainted =
         !stackDesc ||
         stackDesc.get !== undefined ||
         stackDesc.set !== undefined ||
         typeof stackDesc.value !== 'string' ||
-        hasSensitiveUrl(stackDesc.value);
+        stackDesc.value !== trusted.originalStack;
 
       const isTainted =
         !isStandardProtoChain ||
@@ -372,35 +490,17 @@ export function sanitizeDatabaseError(
         isCodeTainted ||
         isStackTainted;
 
-      if (isTainted) {
-        const rawMsg = msgDesc && typeof msgDesc.value === 'string' ? msgDesc.value : undefined;
-        const safeMsg = rawMsg
-          ? stripCredentials(rawMsg)
-          : safeContext
-            ? `${safeContext}: Database operation failed`
-            : 'Database operation failed';
-        const finalMsg =
-          safeContext && !safeMsg.startsWith(safeContext) ? `${safeContext}: ${safeMsg}` : safeMsg;
-        const safeCode =
-          codeDesc &&
-          typeof codeDesc.value === 'string' &&
-          APPROVED_CODES.has(codeDesc.value) &&
-          !hasSensitiveUrl(codeDesc.value)
-            ? codeDesc.value
-            : rawMsg
-              ? undefined
-              : 'DATABASE_ERROR';
+      const safeMsg = trusted.safeMessage;
+      const finalMsg =
+        safeContext && !safeMsg.startsWith(safeContext) ? `${safeContext}: ${safeMsg}` : safeMsg;
+      const safeCode = trusted.safeCode ?? 'DATABASE_ERROR';
 
-        return new DatabaseError(finalMsg, { code: safeCode });
+      if (isTainted) {
+        return createFreshSafeDatabaseError(finalMsg, safeCode);
       }
 
-      const rawMsg = msgDesc!.value as string;
-      const rawCode = codeDesc && typeof codeDesc.value === 'string' ? codeDesc.value : undefined;
-
-      if (safeContext && !rawMsg.startsWith(safeContext)) {
-        return new DatabaseError(`${safeContext}: ${rawMsg}`, {
-          code: rawCode,
-        });
+      if (safeContext && !trusted.safeMessage.startsWith(safeContext)) {
+        return createFreshSafeDatabaseError(finalMsg, safeCode);
       }
 
       return err as DatabaseError;
@@ -411,8 +511,8 @@ export function sanitizeDatabaseError(
       ? `${safeContext}: ${classification.message}`
       : classification.message;
 
-    return new DatabaseError(message, { code: classification.code });
+    return createFreshSafeDatabaseError(message, classification.code);
   } catch {
-    return new DatabaseError(fallbackMessage, { code: 'DATABASE_ERROR' });
+    return createFreshSafeDatabaseError(fallbackMessage, 'DATABASE_ERROR');
   }
 }

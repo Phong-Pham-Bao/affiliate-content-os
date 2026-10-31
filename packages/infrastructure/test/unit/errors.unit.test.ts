@@ -573,7 +573,7 @@ describe('Database error categorization and non-disclosure (unit tests)', () => 
 
       const sanitized = sanitizeDatabaseError(err);
       expect(sanitized).toBeInstanceOf(DatabaseError);
-      expect(sanitized).not.toBe(err);
+      expect(sanitized !== err).toBe(true);
 
       // Caller-owned error must NOT be mutated in place
       expect(anyErr.constraint).toBe('hostile_constraint_secret');
@@ -697,6 +697,361 @@ describe('Database error categorization and non-disclosure (unit tests)', () => 
         console.log(JSON.stringify(s2));
         console.error(String(s2));
         console.log(util.inspect(s2));
+      `;
+
+      const child = spawn(
+        process.execPath,
+        ['--conditions=development', '--import', 'tsx', '-e', childScript],
+        {
+          cwd: process.cwd(),
+          stdio: ['pipe', 'pipe', 'pipe'],
+        },
+      );
+
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (d) => {
+        stdout += d.toString();
+      });
+      child.stderr.on('data', (d) => {
+        stderr += d.toString();
+      });
+
+      const exitCode = await new Promise<number>((resolve) => {
+        child.on('close', resolve);
+      });
+
+      expect(exitCode).toBe(0);
+      const combined = stdout + stderr;
+      for (const s of sentinels) {
+        expect(combined).not.toContain(s);
+      }
+    });
+  });
+
+  describe('TASK-004 Remediation 05 - Trusted Construction State and Mutation Invariants', () => {
+    it('proves replacing DatabaseError.prototype.toJSON fails closed without executing the hostile hook', () => {
+      const originalToJSON = DatabaseError.prototype.toJSON;
+      let hookExecuted = false;
+
+      try {
+        DatabaseError.prototype.toJSON = function () {
+          hookExecuted = true;
+          throw new Error('HOSTILE_TO_JSON_HOOK_EXECUTED');
+        };
+
+        const err = new DatabaseError('Original safe message', { code: 'DATABASE_ERROR' });
+        const sanitized = sanitizeDatabaseError(err);
+
+        expect(sanitized).toBeInstanceOf(DatabaseError);
+        expect(sanitized).not.toBe(err); // Must NOT preserve identity when prototype is tainted
+
+        // Test JSON serialization
+        const jsonStr = JSON.stringify(sanitized);
+        expect(hookExecuted).toBe(false); // Hostile hook was NEVER executed
+        expect(jsonStr).toContain('"name":"DatabaseError"');
+        expect(jsonStr).toContain('"message":"Original safe message"');
+        expect(jsonStr).toContain('"code":"DATABASE_ERROR"');
+      } finally {
+        DatabaseError.prototype.toJSON = originalToJSON;
+      }
+    });
+
+    it('proves replacing custom inspect hook on prototype fails closed without executing the hostile hook', () => {
+      const customInspectSym = Symbol.for('nodejs.util.inspect.custom');
+      const originalInspect = (DatabaseError.prototype as unknown as Record<symbol, unknown>)[
+        customInspectSym
+      ];
+      let hookExecuted = false;
+
+      try {
+        (DatabaseError.prototype as unknown as Record<symbol, unknown>)[customInspectSym] =
+          function () {
+            hookExecuted = true;
+            throw new Error('HOSTILE_CUSTOM_INSPECT_HOOK_EXECUTED');
+          };
+
+        const err = new DatabaseError('Inspect test message', { code: 'UNIQUE_VIOLATION' });
+        const sanitized = sanitizeDatabaseError(err);
+
+        expect(sanitized).toBeInstanceOf(DatabaseError);
+        expect(sanitized).not.toBe(err);
+
+        // Test util.inspect
+        const inspected = util.inspect(sanitized);
+        expect(hookExecuted).toBe(false); // Hostile hook was NEVER executed
+        expect(inspected).toContain('name:');
+        expect(inspected).toContain('DatabaseError');
+        expect(inspected).toContain('Inspect test message');
+      } finally {
+        (DatabaseError.prototype as unknown as Record<symbol, unknown>)[customInspectSym] =
+          originalInspect;
+      }
+    });
+
+    it('proves replacing toString on prototype fails closed without executing the hostile hook', () => {
+      const originalToString = DatabaseError.prototype.toString;
+      let hookExecuted = false;
+
+      try {
+        DatabaseError.prototype.toString = function () {
+          hookExecuted = true;
+          throw new Error('HOSTILE_TO_STRING_HOOK_EXECUTED');
+        };
+
+        const err = new DatabaseError('ToString test message');
+        const sanitized = sanitizeDatabaseError(err);
+
+        expect(sanitized).toBeInstanceOf(DatabaseError);
+        expect(sanitized).not.toBe(err);
+
+        const str = String(sanitized);
+        expect(hookExecuted).toBe(false);
+        expect(str).toBe('DatabaseError: ToString test message');
+      } finally {
+        DatabaseError.prototype.toString = originalToString;
+      }
+    });
+
+    it('proves stack replaced with non-URL SQL, bind, password, token, constraint, newline, and stack-frame sentinels is rejected generically', () => {
+      const sentinels = [
+        'NON_URL_SQL_SENTINEL_SELECT_CREDIT_CARDS',
+        'BIND_PARAM_SENTINEL_$1_SECRET',
+        'PWD_SENTINEL_SUPER_SECRET',
+        'TOKEN_SENTINEL_BEARER_XYZ',
+        'CONSTRAINT_SENTINEL_WORKSPACES_SLUG',
+        'NEWLINE_STACK_FRAME_SENTINEL_AT_SECRET_JS',
+      ];
+
+      const err = new DatabaseError('Base message', { code: 'DATABASE_ERROR' });
+      err.stack = `DatabaseError: Base message\n    at ${sentinels[0]}\n    at ${sentinels[1]}\n    at password=${sentinels[2]}\n    at token=${sentinels[3]}\n    at constraint=${sentinels[4]}\n    at ${sentinels[5]}:1:1`;
+
+      const sanitized = sanitizeDatabaseError(err);
+      expect(sanitized).toBeInstanceOf(DatabaseError);
+      expect(sanitized !== err).toBe(true); // Must NOT preserve identity when stack is mutated
+
+      const finalStack = sanitized.stack ?? '';
+      for (const s of sentinels) {
+        expect(finalStack).not.toContain(s);
+      }
+      expect(finalStack).toContain('DatabaseError: Base message');
+    });
+
+    it('proves enumerable, non-enumerable, and symbol unexpected properties fail closed', () => {
+      const err = new DatabaseError('Props test', { code: 'AUTH_FAILED' });
+      const secretSymbol = Symbol('HOSTILE_SYMBOL_KEY');
+
+      // 1. Enumerable unexpected property
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (err as any).enumerableSecret = 'ENUMERABLE_SECRET_SENTINEL';
+
+      // 2. Non-enumerable unexpected property
+      Object.defineProperty(err, 'nonEnumSecret', {
+        value: 'NON_ENUMERABLE_SECRET_SENTINEL',
+        enumerable: false,
+        configurable: true,
+      });
+
+      // 3. Symbol property
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (err as any)[secretSymbol] = 'SYMBOL_SECRET_SENTINEL';
+
+      const sanitized = sanitizeDatabaseError(err);
+      expect(sanitized).toBeInstanceOf(DatabaseError);
+      expect(sanitized !== err).toBe(true);
+
+      // Verify direct access
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((sanitized as any).enumerableSecret).toBeUndefined();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((sanitized as any).nonEnumSecret).toBeUndefined();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((sanitized as any)[secretSymbol]).toBeUndefined();
+
+      // Verify Object.keys and Reflect.ownKeys
+      expect(Object.keys(sanitized)).not.toContain('enumerableSecret');
+      expect(Reflect.ownKeys(sanitized)).not.toContain('enumerableSecret');
+      expect(Reflect.ownKeys(sanitized)).not.toContain('nonEnumSecret');
+      expect(Reflect.ownKeys(sanitized)).not.toContain(secretSymbol);
+
+      // Verify JSON, util.inspect, String
+      const json = JSON.stringify(sanitized);
+      const inspected = util.inspect(sanitized);
+      const str = String(sanitized);
+
+      expect(json).not.toContain('ENUMERABLE_SECRET_SENTINEL');
+      expect(json).not.toContain('NON_ENUMERABLE_SECRET_SENTINEL');
+      expect(json).not.toContain('SYMBOL_SECRET_SENTINEL');
+
+      expect(inspected).not.toContain('ENUMERABLE_SECRET_SENTINEL');
+      expect(inspected).not.toContain('NON_ENUMERABLE_SECRET_SENTINEL');
+      expect(inspected).not.toContain('SYMBOL_SECRET_SENTINEL');
+
+      expect(str).not.toContain('ENUMERABLE_SECRET_SENTINEL');
+    });
+
+    it('proves hostile accessors on all known fields fail closed with zero getter executions', () => {
+      const err = new DatabaseError('Accessor test', { code: 'DATABASE_ERROR' });
+      let nameGetterCalled = false;
+      let msgGetterCalled = false;
+      let codeGetterCalled = false;
+      let stackGetterCalled = false;
+      let causeGetterCalled = false;
+      let toJSONGetterCalled = false;
+      let toStringGetterCalled = false;
+
+      Object.defineProperty(err, 'name', {
+        get() {
+          nameGetterCalled = true;
+          throw new Error('HOSTILE_NAME_GETTER');
+        },
+        configurable: true,
+      });
+      Object.defineProperty(err, 'message', {
+        get() {
+          msgGetterCalled = true;
+          throw new Error('HOSTILE_MSG_GETTER');
+        },
+        configurable: true,
+      });
+      Object.defineProperty(err, 'code', {
+        get() {
+          codeGetterCalled = true;
+          throw new Error('HOSTILE_CODE_GETTER');
+        },
+        configurable: true,
+      });
+      Object.defineProperty(err, 'stack', {
+        get() {
+          stackGetterCalled = true;
+          throw new Error('HOSTILE_STACK_GETTER');
+        },
+        configurable: true,
+      });
+      Object.defineProperty(err, 'cause', {
+        get() {
+          causeGetterCalled = true;
+          throw new Error('HOSTILE_CAUSE_GETTER');
+        },
+        configurable: true,
+      });
+      Object.defineProperty(err, 'toJSON', {
+        get() {
+          toJSONGetterCalled = true;
+          throw new Error('HOSTILE_TOJSON_GETTER');
+        },
+        configurable: true,
+      });
+      Object.defineProperty(err, 'toString', {
+        get() {
+          toStringGetterCalled = true;
+          throw new Error('HOSTILE_TOSTRING_GETTER');
+        },
+        configurable: true,
+      });
+
+      const sanitized = sanitizeDatabaseError(err);
+      expect(sanitized).toBeInstanceOf(DatabaseError);
+      expect(sanitized !== err).toBe(true);
+
+      // Verify ZERO getters were called
+      expect(nameGetterCalled).toBe(false);
+      expect(msgGetterCalled).toBe(false);
+      expect(codeGetterCalled).toBe(false);
+      expect(stackGetterCalled).toBe(false);
+      expect(causeGetterCalled).toBe(false);
+      expect(toJSONGetterCalled).toBe(false);
+      expect(toStringGetterCalled).toBe(false);
+
+      expect(sanitized.message).toBe('Accessor test');
+      expect(sanitized.code).toBe('DATABASE_ERROR');
+    });
+
+    it('proves changing instance prototype fails closed to safe DatabaseError', () => {
+      const err = new DatabaseError('Proto change test', { code: 'DATABASE_ERROR' });
+      Object.setPrototypeOf(err, Object.prototype);
+
+      const sanitized = sanitizeDatabaseError(err);
+      expect(sanitized).toBeInstanceOf(DatabaseError);
+      expect(sanitized !== err).toBe(true);
+      expect(Object.getPrototypeOf(sanitized)).toBe(DatabaseError.prototype);
+      expect(sanitized.message).toBe('Proto change test');
+    });
+
+    it('proves Proxy wrapped genuine error fails closed with zero trap executions', () => {
+      const err = new DatabaseError('Proxy test', { code: 'DATABASE_ERROR' });
+      let trapCalls = 0;
+
+      const proxy = new Proxy(err, {
+        get(_t, p) {
+          trapCalls++;
+          throw new Error(`HOSTILE_GET_TRAP_${String(p)}`);
+        },
+        ownKeys() {
+          trapCalls++;
+          throw new Error('HOSTILE_OWNKEYS_TRAP');
+        },
+        getPrototypeOf() {
+          trapCalls++;
+          throw new Error('HOSTILE_GETPROTO_TRAP');
+        },
+        getOwnPropertyDescriptor() {
+          trapCalls++;
+          throw new Error('HOSTILE_GETDESC_TRAP');
+        },
+      });
+
+      const sanitized = sanitizeDatabaseError(proxy);
+      expect(sanitized).toBeInstanceOf(DatabaseError);
+      expect(sanitized).not.toBe(err);
+      expect(trapCalls).toBe(0); // ZERO traps executed
+    });
+
+    it('proves child-process execution with hostile prototype, stack sentinels, unexpected keys, and symbols outputs zero sentinels to stdout/stderr', async () => {
+      const sentinels = [
+        'CHILD_PROC_HOSTILE_TO_JSON_SECRET',
+        'CHILD_PROC_SQL_SENTINEL_SELECT_EVERYTHING',
+        'CHILD_PROC_BIND_PARAM_SENTINEL',
+        'CHILD_PROC_PASSWORD_SENTINEL_123',
+        'CHILD_PROC_TOKEN_SENTINEL_BEARER',
+        'CHILD_PROC_SYMBOL_SECRET_VAL',
+        'CHILD_PROC_UNEXPECTED_KEY_VAL',
+      ];
+
+      const childScript = `
+        import { sanitizeDatabaseError, sanitizeCallbackError, DatabaseError } from './packages/infrastructure/src/database/errors.ts';
+        import util from 'node:util';
+
+        // 1. Replaced prototype toJSON
+        const origToJSON = DatabaseError.prototype.toJSON;
+        DatabaseError.prototype.toJSON = function() {
+          return { leak: '${sentinels[0]}' };
+        };
+
+        const dbErr1 = new DatabaseError('Child err 1', { code: 'DATABASE_ERROR' });
+        const s1 = sanitizeDatabaseError(dbErr1);
+
+        // Restore toJSON for subsequent tests
+        DatabaseError.prototype.toJSON = origToJSON;
+
+        // 2. Mutated stack with non-URL SQL, bind, password, token sentinels
+        const dbErr2 = new DatabaseError('Child err 2', { code: 'AUTH_FAILED' });
+        dbErr2.stack = 'DatabaseError: Child err 2\\n    at ${sentinels[1]}\\n    at ${sentinels[2]}\\n    at ${sentinels[3]}\\n    at ${sentinels[4]}';
+        const s2 = sanitizeDatabaseError(dbErr2);
+
+        // 3. Symbol and unexpected property
+        const sym = Symbol('tokenSym');
+        const dbErr3 = new DatabaseError('Child err 3', { code: 'UNIQUE_VIOLATION' });
+        dbErr3[sym] = '${sentinels[5]}';
+        dbErr3.extraMeta = '${sentinels[6]}';
+        const s3 = sanitizeCallbackError(dbErr3);
+
+        // Output to stdout and stderr
+        for (const s of [s1, s2, s3]) {
+          console.log(JSON.stringify(s));
+          console.error(String(s));
+          console.log(util.inspect(s));
+        }
       `;
 
       const child = spawn(

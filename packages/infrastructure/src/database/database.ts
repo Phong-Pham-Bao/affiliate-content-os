@@ -155,12 +155,21 @@ export function createDatabase(config: DatabaseConfig, options?: CreateDatabaseO
     }
 
     try {
-      const res = await pool.query(text, params ? [...params] : undefined);
-      return {
-        rows: Object.freeze([...res.rows]) as readonly T[],
-        rowCount: res.rowCount ?? 0,
-        command: res.command,
-      };
+      const copiedParams = params ? [...params] : undefined;
+      const res = await pool.query(text, copiedParams);
+      const rawRows = res.rows;
+      const copiedRows: T[] = [];
+      for (const row of rawRows) {
+        copiedRows.push(row);
+      }
+      const frozenRows = Object.freeze(copiedRows) as readonly T[];
+      const rowCount = res.rowCount ?? 0;
+      const command = res.command;
+      return Object.freeze({
+        rows: frozenRows,
+        rowCount,
+        command,
+      });
     } catch (err) {
       throw sanitizeDatabaseError(err, 'Database query execution failed');
     }
@@ -194,40 +203,41 @@ export function createDatabase(config: DatabaseConfig, options?: CreateDatabaseO
         params?: readonly unknown[],
       ): Promise<DatabaseQueryResult<R>> {
         if (!active) {
-          return Promise.reject(
-            new DatabaseError('Cannot execute query: transaction has already completed'),
+          const inactiveErr = new DatabaseError(
+            'Cannot execute query: transaction has already completed',
           );
-        }
-
-        let driverPromise: Promise<pg.QueryResult>;
-        try {
-          driverPromise = client.query(text, params ? [...params] : undefined);
-        } catch (syncErr) {
-          const safeErr = sanitizeDatabaseError(syncErr, 'Database query execution failed');
-          if (firstQueryFailure === undefined) {
-            firstQueryFailure = safeErr;
-          }
-          const callerPromise = Promise.reject(safeErr);
+          const callerPromise = Promise.reject(inactiveErr);
           callerPromise.catch(() => {});
           return callerPromise;
         }
 
-        const callerPromise = driverPromise.then(
-          (res) => {
-            return {
-              rows: Object.freeze([...res.rows]) as readonly R[],
-              rowCount: res.rowCount ?? 0,
-              command: res.command,
-            };
-          },
-          (err) => {
+        const execute = async (): Promise<DatabaseQueryResult<R>> => {
+          try {
+            const copiedParams = params ? [...params] : undefined;
+            const res = await client.query(text, copiedParams);
+            const rawRows = res.rows;
+            const copiedRows: R[] = [];
+            for (const row of rawRows) {
+              copiedRows.push(row);
+            }
+            const frozenRows = Object.freeze(copiedRows) as readonly R[];
+            const rowCount = res.rowCount ?? 0;
+            const command = res.command;
+            return Object.freeze({
+              rows: frozenRows,
+              rowCount,
+              command,
+            });
+          } catch (err) {
             const safeErr = sanitizeDatabaseError(err, 'Database query execution failed');
             if (firstQueryFailure === undefined) {
               firstQueryFailure = safeErr;
             }
             throw safeErr;
-          },
-        );
+          }
+        };
+
+        const callerPromise = execute();
 
         const completionPromise = callerPromise.then(
           () => {},

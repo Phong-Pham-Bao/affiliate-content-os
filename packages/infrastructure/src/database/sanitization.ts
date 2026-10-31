@@ -27,10 +27,10 @@ export function setDatabaseErrorFactory(factory: DatabaseErrorFactory): void {
   databaseErrorFactory = factory;
 }
 
-let databaseErrorPrototype: object | undefined;
+const allowedDatabasePrototypes = new Set<object>();
 
 export function registerDatabaseErrorPrototype(proto: object): void {
-  databaseErrorPrototype = proto;
+  allowedDatabasePrototypes.add(proto);
 }
 
 export function getDatabaseError(message: string): Error {
@@ -164,7 +164,7 @@ function sanitizeObjectInPlace(obj: object, visited: Set<unknown>): boolean {
     }
     protoVisited.add(currentProto);
 
-    if (ALLOWED_BUILTIN_PROTOS.has(currentProto) || currentProto === databaseErrorPrototype) {
+    if (ALLOWED_BUILTIN_PROTOS.has(currentProto) || allowedDatabasePrototypes.has(currentProto)) {
       break;
     }
 

@@ -1889,4 +1889,437 @@ describe('Database client and transaction manager (unit tests with fakes)', () =
       expect(clientQueries.map((q) => q.text)).not.toContain('NEW_QUERY');
     });
   });
+
+  describe('TASK-004 Remediation 05 - Complete Query Boundary and Adversarial Result Mapping', () => {
+    function createDeferred<T = void>() {
+      let resolve!: (value: T | PromiseLike<T>) => void;
+      let reject!: (reason?: unknown) => void;
+      const promise = new Promise<T>((res, rej) => {
+        resolve = res;
+        reject = rej;
+      });
+      return { promise, resolve, reject };
+    }
+
+    const sentinels = [
+      'ROWS_GETTER_SENTINEL_PWD_SECRET',
+      'ROWS_ITERATOR_SENTINEL_SQL_TEXT',
+      'ROWCOUNT_GETTER_SENTINEL_BIND_VALUE',
+      'COMMAND_GETTER_SENTINEL_CONSTRAINT',
+      'PROXY_TRAP_SENTINEL_URL_CREDENTIAL',
+    ];
+
+    it('proves rows getter throw is caught, sanitized, prohibits COMMIT, and leaves no sentinels', async () => {
+      const { mockPool, mockClient, clientQueries } = createMockPool();
+      const db = createDatabase(dummyConfig, { poolFactory: () => mockPool });
+
+      mockClient.query = vi.fn(async (text: string) => {
+        clientQueries.push({ text });
+        if (text === 'BEGIN' || text === 'ROLLBACK' || text === 'COMMIT') {
+          return { rows: [], rowCount: 0, command: text } as unknown as pg.QueryResult;
+        }
+        return {
+          get rows() {
+            const err = new Error(sentinels[0]);
+            err.name = 'HostileRowsGetterError';
+            throw err;
+          },
+          rowCount: 1,
+          command: 'SELECT',
+        } as unknown as pg.QueryResult;
+      }) as unknown as typeof mockClient.query;
+
+      let caught: unknown;
+      try {
+        await db.withTransaction(async (tx) => {
+          await tx.query('SELECT 1');
+        });
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(DatabaseError);
+      expect((caught as DatabaseError).message).toBe(
+        'Database query execution failed: Database operation failed',
+      );
+      expect(JSON.stringify(caught)).not.toContain(sentinels[0]);
+      expect(util.inspect(caught)).not.toContain(sentinels[0]);
+      expect(String(caught)).not.toContain(sentinels[0]);
+      expect(clientQueries.map((q) => q.text)).toEqual(['BEGIN', 'SELECT 1', 'ROLLBACK']);
+      expect(clientQueries.map((q) => q.text)).not.toContain('COMMIT');
+      expect(mockClient.release).toHaveBeenCalledTimes(1);
+    });
+
+    it('proves rows iterator throw is caught, sanitized, prohibits COMMIT, and leaves no sentinels', async () => {
+      const { mockPool, mockClient, clientQueries } = createMockPool();
+      const db = createDatabase(dummyConfig, { poolFactory: () => mockPool });
+
+      mockClient.query = vi.fn(async (text: string) => {
+        clientQueries.push({ text });
+        if (text === 'BEGIN' || text === 'ROLLBACK' || text === 'COMMIT') {
+          return { rows: [], rowCount: 0, command: text } as unknown as pg.QueryResult;
+        }
+        return {
+          rows: {
+            [Symbol.iterator]() {
+              const err = new Error(sentinels[1]);
+              err.name = 'HostileIteratorError';
+              throw err;
+            },
+          },
+          rowCount: 1,
+          command: 'SELECT',
+        } as unknown as pg.QueryResult;
+      }) as unknown as typeof mockClient.query;
+
+      let caught: unknown;
+      try {
+        await db.withTransaction(async (tx) => {
+          await tx.query('SELECT 1');
+        });
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(DatabaseError);
+      expect((caught as DatabaseError).message).toBe(
+        'Database query execution failed: Database operation failed',
+      );
+      expect(JSON.stringify(caught)).not.toContain(sentinels[1]);
+      expect(util.inspect(caught)).not.toContain(sentinels[1]);
+      expect(String(caught)).not.toContain(sentinels[1]);
+      expect(clientQueries.map((q) => q.text)).toEqual(['BEGIN', 'SELECT 1', 'ROLLBACK']);
+      expect(clientQueries.map((q) => q.text)).not.toContain('COMMIT');
+      expect(mockClient.release).toHaveBeenCalledTimes(1);
+    });
+
+    it('proves rowCount getter throw is caught, sanitized, prohibits COMMIT, and leaves no sentinels', async () => {
+      const { mockPool, mockClient, clientQueries } = createMockPool();
+      const db = createDatabase(dummyConfig, { poolFactory: () => mockPool });
+
+      mockClient.query = vi.fn(async (text: string) => {
+        clientQueries.push({ text });
+        if (text === 'BEGIN' || text === 'ROLLBACK' || text === 'COMMIT') {
+          return { rows: [], rowCount: 0, command: text } as unknown as pg.QueryResult;
+        }
+        return {
+          rows: [{ id: '1' }],
+          get rowCount() {
+            const err = new Error(sentinels[2]);
+            err.name = 'HostileRowCountError';
+            throw err;
+          },
+          command: 'SELECT',
+        } as unknown as pg.QueryResult;
+      }) as unknown as typeof mockClient.query;
+
+      let caught: unknown;
+      try {
+        await db.withTransaction(async (tx) => {
+          await tx.query('SELECT 1');
+        });
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(DatabaseError);
+      expect((caught as DatabaseError).message).toBe(
+        'Database query execution failed: Database operation failed',
+      );
+      expect(JSON.stringify(caught)).not.toContain(sentinels[2]);
+      expect(clientQueries.map((q) => q.text)).toEqual(['BEGIN', 'SELECT 1', 'ROLLBACK']);
+      expect(clientQueries.map((q) => q.text)).not.toContain('COMMIT');
+      expect(mockClient.release).toHaveBeenCalledTimes(1);
+    });
+
+    it('proves command getter throw is caught, sanitized, prohibits COMMIT, and leaves no sentinels', async () => {
+      const { mockPool, mockClient, clientQueries } = createMockPool();
+      const db = createDatabase(dummyConfig, { poolFactory: () => mockPool });
+
+      mockClient.query = vi.fn(async (text: string) => {
+        clientQueries.push({ text });
+        if (text === 'BEGIN' || text === 'ROLLBACK' || text === 'COMMIT') {
+          return { rows: [], rowCount: 0, command: text } as unknown as pg.QueryResult;
+        }
+        return {
+          rows: [{ id: '1' }],
+          rowCount: 1,
+          get command() {
+            const err = new Error(sentinels[3]);
+            err.name = 'HostileCommandError';
+            throw err;
+          },
+        } as unknown as pg.QueryResult;
+      }) as unknown as typeof mockClient.query;
+
+      let caught: unknown;
+      try {
+        await db.withTransaction(async (tx) => {
+          await tx.query('SELECT 1');
+        });
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(DatabaseError);
+      expect((caught as DatabaseError).message).toBe(
+        'Database query execution failed: Database operation failed',
+      );
+      expect(JSON.stringify(caught)).not.toContain(sentinels[3]);
+      expect(clientQueries.map((q) => q.text)).toEqual(['BEGIN', 'SELECT 1', 'ROLLBACK']);
+      expect(clientQueries.map((q) => q.text)).not.toContain('COMMIT');
+      expect(mockClient.release).toHaveBeenCalledTimes(1);
+    });
+
+    it('proves proxy-backed query result whose trap throws is caught, sanitized, and prohibits COMMIT', async () => {
+      const { mockPool, mockClient, clientQueries } = createMockPool();
+      const db = createDatabase(dummyConfig, { poolFactory: () => mockPool });
+
+      mockClient.query = vi.fn(async (text: string) => {
+        clientQueries.push({ text });
+        if (text === 'BEGIN' || text === 'ROLLBACK' || text === 'COMMIT') {
+          return { rows: [], rowCount: 0, command: text } as unknown as pg.QueryResult;
+        }
+        return new Proxy(
+          {},
+          {
+            get(_target, prop) {
+              throw new Error(`${sentinels[4]}_${String(prop)}`);
+            },
+          },
+        ) as unknown as pg.QueryResult;
+      }) as unknown as typeof mockClient.query;
+
+      let caught: unknown;
+      try {
+        await db.withTransaction(async (tx) => {
+          await tx.query('SELECT 1');
+        });
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(DatabaseError);
+      expect((caught as DatabaseError).message).toBe(
+        'Database query execution failed: Database operation failed',
+      );
+      expect(JSON.stringify(caught)).not.toContain(sentinels[4]);
+      expect(clientQueries.map((q) => q.text)).toEqual(['BEGIN', 'SELECT 1', 'ROLLBACK']);
+      expect(clientQueries.map((q) => q.text)).not.toContain('COMMIT');
+      expect(mockClient.release).toHaveBeenCalledTimes(1);
+    });
+
+    it('proves prior successful write followed by mapping failure causes rollback and prohibits COMMIT', async () => {
+      const { mockPool, mockClient, clientQueries } = createMockPool();
+      const db = createDatabase(dummyConfig, { poolFactory: () => mockPool });
+
+      mockClient.query = vi.fn(async (text: string) => {
+        clientQueries.push({ text });
+        if (text === 'BEGIN' || text === 'ROLLBACK' || text === 'COMMIT') {
+          return { rows: [], rowCount: 0, command: text } as unknown as pg.QueryResult;
+        }
+        if (text.startsWith('INSERT INTO workspaces')) {
+          return {
+            rows: [{ id: 'ws_1' }],
+            rowCount: 1,
+            command: 'INSERT',
+          } as unknown as pg.QueryResult;
+        }
+        // Second query fails during rows mapping
+        return {
+          get rows() {
+            throw new Error('MAPPING_FAILURE_AFTER_WRITE');
+          },
+          rowCount: 1,
+          command: 'SELECT',
+        } as unknown as pg.QueryResult;
+      }) as unknown as typeof mockClient.query;
+
+      let caught: unknown;
+      let callbackObservedInner: unknown;
+      try {
+        await db.withTransaction(async (tx) => {
+          const insertRes = await tx.query('INSERT INTO workspaces (id) VALUES ($1)', ['ws_1']);
+          expect(insertRes.rows).toEqual([{ id: 'ws_1' }]);
+
+          try {
+            await tx.query('SELECT * FROM workspaces');
+          } catch (innerErr) {
+            callbackObservedInner = innerErr;
+            // Callback swallows inner error and attempts to return normally
+            return 'swallowed_write';
+          }
+          return 'swallowed_write';
+        });
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(callbackObservedInner).toBeInstanceOf(DatabaseError);
+      expect((callbackObservedInner as DatabaseError).message).toBe(
+        'Database query execution failed: Database operation failed',
+      );
+
+      // Despite callback returning normally, withTransaction MUST reject with sticky failure
+      expect(caught).toBeInstanceOf(DatabaseError);
+      expect((caught as DatabaseError).message).toBe(
+        'Database query execution failed: Database operation failed',
+      );
+
+      // Verify exact query sequence: BEGIN -> INSERT -> SELECT -> ROLLBACK (no COMMIT)
+      expect(clientQueries.map((q) => q.text)).toEqual([
+        'BEGIN',
+        'INSERT INTO workspaces (id) VALUES ($1)',
+        'SELECT * FROM workspaces',
+        'ROLLBACK',
+      ]);
+      expect(clientQueries.map((q) => q.text)).not.toContain('COMMIT');
+      expect(mockClient.release).toHaveBeenCalledTimes(1);
+    });
+
+    it('proves unhandledRejection is NOT emitted for awaited, unawaited, caught, and uncaught mapping-failure variants', async () => {
+      const { mockPool, mockClient, clientQueries } = createMockPool();
+      const db = createDatabase(dummyConfig, { poolFactory: () => mockPool });
+
+      mockClient.query = vi.fn(async (text: string) => {
+        clientQueries.push({ text });
+        if (text === 'BEGIN' || text === 'ROLLBACK' || text === 'COMMIT') {
+          return { rows: [], rowCount: 0, command: text } as unknown as pg.QueryResult;
+        }
+        return {
+          get rows() {
+            throw new Error('MAPPING_REJECTION_NO_UNHANDLED');
+          },
+          rowCount: 0,
+          command: 'SELECT',
+        } as unknown as pg.QueryResult;
+      }) as unknown as typeof mockClient.query;
+
+      const unhandledRejections: unknown[] = [];
+      const onUnhandled = (reason: unknown) => {
+        unhandledRejections.push(reason);
+      };
+      process.on('unhandledRejection', onUnhandled);
+
+      try {
+        // Variant 1: unawaited, no caller catch
+        let caught1: unknown;
+        try {
+          await db.withTransaction(async (tx) => {
+            tx.query('SELECT unawaited_no_catch');
+            // Does NOT await and does NOT catch
+            return 'return_without_await';
+          });
+        } catch (err) {
+          caught1 = err;
+        }
+        expect(caught1).toBeInstanceOf(DatabaseError);
+
+        // Variant 2: unawaited, caller attached .catch()
+        let caught2: unknown;
+        try {
+          await db.withTransaction(async (tx) => {
+            tx.query('SELECT unawaited_with_catch').catch(() => {});
+            return 'return_with_catch';
+          });
+        } catch (err) {
+          caught2 = err;
+        }
+        expect(caught2).toBeInstanceOf(DatabaseError);
+
+        // Variant 3: awaited, caller caught
+        let caught3: unknown;
+        try {
+          await db.withTransaction(async (tx) => {
+            try {
+              await tx.query('SELECT awaited_caught');
+            } catch {
+              // swallowed
+            }
+            return 'swallowed';
+          });
+        } catch (err) {
+          caught3 = err;
+        }
+        expect(caught3).toBeInstanceOf(DatabaseError);
+
+        // Variant 4: awaited, caller uncaught
+        let caught4: unknown;
+        try {
+          await db.withTransaction(async (tx) => {
+            await tx.query('SELECT awaited_uncaught');
+          });
+        } catch (err) {
+          caught4 = err;
+        }
+        expect(caught4).toBeInstanceOf(DatabaseError);
+
+        // Allow any pending microtasks to settle
+        await new Promise((r) => setTimeout(r, 50));
+
+        // Proves ZERO unhandledRejection events were emitted across all 4 variants
+        expect(unhandledRejections).toEqual([]);
+      } finally {
+        process.removeListener('unhandledRejection', onUnhandled);
+      }
+    });
+
+    it('proves controlled concurrent queries with mapping failure record sticky first failure and settle cleanly', async () => {
+      const { mockPool, mockClient, clientQueries } = createMockPool();
+      const db = createDatabase(dummyConfig, { poolFactory: () => mockPool });
+
+      const def1 = createDeferred<pg.QueryResult>();
+      const def2 = createDeferred<pg.QueryResult>();
+
+      mockClient.query = vi.fn(async (text: string) => {
+        clientQueries.push({ text });
+        if (text === 'BEGIN' || text === 'ROLLBACK' || text === 'COMMIT') {
+          return { rows: [], rowCount: 0, command: text } as unknown as pg.QueryResult;
+        }
+        if (text === 'QUERY_1') return def1.promise;
+        if (text === 'QUERY_2') return def2.promise;
+        return { rows: [], rowCount: 0, command: text } as unknown as pg.QueryResult;
+      }) as unknown as typeof mockClient.query;
+
+      const txPromise = db.withTransaction(async (tx) => {
+        const p1 = tx.query('QUERY_1');
+        const p2 = tx.query('QUERY_2');
+        return Promise.allSettled([p1, p2]);
+      });
+
+      // Let both queries register
+      await new Promise((r) => setTimeout(r, 20));
+
+      // Query 1 resolves with a mapping failure
+      def1.resolve({
+        get rows() {
+          throw new Error('CONCURRENT_QUERY_1_MAPPING_FAILURE');
+        },
+        rowCount: 1,
+        command: 'SELECT',
+      } as unknown as pg.QueryResult);
+
+      // Query 2 resolves with success later
+      def2.resolve({
+        rows: [{ id: 'q2_success' }],
+        rowCount: 1,
+        command: 'SELECT',
+      } as unknown as pg.QueryResult);
+
+      let caught: unknown;
+      try {
+        await txPromise;
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(DatabaseError);
+      expect((caught as DatabaseError).message).toBe(
+        'Database query execution failed: Database operation failed',
+      );
+      expect(clientQueries.map((q) => q.text)).toEqual(['BEGIN', 'QUERY_1', 'QUERY_2', 'ROLLBACK']);
+      expect(clientQueries.map((q) => q.text)).not.toContain('COMMIT');
+      expect(mockClient.release).toHaveBeenCalledTimes(1);
+    });
+  });
 });
