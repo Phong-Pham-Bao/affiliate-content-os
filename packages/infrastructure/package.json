@@ -9,6 +9,12 @@
       "development": "./src/database/index.ts",
       "import": "./dist/database/index.js",
       "default": "./dist/database/index.js"
+    },
+    "./tenancy": {
+      "types": "./src/tenancy/index.ts",
+      "development": "./src/tenancy/index.ts",
+      "import": "./dist/tenancy/index.js",
+      "default": "./dist/tenancy/index.js"
     }
   },
   "scripts": {
@@ -16,7 +22,9 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "@affiliate-content-os/application": "workspace:*",
     "@affiliate-content-os/config": "workspace:*",
+    "@affiliate-content-os/domain": "workspace:*",
     "pg": "8.23.1"
   },
   "devDependencies": {

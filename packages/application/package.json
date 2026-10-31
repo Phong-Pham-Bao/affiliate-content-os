@@ -1,0 +1,25 @@
+{
+  "name": "@affiliate-content-os/application",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "development": "./src/index.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@affiliate-content-os/domain": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.1",
+    "typescript": "^5.8.3"
+  }
+}

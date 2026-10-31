@@ -1,6 +1,11 @@
 import type { DatabaseConfig } from '@affiliate-content-os/config';
 import pg from 'pg';
-import { DatabaseError, sanitizeCallbackError, sanitizeDatabaseError } from './errors.js';
+import {
+  DatabaseError,
+  isDatabaseError,
+  sanitizeCallbackError,
+  sanitizeDatabaseError,
+} from './errors.js';
 import { resolveSslOptions } from './ssl.js';
 import type {
   CreateDatabaseOptions,
@@ -150,12 +155,21 @@ export function createDatabase(config: DatabaseConfig, options?: CreateDatabaseO
     }
 
     try {
-      const res = await pool.query(text, params ? [...params] : undefined);
-      return {
-        rows: Object.freeze([...res.rows]) as readonly T[],
-        rowCount: res.rowCount ?? 0,
-        command: res.command,
-      };
+      const copiedParams = params ? [...params] : undefined;
+      const res = await pool.query(text, copiedParams);
+      const rawRows = res.rows;
+      const copiedRows: T[] = [];
+      for (const row of rawRows) {
+        copiedRows.push(row);
+      }
+      const frozenRows = Object.freeze(copiedRows) as readonly T[];
+      const rowCount = res.rowCount ?? 0;
+      const command = res.command;
+      return Object.freeze({
+        rows: frozenRows,
+        rowCount,
+        command,
+      });
     } catch (err) {
       throw sanitizeDatabaseError(err, 'Database query execution failed');
     }
@@ -179,86 +193,170 @@ export function createDatabase(config: DatabaseConfig, options?: CreateDatabaseO
     };
     client.on('error', clientErrorHandler);
 
-    let active = true;
+    let active = false;
+    let firstQueryFailure: DatabaseError | undefined;
+    const inFlightQueries = new Set<Promise<void>>();
+
     const executor: TransactionExecutor = {
-      async query<R = unknown>(
+      query<R = unknown>(
         text: string,
         params?: readonly unknown[],
       ): Promise<DatabaseQueryResult<R>> {
         if (!active) {
-          throw new DatabaseError('Cannot execute query: transaction has already completed');
+          const inactiveErr = new DatabaseError(
+            'Cannot execute query: transaction has already completed',
+          );
+          const callerPromise = Promise.reject(inactiveErr);
+          callerPromise.catch(() => {});
+          return callerPromise;
         }
-        try {
-          const res = await client.query(text, params ? [...params] : undefined);
-          return {
-            rows: Object.freeze([...res.rows]) as readonly R[],
-            rowCount: res.rowCount ?? 0,
-            command: res.command,
-          };
-        } catch (err) {
-          throw sanitizeDatabaseError(err, 'Transaction query execution failed');
-        }
+
+        const execute = async (): Promise<DatabaseQueryResult<R>> => {
+          try {
+            const copiedParams = params ? [...params] : undefined;
+            const res = await client.query(text, copiedParams);
+            const rawRows = res.rows;
+            const copiedRows: R[] = [];
+            for (const row of rawRows) {
+              copiedRows.push(row);
+            }
+            const frozenRows = Object.freeze(copiedRows) as readonly R[];
+            const rowCount = res.rowCount ?? 0;
+            const command = res.command;
+            return Object.freeze({
+              rows: frozenRows,
+              rowCount,
+              command,
+            });
+          } catch (err) {
+            const safeErr = sanitizeDatabaseError(err, 'Database query execution failed');
+            if (firstQueryFailure === undefined) {
+              firstQueryFailure = safeErr;
+            }
+            throw safeErr;
+          }
+        };
+
+        const callerPromise = execute();
+
+        const completionPromise = callerPromise.then(
+          () => {},
+          () => {},
+        );
+
+        inFlightQueries.add(completionPromise);
+        completionPromise.finally(() => {
+          inFlightQueries.delete(completionPromise);
+        });
+
+        return callerPromise;
       },
     };
 
-    let hasTransactionFailure = false;
-    let transactionFailureValue: unknown;
-    let result: T | undefined;
+    let callbackResult: T | undefined;
     let callbackFailed = false;
+    let callbackFailureValue: unknown;
+    let beginFailed = false;
+    let beginFailureValue: unknown;
 
     try {
       await client.query('BEGIN');
+      active = true;
+    } catch (beginErr) {
+      beginFailed = true;
+      beginFailureValue = sanitizeDatabaseError(beginErr, 'Transaction execution failed');
+      active = false;
+    }
+
+    if (!beginFailed) {
       try {
-        result = await fn(executor);
+        callbackResult = await fn(executor);
       } catch (userErr) {
         callbackFailed = true;
-        hasTransactionFailure = true;
-        transactionFailureValue = sanitizeCallbackError(userErr);
+        callbackFailureValue = isDatabaseError(userErr)
+          ? sanitizeDatabaseError(userErr)
+          : sanitizeCallbackError(userErr);
       } finally {
         active = false;
       }
-
-      if (callbackFailed) {
-        // Callback failed; do not attempt COMMIT
-      } else if (clientError) {
-        hasTransactionFailure = true;
-        transactionFailureValue = sanitizeDatabaseError(clientError, 'Transaction client error');
-      } else {
-        await client.query('COMMIT');
-      }
-    } catch (err) {
-      if (!hasTransactionFailure) {
-        hasTransactionFailure = true;
-        transactionFailureValue = sanitizeDatabaseError(err, 'Transaction execution failed');
-      }
+    } else {
+      active = false;
     }
 
-    if (hasTransactionFailure) {
+    while (inFlightQueries.size > 0) {
+      await Promise.all(Array.from(inFlightQueries));
+    }
+
+    let rolledBack = false;
+    const safeRollback = async (): Promise<void> => {
+      if (rolledBack) return;
+      rolledBack = true;
       try {
         await client.query('ROLLBACK');
       } catch {
-        // Rollback failure ignored; primary transactionFailureValue is preserved
+        // Rollback failure ignored; primary failure preserved
       }
-    }
+    };
 
-    active = false;
-    client.removeListener('error', clientErrorHandler);
+    let released = false;
     let releaseError: unknown;
+    const safeRelease = (): void => {
+      if (released) return;
+      released = true;
+      client.removeListener('error', clientErrorHandler);
+      try {
+        client.release(clientError ? true : undefined);
+      } catch (err) {
+        releaseError = err;
+      }
+    };
+
+    if (firstQueryFailure !== undefined) {
+      await safeRollback();
+      safeRelease();
+      inFlightQueries.clear();
+      throw firstQueryFailure;
+    }
+
+    if (beginFailed) {
+      await safeRollback();
+      safeRelease();
+      inFlightQueries.clear();
+      throw beginFailureValue;
+    }
+
+    if (callbackFailed) {
+      await safeRollback();
+      safeRelease();
+      inFlightQueries.clear();
+      throw callbackFailureValue;
+    }
+
+    if (clientError) {
+      const safeClientErr = sanitizeDatabaseError(clientError, 'Transaction client error');
+      await safeRollback();
+      safeRelease();
+      inFlightQueries.clear();
+      throw safeClientErr;
+    }
+
     try {
-      client.release(clientError ? true : undefined);
-    } catch (releaseErr) {
-      releaseError = releaseErr;
+      await client.query('COMMIT');
+    } catch (commitErr) {
+      const safeCommitErr = sanitizeDatabaseError(commitErr, 'Transaction execution failed');
+      await safeRollback();
+      safeRelease();
+      inFlightQueries.clear();
+      throw safeCommitErr;
     }
 
-    if (hasTransactionFailure) {
-      throw transactionFailureValue;
-    }
-
+    safeRelease();
+    inFlightQueries.clear();
     if (releaseError) {
       throw sanitizeDatabaseError(releaseError, 'Failed to release database connection');
     }
 
-    return result as T;
+    return callbackResult as T;
   };
 
   const close = (): Promise<void> => {

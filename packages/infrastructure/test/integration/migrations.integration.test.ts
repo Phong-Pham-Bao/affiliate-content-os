@@ -60,13 +60,22 @@ describe('Real PostgreSQL migration runner and validation integration', () => {
         name: string;
         checksum_sha256: string;
         applied_at: Date;
-      }>('SELECT migration_number, name, checksum_sha256, applied_at FROM schema_migrations;');
+      }>(
+        'SELECT migration_number, name, checksum_sha256, applied_at FROM schema_migrations ORDER BY migration_number ASC;',
+      );
 
-      expect(rows.rows).toHaveLength(1);
+      expect(rows.rows).toHaveLength(local.length);
       expect(rows.rows[0]!.migration_number).toBe(1);
       expect(rows.rows[0]!.name).toBe('baseline');
       expect(rows.rows[0]!.checksum_sha256).toBe(local[0]!.checksumSha256);
       expect(rows.rows[0]!.applied_at).toBeInstanceOf(Date);
+
+      if (local.length > 1) {
+        expect(rows.rows[1]!.migration_number).toBe(2);
+        expect(rows.rows[1]!.name).toBe('identity_tenancy');
+        expect(rows.rows[1]!.checksum_sha256).toBe(local[1]!.checksumSha256);
+        expect(rows.rows[1]!.applied_at).toBeInstanceOf(Date);
+      }
     } finally {
       await client.end();
     }
@@ -110,23 +119,24 @@ describe('Real PostgreSQL migration runner and validation integration', () => {
     const emptyContext = await setupIsolatedTestDatabase({ skipMigrations: true });
     try {
       const defaultDir = getDefaultMigrationsDir();
+      const local = discoverMigrations(defaultDir);
 
       // Run two concurrent migration runners simultaneously against an empty database
       const p1 = runMigrationCommand(emptyContext.dbUrl, false, { migrationsDir: defaultDir });
       const p2 = runMigrationCommand(emptyContext.dbUrl, false, { migrationsDir: defaultDir });
 
       const [r1, r2] = await Promise.all([p1, p2]);
-      // One runner applies migration 0001, the second acquires the lock after and finds 0 pending
-      expect(r1.appliedCount + r2.appliedCount).toBe(1);
-      expect([0, 1]).toContain(r1.appliedCount);
-      expect([0, 1]).toContain(r2.appliedCount);
+      // One runner applies local.length migrations, the second acquires the lock after and finds 0 pending
+      expect(r1.appliedCount + r2.appliedCount).toBe(local.length);
+      expect([0, local.length]).toContain(r1.appliedCount);
+      expect([0, local.length]).toContain(r2.appliedCount);
 
-      // Verify direct database state: exactly 1 migration recorded
+      // Verify direct database state: exactly local.length migrations recorded
       const client = new pg.Client({ connectionString: emptyContext.dbUrl });
       await client.connect();
       try {
         const rows = await client.query('SELECT migration_number FROM schema_migrations;');
-        expect(rows.rows).toHaveLength(1);
+        expect(rows.rows).toHaveLength(local.length);
         expect(rows.rows[0]?.migration_number).toBe(1);
       } finally {
         await client.end();
@@ -243,10 +253,15 @@ describe('Real PostgreSQL migration runner and validation integration', () => {
     const client = new pg.Client({ connectionString: gapContext.dbUrl });
     await client.connect();
     try {
-      // Intentionally insert a row with migration_number = 3 (gap: missing 2)
+      // Intentionally insert a row with migration_number = max + 2 (gap)
+      const maxRes = await client.query<{ max: number }>(
+        'SELECT COALESCE(MAX(migration_number), 0) as max FROM schema_migrations;',
+      );
+      const nextGap = Number(maxRes.rows[0]!.max) + 2;
       await client.query(
         `INSERT INTO schema_migrations (migration_number, name, checksum_sha256, applied_at)
-         VALUES (3, 'gap_migration', 'dummy_checksum', NOW());`,
+         VALUES ($1, 'gap_migration', 'dummy_checksum', NOW());`,
+        [nextGap],
       );
 
       await expect(checkMigrationStatusCommand(gapContext.dbUrl, false)).rejects.toThrow(

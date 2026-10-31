@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createDatabase, type Database } from '../../src/database/index.js';
+import { createDatabase, DatabaseError, type Database } from '../../src/database/index.js';
 import { setupIsolatedTestDatabase, type TestDatabaseContext } from './helpers/setup.js';
 
 describe('Real PostgreSQL persistence and transaction integration', () => {
@@ -141,6 +141,104 @@ describe('Real PostgreSQL persistence and transaction integration', () => {
       { name: '0', value: 0 },
       { name: "''", value: '' },
     ];
+
+    it('proves a statement error caught inside a callback cannot report transaction success, performs no commit, and persists no writes', async () => {
+      const uniqueItemName = `swallowed_statement_err_${Date.now()}`;
+
+      let caughtInsideCallback: unknown;
+      const txPromise = db.withTransaction(async (tx) => {
+        // 1. Initial write
+        await tx.query('INSERT INTO test_items (name, value) VALUES ($1, $2);', [
+          uniqueItemName,
+          'tentative_write_before_statement_error',
+        ]);
+
+        // 2. Trigger a real statement error (selecting from non-existent table in PostgreSQL)
+        try {
+          await tx.query('SELECT * FROM non_existent_table_for_remediation_03;');
+        } catch (err) {
+          caughtInsideCallback = err;
+          // Swallowing the error and returning normally!
+        }
+
+        return { fakeSuccess: true, data: 999 };
+      });
+
+      // withTransaction must reject with the safe DatabaseError, NOT resolve with { fakeSuccess: true }
+      let txErr: unknown;
+      try {
+        await txPromise;
+      } catch (err) {
+        txErr = err;
+      }
+      expect(txErr).toBeInstanceOf(DatabaseError);
+      expect(caughtInsideCallback).toBeInstanceOf(DatabaseError);
+
+      // Verify PostgreSQL did not commit the write and rolled back
+      const check = await db.query('SELECT id FROM test_items WHERE name = $1;', [uniqueItemName]);
+      expect(check.rowCount).toBe(0);
+
+      // Verify subsequent query can acquire and use the released connection from pool
+      const probeQuery = await db.query<{ one: number }>('SELECT 1 as one;');
+      expect(probeQuery.rowCount).toBe(1);
+    });
+
+    it('proves unawaited delayed successful query completes and is committed before transaction resolution in real PostgreSQL', async () => {
+      const uniqueName = `unawaited_real_success_${Date.now()}`;
+
+      const result = await db.withTransaction(async (tx) => {
+        // Start write without awaiting it
+        tx.query('INSERT INTO test_items (name, value) VALUES ($1, $2);', [
+          uniqueName,
+          'unawaited_committed_value',
+        ]);
+        return 'unawaited_success_returned';
+      });
+
+      expect(result).toBe('unawaited_success_returned');
+
+      // Verify that the unawaited query was awaited and committed
+      const check = await db.query<{ value: string }>(
+        'SELECT value FROM test_items WHERE name = $1;',
+        [uniqueName],
+      );
+      expect(check.rowCount).toBe(1);
+      expect(check.rows[0]?.value).toBe('unawaited_committed_value');
+    });
+
+    it('proves unawaited delayed failing query prevents COMMIT, rolls back prior writes, and persists nothing in real PostgreSQL', async () => {
+      const uniqueName = `unawaited_real_failure_${Date.now()}`;
+
+      let txError: unknown;
+      try {
+        await db.withTransaction(async (tx) => {
+          // 1. Prior write
+          await tx.query('INSERT INTO test_items (name, value) VALUES ($1, $2);', [
+            uniqueName,
+            'prior_write_must_be_rolled_back',
+          ]);
+
+          // 2. Start failing query without awaiting it
+          tx.query('SELECT * FROM non_existent_table_for_remediation_04;');
+
+          // 3. Return normally
+          return 'attempted_normal_return';
+        });
+      } catch (err) {
+        txError = err;
+      }
+
+      expect(txError).toBeInstanceOf(DatabaseError);
+      expect((txError as DatabaseError).message).toContain('Database query execution failed');
+
+      // Verify the prior write was rolled back and never committed
+      const check = await db.query('SELECT id FROM test_items WHERE name = $1;', [uniqueName]);
+      expect(check.rowCount).toBe(0);
+
+      // Verify connection pool is operational and client was released
+      const probeQuery = await db.query<{ one: number }>('SELECT 1 as one;');
+      expect(probeQuery.rowCount).toBe(1);
+    });
 
     for (const { name, value } of falsyCases) {
       it(`preserves falsy rejection ${name}, rolls back changes, and allows client reuse`, async () => {
