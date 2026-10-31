@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DatabaseError,
   isDatabaseError,
+  sanitizeCallbackError,
   sanitizeDatabaseError,
   stripCredentials,
 } from '../../src/database/errors.js';
@@ -500,6 +501,229 @@ describe('Database error categorization and non-disclosure (unit tests)', () => 
       expect(exitCode).toBe(0);
       const combined = stdout + stderr;
       for (const s of hostileSentinels) {
+        expect(combined).not.toContain(s);
+      }
+    });
+  });
+
+  describe('TASK-004 Remediation 04 - Tainted genuine DatabaseError observable surface closure', () => {
+    it('proves tainted genuine DatabaseError with enumerable, non-enumerable, and accessor-backed cause returns fresh safe DatabaseError without in-place mutation', () => {
+      // 1. Enumerable cause
+      const err1 = new DatabaseError('Standard error 1', { code: 'DATABASE_ERROR' });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (err1 as any).cause = 'hostile_enumerable_cause';
+
+      const s1 = sanitizeDatabaseError(err1);
+      expect(s1).toBeInstanceOf(DatabaseError);
+      expect(s1).not.toBe(err1);
+      expect('cause' in (s1 as object)).toBe(false);
+      expect((s1 as unknown as { cause?: unknown }).cause).toBeUndefined();
+      expect(JSON.stringify(s1)).not.toContain('hostile_enumerable_cause');
+      expect((err1 as unknown as { cause?: unknown }).cause).toBe('hostile_enumerable_cause'); // Not mutated in place
+
+      // 2. Non-enumerable cause
+      const err2 = new DatabaseError('Standard error 2', { code: 'AUTH_FAILED' });
+      Object.defineProperty(err2, 'cause', {
+        value: 'hostile_non_enumerable_cause',
+        enumerable: false,
+        configurable: true,
+        writable: true,
+      });
+
+      const s2 = sanitizeDatabaseError(err2);
+      expect(s2).toBeInstanceOf(DatabaseError);
+      expect(s2).not.toBe(err2);
+      expect('cause' in (s2 as object)).toBe(false);
+      expect((s2 as unknown as { cause?: unknown }).cause).toBeUndefined();
+      expect(JSON.stringify(s2)).not.toContain('hostile_non_enumerable_cause');
+      expect(s2.code).toBe('AUTH_FAILED');
+
+      // 3. Accessor-backed cause (with throwing getter to prove getter is NEVER executed)
+      const err3 = new DatabaseError('Standard error 3', { code: 'QUERY_CANCELED' });
+      let getterCalled = false;
+      Object.defineProperty(err3, 'cause', {
+        get() {
+          getterCalled = true;
+          throw new Error('Hostile getter executed!');
+        },
+        configurable: true,
+      });
+
+      const s3 = sanitizeDatabaseError(err3);
+      expect(getterCalled).toBe(false);
+      expect(s3).toBeInstanceOf(DatabaseError);
+      expect(s3 === err3).toBe(false);
+      expect('cause' in (s3 as object)).toBe(false);
+      expect((s3 as unknown as { cause?: unknown }).cause).toBeUndefined();
+      expect(s3.code).toBe('QUERY_CANCELED');
+      expect(getterCalled).toBe(false);
+    });
+
+    it('proves tainted genuine DatabaseError with constraint, SQL, bind values, credentials, symbols, unexpected own keys returns fresh safe DatabaseError', () => {
+      const err = new DatabaseError('Base message', { code: 'DATABASE_ERROR' });
+      const symbolKey = Symbol('secret_metadata_symbol');
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const anyErr = err as any;
+      anyErr.constraint = 'hostile_constraint_secret';
+      anyErr.sql = 'SELECT * FROM secrets WHERE id = 1';
+      anyErr.bind = ['bind_value_1', 'bind_value_2'];
+      anyErr[symbolKey] = 'symbol_value_secret';
+      anyErr.unexpectedMeta = 'unexpected_value_secret';
+
+      const sanitized = sanitizeDatabaseError(err);
+      expect(sanitized).toBeInstanceOf(DatabaseError);
+      expect(sanitized).not.toBe(err);
+
+      // Caller-owned error must NOT be mutated in place
+      expect(anyErr.constraint).toBe('hostile_constraint_secret');
+      expect(anyErr.sql).toBe('SELECT * FROM secrets WHERE id = 1');
+      expect(anyErr[symbolKey]).toBe('symbol_value_secret');
+      expect(anyErr.unexpectedMeta).toBe('unexpected_value_secret');
+
+      // Sanitized error must not have any of these fields
+      expect('constraint' in sanitized).toBe(false);
+      expect('sql' in sanitized).toBe(false);
+      expect('bind' in sanitized).toBe(false);
+      expect(symbolKey in (sanitized as object)).toBe(false);
+      expect('unexpectedMeta' in sanitized).toBe(false);
+
+      expect(JSON.stringify(sanitized)).not.toContain('hostile_constraint_secret');
+      expect(JSON.stringify(sanitized)).not.toContain('SELECT * FROM secrets');
+      expect(JSON.stringify(sanitized)).not.toContain('bind_value_1');
+      expect(JSON.stringify(sanitized)).not.toContain('symbol_value_secret');
+      expect(JSON.stringify(sanitized)).not.toContain('unexpected_value_secret');
+    });
+
+    it('proves hostile stack data and stack accessors are rejected and replaced with fresh stack', () => {
+      // 1. Stack getter
+      const err1 = new DatabaseError('Stack accessor message');
+      let stackGetterCalled = false;
+      Object.defineProperty(err1, 'stack', {
+        get() {
+          stackGetterCalled = true;
+          throw new Error('Hostile stack getter executed!');
+        },
+        configurable: true,
+      });
+
+      const s1 = sanitizeDatabaseError(err1);
+      expect(stackGetterCalled).toBe(false);
+      expect(s1).toBeInstanceOf(DatabaseError);
+      expect(s1).not.toBe(err1);
+      expect(typeof s1.stack).toBe('string');
+      expect(s1.stack).toContain('DatabaseError: Stack accessor message');
+
+      // 2. Stack with credentials
+      const err2 = new DatabaseError('Standard message');
+      err2.stack = `DatabaseError: query failed\n    at postgresql://user_secret:pass_secret@host:5432/db`;
+
+      const s2 = sanitizeDatabaseError(err2);
+      expect(s2).toBeInstanceOf(DatabaseError);
+      expect(s2).not.toBe(err2);
+      expect(s2.stack).not.toContain('user_secret');
+      expect(s2.stack).not.toContain('pass_secret');
+    });
+
+    it('proves sanitizeCallbackError routes genuine DatabaseError through sanitizeDatabaseError and preserves non-database errors', () => {
+      // 1. Tainted genuine DatabaseError
+      const taintedDbErr = new DatabaseError('Tainted db error', { code: 'DATABASE_ERROR' });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (taintedDbErr as any).cause = 'hostile_cause_in_callback';
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (taintedDbErr as any).constraint = 'hostile_constraint';
+
+      const sanitizedDb = sanitizeCallbackError(taintedDbErr);
+      expect(sanitizedDb).toBeInstanceOf(DatabaseError);
+      expect(sanitizedDb).not.toBe(taintedDbErr);
+      expect('cause' in (sanitizedDb as object)).toBe(false);
+      expect('constraint' in (sanitizedDb as object)).toBe(false);
+      expect(JSON.stringify(sanitizedDb)).not.toContain('hostile_cause_in_callback');
+      expect((taintedDbErr as unknown as { cause?: unknown }).cause).toBe(
+        'hostile_cause_in_callback',
+      ); // Not mutated in place
+
+      // 2. Untainted genuine DatabaseError preserves identity
+      const safeDbErr = new DatabaseError('Safe db error', { code: 'UNIQUE_VIOLATION' });
+      const preservedDb = sanitizeCallbackError(safeDbErr);
+      expect(preservedDb).toBe(safeDbErr);
+
+      // 3. Non-database business error preserves identity and class
+      class DomainBusinessError extends Error {
+        public readonly domainCode = 'DOMAIN_RULE_VIOLATION';
+        constructor(message: string) {
+          super(message);
+          this.name = 'DomainBusinessError';
+        }
+      }
+
+      const businessErr = new DomainBusinessError('Workspace slug is restricted');
+      const preservedBusiness = sanitizeCallbackError(businessErr);
+      expect(preservedBusiness).toBe(businessErr);
+      expect((preservedBusiness as DomainBusinessError).domainCode).toBe('DOMAIN_RULE_VIOLATION');
+      expect(preservedBusiness.name).toBe('DomainBusinessError');
+    });
+
+    it('proves child-process execution outputs no hostile cause, constraint, SQL, bind, symbol, or stack sentinels through stdout or stderr', async () => {
+      const sentinels = [
+        'cause_sentinel_pwd_999',
+        'constraint_sentinel_workspaces',
+        'sql_sentinel_select_credit_cards',
+        'bind_sentinel_param_value',
+        'symbol_sentinel_secret_token',
+        'unexpected_key_sentinel_secret',
+      ];
+
+      const childScript = `
+        import { sanitizeDatabaseError, sanitizeCallbackError, DatabaseError } from './packages/infrastructure/src/database/errors.ts';
+        import util from 'node:util';
+
+        const dbErr = new DatabaseError('Tainted child test error', { code: 'DATABASE_ERROR' });
+        const sym = Symbol('token');
+        dbErr.cause = '${sentinels[0]}';
+        dbErr.constraint = '${sentinels[1]}';
+        dbErr.sql = '${sentinels[2]}';
+        dbErr.bind = ['${sentinels[3]}'];
+        dbErr[sym] = '${sentinels[4]}';
+        dbErr.secretMeta = '${sentinels[5]}';
+
+        const s1 = sanitizeDatabaseError(dbErr);
+        const s2 = sanitizeCallbackError(dbErr);
+
+        console.log(JSON.stringify(s1));
+        console.error(String(s1));
+        console.log(util.inspect(s1));
+
+        console.log(JSON.stringify(s2));
+        console.error(String(s2));
+        console.log(util.inspect(s2));
+      `;
+
+      const child = spawn(
+        process.execPath,
+        ['--conditions=development', '--import', 'tsx', '-e', childScript],
+        {
+          cwd: process.cwd(),
+          stdio: ['pipe', 'pipe', 'pipe'],
+        },
+      );
+
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (d) => {
+        stdout += d.toString();
+      });
+      child.stderr.on('data', (d) => {
+        stderr += d.toString();
+      });
+
+      const exitCode = await new Promise<number>((resolve) => {
+        child.on('close', resolve);
+      });
+
+      expect(exitCode).toBe(0);
+      const combined = stdout + stderr;
+      for (const s of sentinels) {
         expect(combined).not.toContain(s);
       }
     });

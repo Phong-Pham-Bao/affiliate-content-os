@@ -1,6 +1,11 @@
 import type { DatabaseConfig } from '@affiliate-content-os/config';
 import pg from 'pg';
-import { DatabaseError, sanitizeCallbackError, sanitizeDatabaseError } from './errors.js';
+import {
+  DatabaseError,
+  isDatabaseError,
+  sanitizeCallbackError,
+  sanitizeDatabaseError,
+} from './errors.js';
 import { resolveSslOptions } from './ssl.js';
 import type {
   CreateDatabaseOptions,
@@ -179,31 +184,62 @@ export function createDatabase(config: DatabaseConfig, options?: CreateDatabaseO
     };
     client.on('error', clientErrorHandler);
 
-    let active = true;
+    let active = false;
     let firstQueryFailure: DatabaseError | undefined;
+    const inFlightQueries = new Set<Promise<void>>();
 
     const executor: TransactionExecutor = {
-      async query<R = unknown>(
+      query<R = unknown>(
         text: string,
         params?: readonly unknown[],
       ): Promise<DatabaseQueryResult<R>> {
         if (!active) {
-          throw new DatabaseError('Cannot execute query: transaction has already completed');
+          return Promise.reject(
+            new DatabaseError('Cannot execute query: transaction has already completed'),
+          );
         }
+
+        let driverPromise: Promise<pg.QueryResult>;
         try {
-          const res = await client.query(text, params ? [...params] : undefined);
-          return {
-            rows: Object.freeze([...res.rows]) as readonly R[],
-            rowCount: res.rowCount ?? 0,
-            command: res.command,
-          };
-        } catch (err) {
-          const safeErr = sanitizeDatabaseError(err, 'Database query execution failed');
+          driverPromise = client.query(text, params ? [...params] : undefined);
+        } catch (syncErr) {
+          const safeErr = sanitizeDatabaseError(syncErr, 'Database query execution failed');
           if (firstQueryFailure === undefined) {
             firstQueryFailure = safeErr;
           }
-          throw safeErr;
+          const callerPromise = Promise.reject(safeErr);
+          callerPromise.catch(() => {});
+          return callerPromise;
         }
+
+        const callerPromise = driverPromise.then(
+          (res) => {
+            return {
+              rows: Object.freeze([...res.rows]) as readonly R[],
+              rowCount: res.rowCount ?? 0,
+              command: res.command,
+            };
+          },
+          (err) => {
+            const safeErr = sanitizeDatabaseError(err, 'Database query execution failed');
+            if (firstQueryFailure === undefined) {
+              firstQueryFailure = safeErr;
+            }
+            throw safeErr;
+          },
+        );
+
+        const completionPromise = callerPromise.then(
+          () => {},
+          () => {},
+        );
+
+        inFlightQueries.add(completionPromise);
+        completionPromise.finally(() => {
+          inFlightQueries.delete(completionPromise);
+        });
+
+        return callerPromise;
       },
     };
 
@@ -215,9 +251,11 @@ export function createDatabase(config: DatabaseConfig, options?: CreateDatabaseO
 
     try {
       await client.query('BEGIN');
+      active = true;
     } catch (beginErr) {
       beginFailed = true;
       beginFailureValue = sanitizeDatabaseError(beginErr, 'Transaction execution failed');
+      active = false;
     }
 
     if (!beginFailed) {
@@ -225,12 +263,18 @@ export function createDatabase(config: DatabaseConfig, options?: CreateDatabaseO
         callbackResult = await fn(executor);
       } catch (userErr) {
         callbackFailed = true;
-        callbackFailureValue = sanitizeCallbackError(userErr);
+        callbackFailureValue = isDatabaseError(userErr)
+          ? sanitizeDatabaseError(userErr)
+          : sanitizeCallbackError(userErr);
       } finally {
         active = false;
       }
     } else {
       active = false;
+    }
+
+    while (inFlightQueries.size > 0) {
+      await Promise.all(Array.from(inFlightQueries));
     }
 
     let rolledBack = false;
@@ -260,18 +304,21 @@ export function createDatabase(config: DatabaseConfig, options?: CreateDatabaseO
     if (firstQueryFailure !== undefined) {
       await safeRollback();
       safeRelease();
+      inFlightQueries.clear();
       throw firstQueryFailure;
     }
 
     if (beginFailed) {
       await safeRollback();
       safeRelease();
+      inFlightQueries.clear();
       throw beginFailureValue;
     }
 
     if (callbackFailed) {
       await safeRollback();
       safeRelease();
+      inFlightQueries.clear();
       throw callbackFailureValue;
     }
 
@@ -279,6 +326,7 @@ export function createDatabase(config: DatabaseConfig, options?: CreateDatabaseO
       const safeClientErr = sanitizeDatabaseError(clientError, 'Transaction client error');
       await safeRollback();
       safeRelease();
+      inFlightQueries.clear();
       throw safeClientErr;
     }
 
@@ -288,10 +336,12 @@ export function createDatabase(config: DatabaseConfig, options?: CreateDatabaseO
       const safeCommitErr = sanitizeDatabaseError(commitErr, 'Transaction execution failed');
       await safeRollback();
       safeRelease();
+      inFlightQueries.clear();
       throw safeCommitErr;
     }
 
     safeRelease();
+    inFlightQueries.clear();
     if (releaseError) {
       throw sanitizeDatabaseError(releaseError, 'Failed to release database connection');
     }
