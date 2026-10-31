@@ -9,11 +9,13 @@ import {
   SlugConflictError,
   type CreateWorkspaceWithOwnerParams,
   type CreateWorkspaceResult,
+  type IdentityLookupKey,
   type UserDirectoryPort,
+  type UserIdentityDirectoryPort,
   type WorkspacePersistencePort,
 } from '@affiliate-content-os/application';
 import type { Database } from '../database/types.js';
-import { sanitizeDatabaseError } from '../database/errors.js';
+import { DatabaseError, sanitizeDatabaseError } from '../database/errors.js';
 import {
   mapMembershipRow,
   mapUserRow,
@@ -23,7 +25,9 @@ import {
   type RawWorkspaceRow,
 } from './mappers.js';
 
-export class PostgresTenancyAdapter implements UserDirectoryPort, WorkspacePersistencePort {
+export class PostgresTenancyAdapter
+  implements UserDirectoryPort, WorkspacePersistencePort, UserIdentityDirectoryPort
+{
   constructor(private readonly database: Database) {}
 
   public async findUserById(userId: UserId): Promise<UserSnapshot | null> {
@@ -38,6 +42,54 @@ export class PostgresTenancyAdapter implements UserDirectoryPort, WorkspacePersi
       return null;
     }
     return mapUserRow(result.rows[0]);
+  }
+
+  public async findUsersByIdentity(key: IdentityLookupKey): Promise<readonly UserSnapshot[]> {
+    const result = await this.database.query<RawUserRow>(
+      `SELECT id, identity_provider, identity_subject, email, display_name,
+              status, created_at, updated_at, version
+       FROM users
+       WHERE identity_provider = $1
+         AND identity_subject = $2
+       LIMIT 2`,
+      [key.identityProvider, key.identitySubject],
+    );
+
+    return Object.freeze(result.rows.map((row) => mapUserRow(row)));
+  }
+
+  public async insertUserIfAbsent(params: {
+    readonly user: UserSnapshot;
+  }): Promise<UserSnapshot | null> {
+    const { user } = params;
+    const result = await this.database.query<RawUserRow>(
+      `INSERT INTO users (
+        id, identity_provider, identity_subject, email, display_name,
+        status, created_at, updated_at, version
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      ON CONFLICT (identity_provider, identity_subject) DO NOTHING
+      RETURNING id, identity_provider, identity_subject, email, display_name,
+                status, created_at, updated_at, version`,
+      [
+        user.id,
+        user.identityProvider,
+        user.identitySubject,
+        user.email,
+        user.displayName,
+        user.status,
+        user.createdAt,
+        user.updatedAt,
+        user.version,
+      ],
+    );
+
+    if (result.rows.length === 0) {
+      return null;
+    }
+    if (result.rows.length === 1) {
+      return mapUserRow(result.rows[0]!);
+    }
+    throw new DatabaseError('Unexpected multiple rows returned from insert');
   }
 
   public async createWorkspaceWithOwner(

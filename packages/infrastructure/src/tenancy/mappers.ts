@@ -1,4 +1,6 @@
 import {
+  isUserStatus,
+  isValidUuidV7,
   parseIsoTimestamp,
   parseMembershipId,
   parseUserId,
@@ -6,7 +8,6 @@ import {
   type IsoTimestamp,
   type MembershipStatus,
   type UserSnapshot,
-  type UserStatus,
   type WorkspaceMembershipSnapshot,
   type WorkspaceRole,
   type WorkspaceSnapshot,
@@ -74,17 +75,47 @@ function mapRowTimestamp(value: unknown, fieldName: string): IsoTimestamp {
 }
 
 export function mapUserRow(row: RawUserRow): UserSnapshot {
-  return Object.freeze({
-    id: parseUserId(row.id),
-    identityProvider: row.identity_provider,
-    identitySubject: row.identity_subject,
-    email: row.email,
-    displayName: row.display_name,
-    status: row.status as UserStatus,
-    createdAt: mapRowTimestamp(row.created_at, 'created_at'),
-    updatedAt: mapRowTimestamp(row.updated_at, 'updated_at'),
-    version: Number(row.version),
-  });
+  try {
+    if (!row || typeof row !== 'object') {
+      throw new DatabaseError('Invalid user row object');
+    }
+    if (!isValidUuidV7(row.id)) {
+      throw new DatabaseError('Invalid user ID in database row');
+    }
+    if (typeof row.identity_provider !== 'string' || row.identity_provider.length === 0) {
+      throw new DatabaseError('Invalid identity_provider in database row');
+    }
+    if (typeof row.identity_subject !== 'string' || row.identity_subject.length === 0) {
+      throw new DatabaseError('Invalid identity_subject in database row');
+    }
+    if (!isUserStatus(row.status)) {
+      throw new DatabaseError('Invalid user status in database row');
+    }
+    const version = Number(row.version);
+    if (!Number.isInteger(version) || version < 1) {
+      throw new DatabaseError('Invalid user version in database row');
+    }
+    const email = row.email === null || row.email === undefined ? null : String(row.email);
+    const displayName =
+      row.display_name === null || row.display_name === undefined ? null : String(row.display_name);
+
+    return Object.freeze({
+      id: parseUserId(row.id),
+      identityProvider: row.identity_provider,
+      identitySubject: row.identity_subject,
+      email,
+      displayName,
+      status: row.status,
+      createdAt: mapRowTimestamp(row.created_at, 'created_at'),
+      updatedAt: mapRowTimestamp(row.updated_at, 'updated_at'),
+      version,
+    });
+  } catch (err) {
+    if (err instanceof DatabaseError) {
+      throw err;
+    }
+    throw new DatabaseError('Failed to map user row');
+  }
 }
 
 export function mapWorkspaceRow(row: RawWorkspaceRow): WorkspaceSnapshot {

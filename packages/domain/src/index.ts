@@ -6,6 +6,14 @@ export {
 } from './timestamps.js';
 export { DomainValidationError } from './errors.js';
 export {
+  createApplicationPrincipal,
+  createAuthenticationSource,
+  validateIdentityClaims,
+  type ApplicationPrincipal,
+  type AuthenticationSource,
+  type VerifiedIdentityClaims,
+} from './identity.js';
+export {
   isValidUuidV7,
   parseMembershipId,
   parseUserId,
