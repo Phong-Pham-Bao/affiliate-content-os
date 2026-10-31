@@ -1,9 +1,9 @@
 # Cook Report: TASK-004 Remediation 05 Implementation
 
-**Task:** TASK-004 Remediation 05  
-**Date:** 2026-10-31  
-**Time:** 23:40  
-**Branch:** `agy/task-004-workspace-tenancy-core`  
+**Task:** TASK-004 Remediation 05
+**Date:** 2026-10-31
+**Time:** 23:40
+**Branch:** `agy/task-004-workspace-tenancy-core`
 **PR:** https://github.com/Phong-Pham-Bao/affiliate-content-os/pull/4
 
 ---
@@ -191,33 +191,33 @@ In `sanitizeDatabaseError(err)`:
 
 ## 7. Verification Results
 
-| Verification Check        | Command                                         | Status               | Details                                                                                  |
-| ------------------------- | ----------------------------------------------- | -------------------- | ---------------------------------------------------------------------------------------- |
-| Node.js Version           | `node --version`                                | PASSED               | `v24.14.0`                                                                               |
-| pnpm Version              | `corepack pnpm --version`                       | PASSED               | `12.4.2`                                                                                 |
-| Frozen Lockfile Install   | `corepack pnpm install --frozen-lockfile`       | PASSED               | Lockfile up to date                                                                      |
-| Local Environment Setup   | `corepack pnpm env:local`                       | PASSED               | `.env` generated and verified                                                            |
-| Docker Compose Config     | `docker compose config --quiet`                 | PASSED               | Compose config valid                                                                     |
-| Infrastructure Pins       | `corepack pnpm verify:infrastructure-pins`      | PASSED               | PostgreSQL digest verified against registry                                              |
-| Infrastructure Startup    | `corepack pnpm infra:up`                        | PASSED               | PostgreSQL container started and healthy (5/5)                                           |
-| Migration Validation      | `corepack pnpm db:migrate:validate`             | PASSED               | Clean baseline, idempotent rerun, isolated DB cleaned up                                 |
-| Full Integration Suite    | `corepack pnpm test:integration`                | PASSED               | 4 test files, 82 passed (100%)                                                           |
-| Code Formatting           | `corepack pnpm format:check`                    | PASSED               | All files formatted per Prettier                                                         |
-| Boundary Linting          | `corepack pnpm lint:boundaries`                 | PASSED               | 234 modules, 467 dependencies, 0 violations                                              |
-| Linting                   | `corepack pnpm lint`                            | PASSED               | ESLint clean (0 errors, 0 warnings)                                                      |
-| Type Checking             | `corepack pnpm typecheck`                       | PASSED               | All 7 workspace projects clean                                                           |
-| Unit Tests                | `corepack pnpm test`                            | PASSED               | 22 test files, 655 tests passed (100%)                                                   |
-| Workspace Build           | `corepack pnpm build`                           | PASSED               | All packages and Next.js app built cleanly                                               |
-| Aggregate Check           | `corepack pnpm check`                           | PASSED               | Full local CI check pipeline clean (code 0)                                              |
-| Production Audit          | `corepack pnpm audit --prod --audit-level high` | PASSED               | 0 high or critical vulnerabilities                                                       |
-| Security Exception Policy | `corepack pnpm verify:trivy-exception`          | PASSED               | Exception `TASK-003-CVE-2025-68121-GOSU` verified                                        |
-| Pinned Image Inspection   | `docker image inspect`                          | PASSED               | Digest `sha256:bbf83594798e144bff365a9c191c5d779f181fb3135902064ab8ff11918020fc` matches |
-| Trivy Review Scan         | `trivy image ... HIGH,CRITICAL`                 | PASSED               | Exit code 0, 1 suppressed finding                                                        |
-| Trivy Blocking Scan       | `trivy image ... CRITICAL --ignore-unfixed`     | PASSED               | Exit code 0, 0 unfixed critical vulnerabilities                                          |
-| Trivy Negative Control    | `trivy image ... without ignorefile`            | PASSED (Exit code 1) | Accurately flagged `CVE-2025-68121` on `usr/local/bin/gosu`                              |
-| Runtime Smoke Tests       | API & Worker smoke scripts                      | PASSED               | API returned HTTP 200 on `/health/live`; Worker started and stopped gracefully           |
-| Infrastructure Shutdown   | `corepack pnpm infra:down`                      | PASSED               | Container and network removed cleanly                                                    |
-| Git Diff Check            | `git diff --check`                              | PASSED               | 0 whitespace or formatting errors                                                        |
+| Verification Check        | Command                                         | Status               | Details                                                                                                                                 |
+| ------------------------- | ----------------------------------------------- | -------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Node.js Version           | `node --version`                                | PASSED               | `v24.14.0`                                                                                                                              |
+| pnpm Version              | `corepack pnpm --version`                       | PASSED               | `12.4.2`                                                                                                                                |
+| Frozen Lockfile Install   | `corepack pnpm install --frozen-lockfile`       | PASSED               | Lockfile up to date                                                                                                                     |
+| Local Environment Setup   | `corepack pnpm env:local`                       | PASSED               | `.env` generated and verified                                                                                                           |
+| Docker Compose Config     | `docker compose config --quiet`                 | PASSED               | Compose config valid                                                                                                                    |
+| Infrastructure Pins       | `corepack pnpm verify:infrastructure-pins`      | PASSED               | PostgreSQL digest verified against registry                                                                                             |
+| Infrastructure Startup    | `corepack pnpm infra:up`                        | PASSED               | PostgreSQL container started and healthy (5/5)                                                                                          |
+| Migration Validation      | `corepack pnpm db:migrate:validate`             | PASSED               | Clean baseline, idempotent rerun, isolated DB cleaned up                                                                                |
+| Full Integration Suite    | `corepack pnpm test:integration`                | PASSED               | 4 test files, 82 passed (100%)                                                                                                          |
+| Code Formatting           | `corepack pnpm format:check`                    | PASSED               | All files formatted per Prettier                                                                                                        |
+| Boundary Linting          | `corepack pnpm lint:boundaries`                 | PASSED               | 234 modules, 467 dependencies, 0 violations                                                                                             |
+| Linting                   | `corepack pnpm lint`                            | PASSED               | ESLint clean (0 errors, 0 warnings)                                                                                                     |
+| Type Checking             | `corepack pnpm typecheck`                       | PASSED               | All 7 workspace projects clean                                                                                                          |
+| Unit Tests                | `corepack pnpm test`                            | PASSED               | 22 test files, 655 tests passed (100%)                                                                                                  |
+| Workspace Build           | `corepack pnpm build`                           | PASSED               | All packages and Next.js app built cleanly                                                                                              |
+| Aggregate Check           | `corepack pnpm check`                           | PASSED               | Full local CI check pipeline clean (code 0)                                                                                             |
+| Production Audit          | `corepack pnpm audit --prod --audit-level high` | PASSED               | 0 high or critical vulnerabilities                                                                                                      |
+| Security Exception Policy | `corepack pnpm verify:trivy-exception`          | PASSED               | Exception `TASK-003-CVE-2025-68121-GOSU` verified                                                                                       |
+| Pinned Image Inspection   | `docker buildx imagetools inspect`              | PASSED               | MediaType: `application/vnd.oci.image.index.v1+json`, Digest: `sha256:bbf83594798e144bff365a9c191c5d779f181fb3135902064ab8ff11918020fc` |
+| Trivy Review Scan         | `trivy image ... HIGH,CRITICAL`                 | PASSED               | Exit code 0, 1 suppressed finding                                                                                                       |
+| Trivy Blocking Scan       | `trivy image ... CRITICAL --ignore-unfixed`     | PASSED               | Exit code 0, 0 unfixed critical vulnerabilities                                                                                         |
+| Trivy Negative Control    | `trivy image ... without ignorefile`            | PASSED (Exit code 1) | Accurately flagged `CVE-2025-68121` on `usr/local/bin/gosu`                                                                             |
+| Runtime Smoke Tests       | API & Worker smoke scripts                      | PASSED               | API returned HTTP 200 on `/health/live`; Worker started and stopped gracefully                                                          |
+| Infrastructure Shutdown   | `corepack pnpm infra:down`                      | PASSED               | Container and network removed cleanly                                                                                                   |
+| Git Diff Check            | `git diff --check origin/main...HEAD`           | PASSED               | 0 whitespace or formatting errors                                                                                                       |
 
 ---
 
