@@ -94,6 +94,157 @@ describe('resolveVerifiedIdentity Use Case', () => {
       expect(idGenerator.generateUserId).not.toHaveBeenCalled();
     });
 
+    it('rejects proxy and revoked-proxy claims with zero traps/hooks and zero dependency calls', async () => {
+      const clock = createMockClock();
+      const idGenerator = createMockIdGenerator();
+      const directory = createMockDirectory();
+      const deps: ResolveVerifiedIdentityDependencies = {
+        clock,
+        idGenerator,
+        identityDirectory: directory,
+      };
+
+      const traps = [
+        'get',
+        'getPrototypeOf',
+        'ownKeys',
+        'getOwnPropertyDescriptor',
+        'has',
+        'set',
+      ] as const;
+
+      for (const trapName of traps) {
+        let trapCount = 0;
+        const sentinel = `SENTINEL_APP_TRAP_${trapName}_12345`;
+        const handler: ProxyHandler<object> = {
+          [trapName]: () => {
+            trapCount++;
+            throw new Error(sentinel);
+          },
+        };
+        const target = {
+          identityProvider: 'https://auth.example.com',
+          identitySubject: 'sub-12345',
+        };
+        const proxy = new Proxy(target, handler);
+
+        let caught1: unknown;
+        let caught2: unknown;
+        try {
+          await resolveVerifiedIdentity({ claims: proxy }, deps);
+        } catch (err) {
+          caught1 = err;
+        }
+        try {
+          await resolveVerifiedIdentity({ claims: proxy }, deps);
+        } catch (err) {
+          caught2 = err;
+        }
+
+        expect(trapCount).toBe(0);
+        expect(caught1).toBeInstanceOf(IdentityClaimsValidationError);
+        const claimsErr = caught1 as IdentityClaimsValidationError;
+        expect(claimsErr.code).toBe('IDENTITY_CLAIMS_INVALID');
+        expect(claimsErr.field).toBe('claims');
+        expect(claimsErr.message).toBe('Invalid identity claims');
+        expect(caught1).not.toBe(caught2); // Fresh error identity across repeated failures
+
+        expect(directory.findUsersByIdentity).not.toHaveBeenCalled();
+        expect(directory.insertUserIfAbsent).not.toHaveBeenCalled();
+        expect(clock.now).not.toHaveBeenCalled();
+        expect(idGenerator.generateUserId).not.toHaveBeenCalled();
+      }
+
+      // Proxy with all traps and hooks installed
+      let allTrapsCount = 0;
+      let allHooksCount = 0;
+      const allSentinel = 'SENTINEL_APP_ALL_TRAPS_99999';
+      const target: Record<string | symbol, unknown> = {
+        identityProvider: 'https://auth.example.com',
+        identitySubject: 'sub-12345',
+        toString() {
+          allHooksCount++;
+          throw new Error(allSentinel);
+        },
+        valueOf() {
+          allHooksCount++;
+          throw new Error(allSentinel);
+        },
+        toJSON() {
+          allHooksCount++;
+          throw new Error(allSentinel);
+        },
+        [Symbol.iterator]() {
+          allHooksCount++;
+          throw new Error(allSentinel);
+        },
+        [Symbol.for('nodejs.util.inspect.custom')]() {
+          allHooksCount++;
+          throw new Error(allSentinel);
+        },
+      };
+
+      const proxyAll = new Proxy(target, {
+        get() {
+          allTrapsCount++;
+          throw new Error(allSentinel);
+        },
+        getPrototypeOf() {
+          allTrapsCount++;
+          throw new Error(allSentinel);
+        },
+        ownKeys() {
+          allTrapsCount++;
+          throw new Error(allSentinel);
+        },
+        getOwnPropertyDescriptor() {
+          allTrapsCount++;
+          throw new Error(allSentinel);
+        },
+        has() {
+          allTrapsCount++;
+          throw new Error(allSentinel);
+        },
+        set() {
+          allTrapsCount++;
+          throw new Error(allSentinel);
+        },
+      });
+
+      await expect(resolveVerifiedIdentity({ claims: proxyAll }, deps)).rejects.toThrow(
+        IdentityClaimsValidationError,
+      );
+      expect(allTrapsCount).toBe(0);
+      expect(allHooksCount).toBe(0);
+
+      // Revoked proxy
+      let revokedTrapCount = 0;
+      const { proxy: revokedProxy, revoke } = Proxy.revocable(
+        { identityProvider: 'https://auth.example.com', identitySubject: 'sub-12345' },
+        {
+          get() {
+            revokedTrapCount++;
+            throw new Error('REVOKED_TRAP');
+          },
+          getPrototypeOf() {
+            revokedTrapCount++;
+            throw new Error('REVOKED_TRAP');
+          },
+        },
+      );
+      revoke();
+
+      await expect(resolveVerifiedIdentity({ claims: revokedProxy }, deps)).rejects.toThrow(
+        IdentityClaimsValidationError,
+      );
+      expect(revokedTrapCount).toBe(0);
+
+      expect(directory.findUsersByIdentity).not.toHaveBeenCalled();
+      expect(directory.insertUserIfAbsent).not.toHaveBeenCalled();
+      expect(clock.now).not.toHaveBeenCalled();
+      expect(idGenerator.generateUserId).not.toHaveBeenCalled();
+    });
+
     it('translates provider and subject validation failures with exact field and safe message', async () => {
       const clock = createMockClock();
       const idGenerator = createMockIdGenerator();
@@ -820,6 +971,319 @@ describe('resolveVerifiedIdentity Use Case', () => {
       expect(accessorCalled).toBe(false);
     });
 
+    describe('Persistence Array Validation & Prototype Spoofing Rejection Matrix', () => {
+      const createInvalidArrays = () => {
+        const validSnapshot = createValidActiveSnapshot();
+
+        // 1. Object.create(Array.prototype) with length: 0
+        const makeSpoofed0 = () => {
+          const spoofed0 = Object.create(Array.prototype);
+          Object.defineProperty(spoofed0, 'length', {
+            value: 0,
+            writable: true,
+            enumerable: false,
+            configurable: false,
+          });
+          return { value: spoofed0, getTraps: () => 0 };
+        };
+
+        // 2. Object.create(Array.prototype) with length: 1 and valid snapshot
+        const makeSpoofed1 = () => {
+          const spoofed1 = Object.create(Array.prototype);
+          Object.defineProperty(spoofed1, 'length', {
+            value: 1,
+            writable: true,
+            enumerable: false,
+            configurable: false,
+          });
+          Object.defineProperty(spoofed1, '0', {
+            value: validSnapshot,
+            writable: true,
+            enumerable: true,
+            configurable: true,
+          });
+          return { value: spoofed1, getTraps: () => 0 };
+        };
+
+        // 3. Ordinary array-like object with Object.prototype
+        const makeOrdinaryArrayLike = () => {
+          const ordinaryArrayLike = {
+            length: 1,
+            0: validSnapshot,
+          };
+          return { value: ordinaryArrayLike, getTraps: () => 0 };
+        };
+
+        // 4. Copied descriptors on plain object
+        const makeCopiedDescriptors = () => {
+          const copiedDescriptors = Object.create(Object.prototype);
+          Object.defineProperty(copiedDescriptors, 'length', {
+            value: 1,
+            writable: true,
+            enumerable: false,
+            configurable: false,
+          });
+          Object.defineProperty(copiedDescriptors, '0', {
+            value: validSnapshot,
+            writable: true,
+            enumerable: true,
+            configurable: true,
+          });
+          return { value: copiedDescriptors, getTraps: () => 0 };
+        };
+
+        // 5. Iterable / SDK collection
+        const makeSdkCollection = () => {
+          const sdkCollection = {
+            length: 1,
+            0: validSnapshot,
+            [Symbol.iterator]: function* () {
+              yield validSnapshot;
+            },
+          };
+          return { value: sdkCollection, getTraps: () => 0 };
+        };
+
+        // 6. Array subclass
+        const makeSubclass = () => {
+          class MyArraySubclass extends Array {}
+          const subclass = new MyArraySubclass();
+          subclass.push(validSnapshot);
+          return { value: subclass, getTraps: () => 0 };
+        };
+
+        // 7. Proxy array with throwing traps
+        const makeProxyArray = () => {
+          let proxyTrapCalled = false;
+          const proxyArray = new Proxy([validSnapshot], {
+            get(_t, p) {
+              if (p === 'then') return undefined;
+              proxyTrapCalled = true;
+              throw new Error('PROXY_TRAP');
+            },
+            getPrototypeOf() {
+              proxyTrapCalled = true;
+              throw new Error('PROXY_TRAP');
+            },
+            ownKeys() {
+              proxyTrapCalled = true;
+              throw new Error('PROXY_TRAP');
+            },
+          });
+          return { value: proxyArray, getTraps: () => (proxyTrapCalled ? 1 : 0) };
+        };
+
+        // 8. Revoked proxy array (Promise resolved before revoke so fulfillment holds revoked proxy)
+        const makeRevokedProxyArray = () => {
+          let revokedTrapCalled = false;
+          const { proxy: revokedProxyArray, revoke } = Proxy.revocable([validSnapshot], {
+            get(_t, p) {
+              if (p === 'then') return undefined;
+              revokedTrapCalled = true;
+              throw new Error('REVOKED_PROXY_TRAP');
+            },
+          });
+          const promise = Promise.resolve(revokedProxyArray);
+          revoke();
+          return { value: promise, getTraps: () => (revokedTrapCalled ? 1 : 0) };
+        };
+
+        // 9. Symbol property on genuine array
+        const makeSymbolArray = () => {
+          const symbolArray = [validSnapshot];
+          (symbolArray as unknown as Record<symbol, unknown>)[Symbol('hostile')] = 'secret';
+          return { value: symbolArray, getTraps: () => 0 };
+        };
+
+        // 10. Extra property on genuine array
+        const makeExtraPropArray = () => {
+          const extraPropArray = [validSnapshot];
+          (extraPropArray as unknown as Record<string, unknown>).extra = 'forbidden';
+          return { value: extraPropArray, getTraps: () => 0 };
+        };
+
+        // 11. Sparse array
+        const makeSparseArray = () => {
+          const sparseArray: unknown[] = [];
+          sparseArray[1] = validSnapshot;
+          sparseArray.length = 2;
+          return { value: sparseArray, getTraps: () => 0 };
+        };
+
+        // 12. Accessor index on genuine array
+        const makeAccessorArray = () => {
+          let accessorCalled = false;
+          const accessorArray: unknown[] = [];
+          Object.defineProperty(accessorArray, '0', {
+            get() {
+              accessorCalled = true;
+              return validSnapshot;
+            },
+            enumerable: true,
+            configurable: true,
+          });
+          Object.defineProperty(accessorArray, 'length', { value: 1, writable: true });
+          return { value: accessorArray, getTraps: () => (accessorCalled ? 1 : 0) };
+        };
+
+        return [
+          { name: 'Object.create(Array.prototype) length: 0', factory: makeSpoofed0 },
+          { name: 'Object.create(Array.prototype) length: 1', factory: makeSpoofed1 },
+          { name: 'ordinary array-like object', factory: makeOrdinaryArrayLike },
+          { name: 'object with copied array descriptors', factory: makeCopiedDescriptors },
+          { name: 'iterable/SDK collection object', factory: makeSdkCollection },
+          { name: 'array subclass instance', factory: makeSubclass },
+          { name: 'proxy array', factory: makeProxyArray },
+          { name: 'revoked proxy array', factory: makeRevokedProxyArray },
+          { name: 'symbol-bearing array', factory: makeSymbolArray },
+          { name: 'extra property array', factory: makeExtraPropArray },
+          { name: 'sparse array', factory: makeSparseArray },
+          { name: 'accessor index array', factory: makeAccessorArray },
+        ];
+      };
+
+      it('rejects every spoofed/invalid array during initial lookup with IdentityPersistenceError("lookup") and exact call counts', async () => {
+        for (const item of createInvalidArrays()) {
+          const clock = createMockClock();
+          const idGenerator = createMockIdGenerator();
+          const directory = createMockDirectory();
+          const deps: ResolveVerifiedIdentityDependencies = {
+            clock,
+            idGenerator,
+            identityDirectory: directory,
+          };
+
+          const instance1 = item.factory();
+          vi.mocked(directory.findUsersByIdentity).mockReturnValue(
+            Promise.resolve(instance1.value as unknown as readonly UserSnapshot[]),
+          );
+
+          let caught1: unknown;
+          try {
+            await resolveVerifiedIdentity(
+              {
+                claims: {
+                  identityProvider: 'https://auth.example.com',
+                  identitySubject: 'sub-12345',
+                },
+              },
+              deps,
+            );
+          } catch (err) {
+            caught1 = err;
+          }
+
+          // Test fresh error identity with second invocation
+          const instance2 = item.factory();
+          vi.mocked(directory.findUsersByIdentity).mockReturnValue(
+            Promise.resolve(instance2.value as unknown as readonly UserSnapshot[]),
+          );
+          let caught2: unknown;
+          try {
+            await resolveVerifiedIdentity(
+              {
+                claims: {
+                  identityProvider: 'https://auth.example.com',
+                  identitySubject: 'sub-12345',
+                },
+              },
+              deps,
+            );
+          } catch (err) {
+            caught2 = err;
+          }
+
+          expect(caught1).toBeInstanceOf(IdentityPersistenceError);
+          const err1 = caught1 as IdentityPersistenceError;
+          expect(err1.operation).toBe('lookup');
+          expect(err1.message).toBe('Identity persistence error');
+          expect(caught1).not.toBe(caught2); // fresh error identity
+
+          expect(instance1.getTraps()).toBe(0);
+          expect(instance2.getTraps()).toBe(0);
+          expect(directory.findUsersByIdentity).toHaveBeenCalledTimes(2); // 1 per call
+          expect(directory.insertUserIfAbsent).not.toHaveBeenCalled();
+          expect(clock.now).not.toHaveBeenCalled();
+          expect(idGenerator.generateUserId).not.toHaveBeenCalled();
+        }
+      });
+
+      it('rejects every spoofed/invalid array during losing-race recovery with IdentityPersistenceError("recovery") and exact call counts', async () => {
+        for (const item of createInvalidArrays()) {
+          const clock = createMockClock();
+          const idGenerator = createMockIdGenerator();
+          const directory = createMockDirectory();
+          const deps: ResolveVerifiedIdentityDependencies = {
+            clock,
+            idGenerator,
+            identityDirectory: directory,
+          };
+
+          // First invocation: initial lookup [] -> insert null -> recovery invalid array
+          const instance1 = item.factory();
+          vi.mocked(directory.findUsersByIdentity)
+            .mockResolvedValueOnce([])
+            .mockReturnValueOnce(
+              Promise.resolve(instance1.value as unknown as readonly UserSnapshot[]),
+            );
+          vi.mocked(directory.insertUserIfAbsent).mockResolvedValueOnce(null);
+
+          let caught1: unknown;
+          try {
+            await resolveVerifiedIdentity(
+              {
+                claims: {
+                  identityProvider: 'https://auth.example.com',
+                  identitySubject: 'sub-12345',
+                },
+              },
+              deps,
+            );
+          } catch (err) {
+            caught1 = err;
+          }
+
+          // Second invocation: fresh error identity
+          const instance2 = item.factory();
+          vi.mocked(directory.findUsersByIdentity)
+            .mockResolvedValueOnce([])
+            .mockReturnValueOnce(
+              Promise.resolve(instance2.value as unknown as readonly UserSnapshot[]),
+            );
+          vi.mocked(directory.insertUserIfAbsent).mockResolvedValueOnce(null);
+
+          let caught2: unknown;
+          try {
+            await resolveVerifiedIdentity(
+              {
+                claims: {
+                  identityProvider: 'https://auth.example.com',
+                  identitySubject: 'sub-12345',
+                },
+              },
+              deps,
+            );
+          } catch (err) {
+            caught2 = err;
+          }
+
+          expect(caught1).toBeInstanceOf(IdentityPersistenceError);
+          const err1 = caught1 as IdentityPersistenceError;
+          expect(err1.operation).toBe('recovery');
+          expect(err1.message).toBe('Identity persistence error');
+          expect(caught1).not.toBe(caught2); // fresh error identity
+
+          expect(instance1.getTraps()).toBe(0);
+          expect(instance2.getTraps()).toBe(0);
+          // Initial lookup + recovery lookup = exactly 2 lookups per invocation (4 total)
+          expect(directory.findUsersByIdentity).toHaveBeenCalledTimes(4);
+          expect(clock.now).toHaveBeenCalledTimes(2);
+          expect(idGenerator.generateUserId).toHaveBeenCalledTimes(2);
+          expect(directory.insertUserIfAbsent).toHaveBeenCalledTimes(2);
+        }
+      });
+    });
+
     it('rejects proxy snapshots, mutable snapshots, and snapshots with custom prototypes', async () => {
       const clock = createMockClock();
       const idGenerator = createMockIdGenerator();
@@ -1277,6 +1741,189 @@ describe('resolveVerifiedIdentity Use Case', () => {
           const insp1 = util.inspect(err, { customInspect: true });
           const insp2 = util.inspect(err, { customInspect: false });
           const out = str + json + insp1 + insp2 + (err.stack ?? '');
+          if (out.includes('${sentinel}')) {
+            process.exit(2);
+          }
+          process.exit(0);
+        }
+      `;
+
+      const child = spawn(
+        process.execPath,
+        ['--conditions=development', '--import', 'tsx', '-e', childScript],
+        {
+          cwd: process.cwd(),
+          stdio: ['pipe', 'pipe', 'pipe'],
+        },
+      );
+
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (d) => {
+        stdout += d.toString();
+      });
+      child.stderr.on('data', (d) => {
+        stderr += d.toString();
+      });
+
+      const exitCode = await new Promise<number>((resolve) => {
+        child.on('close', resolve);
+      });
+
+      expect(exitCode).toBe(0);
+      expect(stdout).not.toContain(sentinel);
+      expect(stderr).not.toContain(sentinel);
+    }, 15000);
+
+    it('proves hostile proxy claims sentinels never leak to child process stdout, stderr, or inspect', async () => {
+      const { spawn } = await import('node:child_process');
+      const sentinel = 'SECRET_CLAIMS_SENTINEL_778899';
+      const childScript = `
+        import { resolveVerifiedIdentity } from './packages/application/src/resolve-verified-identity.ts';
+        import util from 'node:util';
+
+        let trapCount = 0;
+        let hookCount = 0;
+        const target = {
+          identityProvider: 'https://issuer.com',
+          identitySubject: 'sub1',
+          toString() { hookCount++; throw new Error('${sentinel}'); },
+          valueOf() { hookCount++; throw new Error('${sentinel}'); },
+          toJSON() { hookCount++; throw new Error('${sentinel}'); },
+          [Symbol.for('nodejs.util.inspect.custom')]() { hookCount++; throw new Error('${sentinel}'); },
+        };
+        const hostileProxy = new Proxy(target, {
+          get() { trapCount++; throw new Error('${sentinel}'); },
+          getPrototypeOf() { trapCount++; throw new Error('${sentinel}'); },
+          ownKeys() { trapCount++; throw new Error('${sentinel}'); },
+          getOwnPropertyDescriptor() { trapCount++; throw new Error('${sentinel}'); },
+          has() { trapCount++; throw new Error('${sentinel}'); },
+          set() { trapCount++; throw new Error('${sentinel}'); },
+        });
+
+        let dependencyCalls = 0;
+        try {
+          await resolveVerifiedIdentity(
+            { claims: hostileProxy },
+            {
+              identityDirectory: {
+                findUsersByIdentity: async () => { dependencyCalls++; return []; },
+                insertUserIfAbsent: async () => { dependencyCalls++; return null; },
+              },
+              clock: { now: () => { dependencyCalls++; return new Date(); } },
+              idGenerator: {
+                generateUserId: () => { dependencyCalls++; return '018f6c38-7654-7123-8abc-def012345678' as any; },
+                generateWorkspaceId: () => '' as any,
+                generateMembershipId: () => '' as any,
+              },
+            }
+          );
+          process.exit(1);
+        } catch (err: any) {
+          if (trapCount !== 0 || hookCount !== 0 || dependencyCalls !== 0) {
+            process.exit(3);
+          }
+          if (err.name !== 'IdentityClaimsValidationError' || err.code !== 'IDENTITY_CLAIMS_INVALID' || err.field !== 'claims' || err.message !== 'Invalid identity claims') {
+            process.exit(4);
+          }
+          const str = String(err);
+          const json = JSON.stringify(err);
+          const insp1 = util.inspect(err, { customInspect: true });
+          const insp2 = util.inspect(err, { customInspect: false });
+          const keys = Object.keys(err).join(',');
+          const ownKeys = Reflect.ownKeys(err).map(String).join(',');
+          const out = str + json + insp1 + insp2 + (err.stack ?? '') + keys + ownKeys;
+          if (out.includes('${sentinel}')) {
+            process.exit(2);
+          }
+          process.exit(0);
+        }
+      `;
+
+      const child = spawn(
+        process.execPath,
+        ['--conditions=development', '--import', 'tsx', '-e', childScript],
+        {
+          cwd: process.cwd(),
+          stdio: ['pipe', 'pipe', 'pipe'],
+        },
+      );
+
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (d) => {
+        stdout += d.toString();
+      });
+      child.stderr.on('data', (d) => {
+        stderr += d.toString();
+      });
+
+      const exitCode = await new Promise<number>((resolve) => {
+        child.on('close', resolve);
+      });
+
+      expect(exitCode).toBe(0);
+      expect(stdout).not.toContain(sentinel);
+      expect(stderr).not.toContain(sentinel);
+    }, 15000);
+
+    it('proves spoofed persistence array Object.create(Array.prototype) sentinels never leak to child process stdout, stderr, or inspect', async () => {
+      const { spawn } = await import('node:child_process');
+      const sentinel = 'SECRET_SPOOFED_ARRAY_SENTINEL_334455';
+      const childScript = `
+        import { resolveVerifiedIdentity } from './packages/application/src/resolve-verified-identity.ts';
+        import util from 'node:util';
+
+        let getterCount = 0;
+        const fakeArr = Object.create(Array.prototype);
+        Object.defineProperty(fakeArr, 'length', {
+          value: 1,
+          writable: true,
+          enumerable: false,
+          configurable: false,
+        });
+        Object.defineProperty(fakeArr, '0', {
+          get() {
+            getterCount++;
+            throw new Error('${sentinel}');
+          },
+          enumerable: true,
+          configurable: true,
+        });
+
+        let lookupCalls = 0;
+        let otherCalls = 0;
+        try {
+          await resolveVerifiedIdentity(
+            { claims: { identityProvider: 'https://issuer.com', identitySubject: 'sub1' } },
+            {
+              identityDirectory: {
+                findUsersByIdentity: async () => { lookupCalls++; return fakeArr; },
+                insertUserIfAbsent: async () => { otherCalls++; return null; },
+              },
+              clock: { now: () => { otherCalls++; return new Date(); } },
+              idGenerator: {
+                generateUserId: () => { otherCalls++; return '018f6c38-7654-7123-8abc-def012345678' as any; },
+                generateWorkspaceId: () => '' as any,
+                generateMembershipId: () => '' as any,
+              },
+            }
+          );
+          process.exit(1);
+        } catch (err: any) {
+          if (getterCount !== 0 || lookupCalls !== 1 || otherCalls !== 0) {
+            process.exit(3);
+          }
+          if (err.name !== 'IdentityPersistenceError' || err.code !== 'IDENTITY_PERSISTENCE_INVALID' || err.operation !== 'lookup' || err.message !== 'Identity persistence error') {
+            process.exit(4);
+          }
+          const str = String(err);
+          const json = JSON.stringify(err);
+          const insp1 = util.inspect(err, { customInspect: true });
+          const insp2 = util.inspect(err, { customInspect: false });
+          const keys = Object.keys(err).join(',');
+          const ownKeys = Reflect.ownKeys(err).map(String).join(',');
+          const out = str + json + insp1 + insp2 + (err.stack ?? '') + keys + ownKeys;
           if (out.includes('${sentinel}')) {
             process.exit(2);
           }

@@ -73,6 +73,10 @@ function validatePersistenceArray(result: unknown, op: 'lookup' | 'recovery'): V
       throw new IdentityPersistenceError(op);
     }
 
+    if (!Array.isArray(result)) {
+      throw new IdentityPersistenceError(op);
+    }
+
     if (Object.getPrototypeOf(result) !== Array.prototype) {
       throw new IdentityPersistenceError(op);
     }
@@ -84,7 +88,8 @@ function validatePersistenceArray(result: unknown, op: 'lookup' | 'recovery'): V
       lengthDesc.set !== undefined ||
       typeof lengthDesc.value !== 'number' ||
       !Number.isSafeInteger(lengthDesc.value) ||
-      lengthDesc.value < 0
+      lengthDesc.value < 0 ||
+      lengthDesc.value > 1
     ) {
       throw new IdentityPersistenceError(op);
     }
@@ -95,8 +100,14 @@ function validatePersistenceArray(result: unknown, op: 'lookup' | 'recovery'): V
       throw new IdentityPersistenceError(op);
     }
 
-    if (len > 1) {
-      throw new IdentityPersistenceError(op);
+    const expectedKeys = new Set<string | symbol>(['length']);
+    for (let i = 0; i < len; i++) {
+      expectedKeys.add(String(i));
+    }
+    for (const key of ownKeys) {
+      if (!expectedKeys.has(key)) {
+        throw new IdentityPersistenceError(op);
+      }
     }
 
     const capturedItems: unknown[] = [];

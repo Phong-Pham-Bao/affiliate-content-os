@@ -118,30 +118,193 @@ describe('Domain Identity and Claims Validation', () => {
       );
     });
 
-    it('rejects hostile proxies throwing traps with field "claims"', () => {
-      const throwingProxy = new Proxy(
-        {},
-        {
-          getPrototypeOf() {
-            throw new Error('hostile prototype');
-          },
-        },
-      );
-      expect(() => validateIdentityClaims(throwingProxy)).toThrowError(
-        expect.objectContaining({ field: 'claims' }),
-      );
+    describe('proxy and revoked-proxy claims rejection (zero traps/hooks executed)', () => {
+      const traps = [
+        'get',
+        'getPrototypeOf',
+        'ownKeys',
+        'getOwnPropertyDescriptor',
+        'has',
+        'set',
+      ] as const;
 
-      const throwingKeysProxy = new Proxy(
-        {},
-        {
-          ownKeys() {
-            throw new Error('hostile ownKeys');
+      for (const trapName of traps) {
+        it(`rejects proxy with individual throwing/sentinel trap "${trapName}" with 0 trap calls`, () => {
+          let trapCount = 0;
+          const sentinel = `SENTINEL_TRAP_${trapName}_12345`;
+          const handler: ProxyHandler<object> = {
+            [trapName]: () => {
+              trapCount++;
+              throw new Error(sentinel);
+            },
+          };
+          const target = {
+            identityProvider: 'https://issuer.example.com',
+            identitySubject: 'sub-1',
+          };
+          const proxy = new Proxy(target, handler);
+
+          let caught: unknown;
+          try {
+            validateIdentityClaims(proxy);
+          } catch (err) {
+            caught = err;
+          }
+
+          expect(trapCount).toBe(0);
+          expect(caught).toBeInstanceOf(DomainValidationError);
+          const valErr = caught as DomainValidationError;
+          expect(valErr.field).toBe('claims');
+          expect(valErr.message).not.toContain(sentinel);
+          expect(JSON.stringify(valErr)).not.toContain(sentinel);
+        });
+      }
+
+      it('rejects proxy with ALL traps and hooks installed with 0 trap/hook calls', () => {
+        let trapCalls = 0;
+        let hookCalls = 0;
+        const sentinel = 'SENTINEL_ALL_TRAPS_AND_HOOKS_99999';
+
+        const target: Record<string | symbol, unknown> = {
+          identityProvider: 'https://issuer.example.com',
+          identitySubject: 'sub-1',
+          toString() {
+            hookCalls++;
+            throw new Error(sentinel);
           },
-        },
-      );
-      expect(() => validateIdentityClaims(throwingKeysProxy)).toThrowError(
-        expect.objectContaining({ field: 'claims' }),
-      );
+          valueOf() {
+            hookCalls++;
+            throw new Error(sentinel);
+          },
+          toJSON() {
+            hookCalls++;
+            throw new Error(sentinel);
+          },
+          [Symbol.iterator]() {
+            hookCalls++;
+            throw new Error(sentinel);
+          },
+          [Symbol.for('nodejs.util.inspect.custom')]() {
+            hookCalls++;
+            throw new Error(sentinel);
+          },
+        };
+
+        const handler: ProxyHandler<object> = {
+          get() {
+            trapCalls++;
+            throw new Error(sentinel);
+          },
+          getPrototypeOf() {
+            trapCalls++;
+            throw new Error(sentinel);
+          },
+          ownKeys() {
+            trapCalls++;
+            throw new Error(sentinel);
+          },
+          getOwnPropertyDescriptor() {
+            trapCalls++;
+            throw new Error(sentinel);
+          },
+          has() {
+            trapCalls++;
+            throw new Error(sentinel);
+          },
+          set() {
+            trapCalls++;
+            throw new Error(sentinel);
+          },
+        };
+
+        const proxy = new Proxy(target, handler);
+
+        let caught: unknown;
+        try {
+          validateIdentityClaims(proxy);
+        } catch (err) {
+          caught = err;
+        }
+
+        expect(trapCalls).toBe(0);
+        expect(hookCalls).toBe(0);
+        expect(caught).toBeInstanceOf(DomainValidationError);
+        const valErr = caught as DomainValidationError;
+        expect(valErr.field).toBe('claims');
+        expect(valErr.message).not.toContain(sentinel);
+      });
+
+      it('rejects revoked-proxy claims with 0 traps/hooks executed', () => {
+        let trapCalls = 0;
+        const sentinel = 'SENTINEL_REVOKED_PROXY_88888';
+        const { proxy, revoke } = Proxy.revocable(
+          {
+            identityProvider: 'https://issuer.example.com',
+            identitySubject: 'sub-1',
+          },
+          {
+            get() {
+              trapCalls++;
+              throw new Error(sentinel);
+            },
+            getPrototypeOf() {
+              trapCalls++;
+              throw new Error(sentinel);
+            },
+            ownKeys() {
+              trapCalls++;
+              throw new Error(sentinel);
+            },
+            getOwnPropertyDescriptor() {
+              trapCalls++;
+              throw new Error(sentinel);
+            },
+            has() {
+              trapCalls++;
+              throw new Error(sentinel);
+            },
+            set() {
+              trapCalls++;
+              throw new Error(sentinel);
+            },
+          },
+        );
+        revoke();
+
+        let caught: unknown;
+        try {
+          validateIdentityClaims(proxy);
+        } catch (err) {
+          caught = err;
+        }
+
+        expect(trapCalls).toBe(0);
+        expect(caught).toBeInstanceOf(DomainValidationError);
+        const valErr = caught as DomainValidationError;
+        expect(valErr.field).toBe('claims');
+        expect(valErr.message).not.toContain(sentinel);
+      });
+
+      it('rejects proxy whose target has null prototype with 0 traps executed', () => {
+        let trapCalls = 0;
+        const nullProtoTarget = Object.create(null);
+        nullProtoTarget.identityProvider = 'prov';
+        nullProtoTarget.identitySubject = 'sub';
+
+        const proxy = new Proxy(nullProtoTarget, {
+          getPrototypeOf() {
+            trapCalls++;
+            return null;
+          },
+          get() {
+            trapCalls++;
+            return 'prov';
+          },
+        });
+
+        expect(() => validateIdentityClaims(proxy)).toThrow(DomainValidationError);
+        expect(trapCalls).toBe(0);
+      });
     });
   });
 

@@ -1,3 +1,4 @@
+import util from 'node:util';
 import { DomainValidationError } from './errors.js';
 import type { UserSnapshot } from './types.js';
 
@@ -42,8 +43,24 @@ const ALLOWED_OWN_KEYS: ReadonlySet<string> = new Set([
   'displayName',
 ]);
 
+function isProxySafe(value: unknown): boolean {
+  try {
+    return util.types.isProxy(value);
+  } catch {
+    return true;
+  }
+}
+
 function inspectClaimsObject(claims: unknown): (string | symbol)[] {
-  if (typeof claims !== 'object' || claims === null || Array.isArray(claims)) {
+  if (typeof claims !== 'object' || claims === null) {
+    throw new DomainValidationError('Claims must be a non-null plain object', 'claims');
+  }
+
+  if (isProxySafe(claims)) {
+    throw new DomainValidationError('Claims must not be a proxy', 'claims');
+  }
+
+  if (Array.isArray(claims)) {
     throw new DomainValidationError('Claims must be a non-null plain object', 'claims');
   }
 
