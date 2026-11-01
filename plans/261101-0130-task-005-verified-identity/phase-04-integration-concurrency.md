@@ -8,8 +8,8 @@
 
 ## Overview
 
-Status: completed  
-Priority: high  
+Status: completed
+Priority: high
 Prove real PostgreSQL lookup, creation, uniqueness, and concurrent losing-race recovery against isolated PostgreSQL 18.6 containers.
 
 ## Requirements

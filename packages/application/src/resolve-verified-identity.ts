@@ -1,13 +1,15 @@
+import util from 'node:util';
 import {
   createApplicationPrincipal,
   createAuthenticationSource,
-  dateToIsoTimestamp,
   DomainValidationError,
   isUserStatus,
   isValidIsoTimestamp,
+  isValidUuidV7,
   parseUserId,
   validateIdentityClaims,
   type ApplicationPrincipal,
+  type IsoTimestamp,
   type UserSnapshot,
   type VerifiedIdentityClaims,
 } from '@affiliate-content-os/domain';
@@ -52,71 +54,279 @@ function validateClaimsSafe(claims: unknown): VerifiedIdentityClaims {
   }
 }
 
-function isValidUserSnapshot(user: unknown): user is UserSnapshot {
-  if (typeof user !== 'object' || user === null || !Object.isFrozen(user)) {
-    return false;
+function isProxySafe(value: unknown): boolean {
+  try {
+    return util.types.isProxy(value);
+  } catch {
+    return true;
   }
-  const u = user as Record<string, unknown>;
-  return (
-    typeof u.id === 'string' &&
-    typeof u.identityProvider === 'string' &&
-    typeof u.identitySubject === 'string' &&
-    (u.email === null || typeof u.email === 'string') &&
-    (u.displayName === null || typeof u.displayName === 'string') &&
-    isUserStatus(u.status) &&
-    isValidIsoTimestamp(u.createdAt) &&
-    isValidIsoTimestamp(u.updatedAt) &&
-    typeof u.version === 'number' &&
-    Number.isInteger(u.version) &&
-    u.version > 0
-  );
 }
 
-function validateInsertedSnapshot(
-  inserted: UserSnapshot | null,
-  expected: UserSnapshot,
-): UserSnapshot {
-  if (
-    inserted === null ||
-    !isValidUserSnapshot(inserted) ||
-    inserted.id !== expected.id ||
-    inserted.identityProvider !== expected.identityProvider ||
-    inserted.identitySubject !== expected.identitySubject ||
-    inserted.email !== expected.email ||
-    inserted.displayName !== expected.displayName ||
-    inserted.status !== 'active' ||
-    inserted.version !== 1 ||
-    inserted.createdAt !== expected.createdAt ||
-    inserted.updatedAt !== expected.updatedAt
-  ) {
-    throw new IdentityPersistenceError('insert', 'Invalid inserted user snapshot');
+interface ValidatedArray {
+  readonly length: number;
+  readonly getSnapshot: (index: number) => unknown;
+}
+
+function validatePersistenceArray(result: unknown, op: 'lookup' | 'recovery'): ValidatedArray {
+  try {
+    if (typeof result !== 'object' || result === null || isProxySafe(result)) {
+      throw new IdentityPersistenceError(op);
+    }
+
+    if (Object.getPrototypeOf(result) !== Array.prototype) {
+      throw new IdentityPersistenceError(op);
+    }
+
+    const lengthDesc = Object.getOwnPropertyDescriptor(result, 'length');
+    if (
+      !lengthDesc ||
+      lengthDesc.get !== undefined ||
+      lengthDesc.set !== undefined ||
+      typeof lengthDesc.value !== 'number' ||
+      !Number.isSafeInteger(lengthDesc.value) ||
+      lengthDesc.value < 0
+    ) {
+      throw new IdentityPersistenceError(op);
+    }
+
+    const len = lengthDesc.value;
+    const ownKeys = Reflect.ownKeys(result);
+    if (ownKeys.length !== len + 1) {
+      throw new IdentityPersistenceError(op);
+    }
+
+    if (len > 1) {
+      throw new IdentityPersistenceError(op);
+    }
+
+    const capturedItems: unknown[] = [];
+    for (let i = 0; i < len; i++) {
+      const desc = Object.getOwnPropertyDescriptor(result, String(i));
+      if (!desc || desc.get !== undefined || desc.set !== undefined) {
+        throw new IdentityPersistenceError(op);
+      }
+      capturedItems.push(desc.value);
+    }
+
+    return {
+      length: len,
+      getSnapshot: (index: number) => capturedItems[index],
+    };
+  } catch {
+    throw new IdentityPersistenceError(op);
   }
-  return inserted;
+}
+
+const REQUIRED_SNAPSHOT_KEYS = [
+  'id',
+  'identityProvider',
+  'identitySubject',
+  'email',
+  'displayName',
+  'status',
+  'createdAt',
+  'updatedAt',
+  'version',
+] as const;
+
+function validateAndCreateCanonicalSnapshot(
+  snapshot: unknown,
+  op: 'lookup' | 'insert' | 'recovery',
+  expected: {
+    readonly provider: string;
+    readonly subject: string;
+    readonly insertUser?: UserSnapshot;
+  },
+): UserSnapshot {
+  try {
+    if (typeof snapshot !== 'object' || snapshot === null || isProxySafe(snapshot)) {
+      throw new IdentityPersistenceError(op);
+    }
+
+    const proto = Object.getPrototypeOf(snapshot);
+    if (proto !== Object.prototype && proto !== null) {
+      throw new IdentityPersistenceError(op);
+    }
+
+    if (!Object.isFrozen(snapshot)) {
+      throw new IdentityPersistenceError(op);
+    }
+
+    const ownKeys = Reflect.ownKeys(snapshot);
+    if (ownKeys.length !== REQUIRED_SNAPSHOT_KEYS.length) {
+      throw new IdentityPersistenceError(op);
+    }
+
+    let idVal: unknown;
+    let provVal: unknown;
+    let subVal: unknown;
+    let emailVal: unknown;
+    let displayNameVal: unknown;
+    let statusVal: unknown;
+    let createdAtVal: unknown;
+    let updatedAtVal: unknown;
+    let versionVal: unknown;
+
+    for (const key of REQUIRED_SNAPSHOT_KEYS) {
+      const desc = Object.getOwnPropertyDescriptor(snapshot, key);
+      if (!desc || desc.get !== undefined || desc.set !== undefined) {
+        throw new IdentityPersistenceError(op);
+      }
+      switch (key) {
+        case 'id':
+          idVal = desc.value;
+          break;
+        case 'identityProvider':
+          provVal = desc.value;
+          break;
+        case 'identitySubject':
+          subVal = desc.value;
+          break;
+        case 'email':
+          emailVal = desc.value;
+          break;
+        case 'displayName':
+          displayNameVal = desc.value;
+          break;
+        case 'status':
+          statusVal = desc.value;
+          break;
+        case 'createdAt':
+          createdAtVal = desc.value;
+          break;
+        case 'updatedAt':
+          updatedAtVal = desc.value;
+          break;
+        case 'version':
+          versionVal = desc.value;
+          break;
+      }
+    }
+
+    if (typeof idVal !== 'string' || !isValidUuidV7(idVal)) {
+      throw new IdentityPersistenceError(op);
+    }
+    const id = parseUserId(idVal);
+
+    if (
+      typeof provVal !== 'string' ||
+      provVal.length === 0 ||
+      provVal.trim() !== provVal ||
+      provVal !== expected.provider
+    ) {
+      throw new IdentityPersistenceError(op);
+    }
+
+    if (
+      typeof subVal !== 'string' ||
+      subVal.length === 0 ||
+      subVal.trim() !== subVal ||
+      subVal !== expected.subject
+    ) {
+      throw new IdentityPersistenceError(op);
+    }
+
+    if (emailVal !== null && typeof emailVal !== 'string') {
+      throw new IdentityPersistenceError(op);
+    }
+
+    if (displayNameVal !== null && typeof displayNameVal !== 'string') {
+      throw new IdentityPersistenceError(op);
+    }
+
+    if (typeof statusVal !== 'string' || !isUserStatus(statusVal)) {
+      throw new IdentityPersistenceError(op);
+    }
+
+    if (typeof createdAtVal !== 'string' || !isValidIsoTimestamp(createdAtVal)) {
+      throw new IdentityPersistenceError(op);
+    }
+
+    if (typeof updatedAtVal !== 'string' || !isValidIsoTimestamp(updatedAtVal)) {
+      throw new IdentityPersistenceError(op);
+    }
+
+    if (typeof versionVal !== 'number' || !Number.isSafeInteger(versionVal) || versionVal < 1) {
+      throw new IdentityPersistenceError(op);
+    }
+
+    if (op === 'insert') {
+      const exp = expected.insertUser;
+      if (!exp) {
+        throw new IdentityPersistenceError('insert');
+      }
+      if (
+        id !== exp.id ||
+        provVal !== exp.identityProvider ||
+        subVal !== exp.identitySubject ||
+        emailVal !== exp.email ||
+        displayNameVal !== exp.displayName ||
+        statusVal !== 'active' ||
+        versionVal !== 1 ||
+        createdAtVal !== exp.createdAt ||
+        updatedAtVal !== exp.updatedAt
+      ) {
+        throw new IdentityPersistenceError('insert');
+      }
+    }
+
+    return Object.freeze({
+      id,
+      identityProvider: provVal,
+      identitySubject: subVal,
+      email: emailVal,
+      displayName: displayNameVal,
+      status: statusVal,
+      createdAt: createdAtVal,
+      updatedAt: updatedAtVal,
+      version: versionVal,
+    });
+  } catch {
+    throw new IdentityPersistenceError(op);
+  }
+}
+
+function getSafeClockTimestamp(clock: ClockPort): IsoTimestamp {
+  try {
+    const raw: unknown = clock.now();
+    if (typeof raw !== 'object' || raw === null || isProxySafe(raw)) {
+      throw new ValidationError('Invalid clock value', 'clock');
+    }
+    if (Object.getPrototypeOf(raw) !== Date.prototype) {
+      throw new ValidationError('Invalid clock value', 'clock');
+    }
+    if (Reflect.ownKeys(raw).length !== 0) {
+      throw new ValidationError('Invalid clock value', 'clock');
+    }
+    const epoch = Date.prototype.getTime.call(raw);
+    if (typeof epoch !== 'number' || !Number.isFinite(epoch)) {
+      throw new ValidationError('Invalid clock value', 'clock');
+    }
+    const freshDate = new Date(epoch);
+    const isoString = Date.prototype.toISOString.call(freshDate);
+    if (!isValidIsoTimestamp(isoString)) {
+      throw new ValidationError('Invalid clock value', 'clock');
+    }
+    return isoString;
+  } catch {
+    throw new ValidationError('Invalid clock value', 'clock');
+  }
 }
 
 function handleSingleUserSnapshot(
-  user: UserSnapshot,
+  snapshot: UserSnapshot,
   provider: string,
-  subject: string,
   op: 'lookup' | 'recovery',
 ): ApplicationPrincipal {
-  if (
-    !isValidUserSnapshot(user) ||
-    user.identityProvider !== provider ||
-    user.identitySubject !== subject
-  ) {
-    throw new IdentityPersistenceError(op, `Invalid user snapshot in ${op}`);
+  if (snapshot.status === 'active') {
+    return createApplicationPrincipal(snapshot, createAuthenticationSource(provider));
   }
 
-  if (user.status === 'active') {
-    return createApplicationPrincipal(user, createAuthenticationSource(provider));
+  if (snapshot.status === 'disabled' || snapshot.status === 'deletion_pending') {
+    throw new IdentityUnavailableError();
   }
 
-  if (user.status === 'disabled' || user.status === 'deletion_pending') {
-    throw new IdentityUnavailableError('Identity is unavailable');
-  }
-
-  throw new IdentityPersistenceError(op, `Invalid user status in ${op}`);
+  throw new IdentityPersistenceError(op);
 }
 
 export async function resolveVerifiedIdentity(
@@ -126,29 +336,27 @@ export async function resolveVerifiedIdentity(
   const claims = validateClaimsSafe(command.claims);
   const { identityProvider, identitySubject } = claims;
 
-  const users = await deps.identityDirectory.findUsersByIdentity({
+  const usersResult = await deps.identityDirectory.findUsersByIdentity({
     identityProvider,
     identitySubject,
   });
 
-  if (!Array.isArray(users)) {
-    throw new IdentityPersistenceError('lookup', 'Lookup must return an array');
-  }
+  const lookupArray = validatePersistenceArray(usersResult, 'lookup');
 
-  if (users.length === 1) {
-    return handleSingleUserSnapshot(users[0]!, identityProvider, identitySubject, 'lookup');
-  }
-
-  if (users.length > 1) {
-    throw new IdentityPersistenceError('lookup', 'Multiple users found for identity');
+  if (lookupArray.length === 1) {
+    const canonicalSnapshot = validateAndCreateCanonicalSnapshot(
+      lookupArray.getSnapshot(0),
+      'lookup',
+      {
+        provider: identityProvider,
+        subject: identitySubject,
+      },
+    );
+    return handleSingleUserSnapshot(canonicalSnapshot, identityProvider, 'lookup');
   }
 
   // Provisioning path (0 users found)
-  const now = deps.clock.now();
-  if (!(now instanceof Date) || isNaN(now.getTime())) {
-    throw new ValidationError('Invalid clock value', 'clock');
-  }
-  const nowIso = dateToIsoTimestamp(now);
+  const nowIso = getSafeClockTimestamp(deps.clock);
 
   const generatedUserId = deps.idGenerator.generateUserId();
   const userId = parseUserId(generatedUserId);
@@ -168,32 +376,36 @@ export async function resolveVerifiedIdentity(
   const inserted = await deps.identityDirectory.insertUserIfAbsent({ user: newUser });
 
   if (inserted !== null) {
-    const verified = validateInsertedSnapshot(inserted, newUser);
-    return createApplicationPrincipal(verified, createAuthenticationSource(identityProvider));
+    const canonicalInserted = validateAndCreateCanonicalSnapshot(inserted, 'insert', {
+      provider: identityProvider,
+      subject: identitySubject,
+      insertUser: newUser,
+    });
+    return createApplicationPrincipal(
+      canonicalInserted,
+      createAuthenticationSource(identityProvider),
+    );
   }
 
   // Losing-race recovery
-  const recoveryUsers = await deps.identityDirectory.findUsersByIdentity({
+  const recoveryResult = await deps.identityDirectory.findUsersByIdentity({
     identityProvider,
     identitySubject,
   });
 
-  if (!Array.isArray(recoveryUsers)) {
-    throw new IdentityPersistenceError('recovery', 'Recovery must return an array');
+  const recoveryArray = validatePersistenceArray(recoveryResult, 'recovery');
+  if (recoveryArray.length === 0) {
+    throw new IdentityProvisioningRaceError();
   }
 
-  if (recoveryUsers.length === 0) {
-    throw new IdentityProvisioningRaceError('Concurrent identity provisioning race detected');
-  }
+  const canonicalRecovered = validateAndCreateCanonicalSnapshot(
+    recoveryArray.getSnapshot(0),
+    'recovery',
+    {
+      provider: identityProvider,
+      subject: identitySubject,
+    },
+  );
 
-  if (recoveryUsers.length === 1) {
-    return handleSingleUserSnapshot(
-      recoveryUsers[0]!,
-      identityProvider,
-      identitySubject,
-      'recovery',
-    );
-  }
-
-  throw new IdentityPersistenceError('recovery', 'Multiple users found in recovery');
+  return handleSingleUserSnapshot(canonicalRecovered, identityProvider, 'recovery');
 }

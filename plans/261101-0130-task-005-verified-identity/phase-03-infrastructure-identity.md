@@ -9,8 +9,8 @@
 
 ## Overview
 
-Status: completed  
-Priority: high  
+Status: completed
+Priority: high
 Implement PostgreSQL persistence for identity lookup and provisioning with explicit row-count semantics and safe database error wrapping.
 
 ## Requirements

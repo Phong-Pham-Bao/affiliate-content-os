@@ -9,8 +9,8 @@
 
 ## Overview
 
-Status: completed  
-Priority: high  
+Status: completed
+Priority: high
 Implement application ports, typed identity errors, error translation boundary, and the `resolveVerifiedIdentity` use case with explicit lookup/insert/recovery semantics.
 
 ## Requirements

@@ -1,5 +1,7 @@
+import util from 'node:util';
 import {
   isUserStatus,
+  isValidIsoTimestamp,
   isValidUuidV7,
   parseIsoTimestamp,
   parseMembershipId,
@@ -74,46 +76,200 @@ function mapRowTimestamp(value: unknown, fieldName: string): IsoTimestamp {
   }
 }
 
+function isProxySafe(value: unknown): boolean {
+  try {
+    return util.types.isProxy(value);
+  } catch {
+    return true;
+  }
+}
+
+const MAX_SAFE_INTEGER_STRING = '9007199254740991';
+
+function mapSafeUserTimestamp(value: unknown): IsoTimestamp {
+  if (typeof value === 'string') {
+    if (!isValidIsoTimestamp(value)) {
+      throw new DatabaseError('Failed to map user row');
+    }
+    return value;
+  }
+
+  if (typeof value === 'object' && value !== null) {
+    if (isProxySafe(value)) {
+      throw new DatabaseError('Failed to map user row');
+    }
+    if (Object.getPrototypeOf(value) !== Date.prototype) {
+      throw new DatabaseError('Failed to map user row');
+    }
+    if (Reflect.ownKeys(value).length !== 0) {
+      throw new DatabaseError('Failed to map user row');
+    }
+    const epoch = Date.prototype.getTime.call(value);
+    if (typeof epoch !== 'number' || !Number.isFinite(epoch)) {
+      throw new DatabaseError('Failed to map user row');
+    }
+    const freshDate = new Date(epoch);
+    const isoString = Date.prototype.toISOString.call(freshDate);
+    if (!isValidIsoTimestamp(isoString)) {
+      throw new DatabaseError('Failed to map user row');
+    }
+    return isoString;
+  }
+
+  throw new DatabaseError('Failed to map user row');
+}
+
+function mapSafeUserVersion(value: unknown): number {
+  if (typeof value === 'number') {
+    if (!Number.isSafeInteger(value) || value < 1 || value > Number.MAX_SAFE_INTEGER) {
+      throw new DatabaseError('Failed to map user row');
+    }
+    return value;
+  }
+
+  if (typeof value === 'string') {
+    if (!/^[1-9]\d*$/.test(value)) {
+      throw new DatabaseError('Failed to map user row');
+    }
+    if (value.length > MAX_SAFE_INTEGER_STRING.length) {
+      throw new DatabaseError('Failed to map user row');
+    }
+    if (value.length === MAX_SAFE_INTEGER_STRING.length && value > MAX_SAFE_INTEGER_STRING) {
+      throw new DatabaseError('Failed to map user row');
+    }
+    const num = Number(value);
+    if (!Number.isSafeInteger(num) || num < 1 || num > Number.MAX_SAFE_INTEGER) {
+      throw new DatabaseError('Failed to map user row');
+    }
+    return num;
+  }
+
+  if (typeof value === 'bigint') {
+    if (value < 1n || value > BigInt(Number.MAX_SAFE_INTEGER)) {
+      throw new DatabaseError('Failed to map user row');
+    }
+    return Number(value);
+  }
+
+  throw new DatabaseError('Failed to map user row');
+}
+
+const REQUIRED_USER_ROW_KEYS = [
+  'id',
+  'identity_provider',
+  'identity_subject',
+  'email',
+  'display_name',
+  'status',
+  'created_at',
+  'updated_at',
+  'version',
+] as const;
+
 export function mapUserRow(row: RawUserRow): UserSnapshot {
   try {
-    if (!row || typeof row !== 'object') {
-      throw new DatabaseError('Invalid user row object');
+    const raw: unknown = row;
+    if (typeof raw !== 'object' || raw === null || isProxySafe(raw)) {
+      throw new DatabaseError('Failed to map user row');
     }
-    if (!isValidUuidV7(row.id)) {
-      throw new DatabaseError('Invalid user ID in database row');
+
+    const proto = Object.getPrototypeOf(raw);
+    if (proto !== Object.prototype && proto !== null) {
+      throw new DatabaseError('Failed to map user row');
     }
-    if (typeof row.identity_provider !== 'string' || row.identity_provider.length === 0) {
-      throw new DatabaseError('Invalid identity_provider in database row');
+
+    const ownKeys = Reflect.ownKeys(raw);
+    if (ownKeys.length !== REQUIRED_USER_ROW_KEYS.length) {
+      throw new DatabaseError('Failed to map user row');
     }
-    if (typeof row.identity_subject !== 'string' || row.identity_subject.length === 0) {
-      throw new DatabaseError('Invalid identity_subject in database row');
+
+    let idVal: unknown;
+    let provVal: unknown;
+    let subVal: unknown;
+    let emailVal: unknown;
+    let displayNameVal: unknown;
+    let statusVal: unknown;
+    let createdAtVal: unknown;
+    let updatedAtVal: unknown;
+    let versionVal: unknown;
+
+    for (const key of REQUIRED_USER_ROW_KEYS) {
+      const desc = Object.getOwnPropertyDescriptor(raw, key);
+      if (!desc || desc.get !== undefined || desc.set !== undefined) {
+        throw new DatabaseError('Failed to map user row');
+      }
+      switch (key) {
+        case 'id':
+          idVal = desc.value;
+          break;
+        case 'identity_provider':
+          provVal = desc.value;
+          break;
+        case 'identity_subject':
+          subVal = desc.value;
+          break;
+        case 'email':
+          emailVal = desc.value;
+          break;
+        case 'display_name':
+          displayNameVal = desc.value;
+          break;
+        case 'status':
+          statusVal = desc.value;
+          break;
+        case 'created_at':
+          createdAtVal = desc.value;
+          break;
+        case 'updated_at':
+          updatedAtVal = desc.value;
+          break;
+        case 'version':
+          versionVal = desc.value;
+          break;
+      }
     }
-    if (!isUserStatus(row.status)) {
-      throw new DatabaseError('Invalid user status in database row');
+
+    if (typeof idVal !== 'string' || !isValidUuidV7(idVal)) {
+      throw new DatabaseError('Failed to map user row');
     }
-    const version = Number(row.version);
-    if (!Number.isInteger(version) || version < 1) {
-      throw new DatabaseError('Invalid user version in database row');
+    const id = parseUserId(idVal);
+
+    if (typeof provVal !== 'string' || provVal.length === 0 || provVal.trim() !== provVal) {
+      throw new DatabaseError('Failed to map user row');
     }
-    const email = row.email === null || row.email === undefined ? null : String(row.email);
-    const displayName =
-      row.display_name === null || row.display_name === undefined ? null : String(row.display_name);
+
+    if (typeof subVal !== 'string' || subVal.length === 0 || subVal.trim() !== subVal) {
+      throw new DatabaseError('Failed to map user row');
+    }
+
+    if (emailVal !== null && typeof emailVal !== 'string') {
+      throw new DatabaseError('Failed to map user row');
+    }
+
+    if (displayNameVal !== null && typeof displayNameVal !== 'string') {
+      throw new DatabaseError('Failed to map user row');
+    }
+
+    if (typeof statusVal !== 'string' || !isUserStatus(statusVal)) {
+      throw new DatabaseError('Failed to map user row');
+    }
+
+    const createdAt = mapSafeUserTimestamp(createdAtVal);
+    const updatedAt = mapSafeUserTimestamp(updatedAtVal);
+    const version = mapSafeUserVersion(versionVal);
 
     return Object.freeze({
-      id: parseUserId(row.id),
-      identityProvider: row.identity_provider,
-      identitySubject: row.identity_subject,
-      email,
-      displayName,
-      status: row.status,
-      createdAt: mapRowTimestamp(row.created_at, 'created_at'),
-      updatedAt: mapRowTimestamp(row.updated_at, 'updated_at'),
+      id,
+      identityProvider: provVal,
+      identitySubject: subVal,
+      email: emailVal,
+      displayName: displayNameVal,
+      status: statusVal,
+      createdAt,
+      updatedAt,
       version,
     });
-  } catch (err) {
-    if (err instanceof DatabaseError) {
-      throw err;
-    }
+  } catch {
     throw new DatabaseError('Failed to map user row');
   }
 }

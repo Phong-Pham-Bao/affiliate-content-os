@@ -282,5 +282,392 @@ describe('PostgresTenancyAdapter Identity Operations', () => {
       const raw = createValidRawUserRow({ id: 'not-a-uuid' });
       expect(() => mapUserRow(raw)).toThrow(DatabaseError);
     });
+
+    it('rejects proxy-backed row immediately with zero traps executed', () => {
+      let trapsCalled = 0;
+      const handler: ProxyHandler<RawUserRow> = {
+        get() {
+          trapsCalled++;
+          throw new Error('TRAP_GET');
+        },
+        getOwnPropertyDescriptor() {
+          trapsCalled++;
+          throw new Error('TRAP_DESC');
+        },
+        getPrototypeOf() {
+          trapsCalled++;
+          throw new Error('TRAP_PROTO');
+        },
+        ownKeys() {
+          trapsCalled++;
+          throw new Error('TRAP_OWNKEYS');
+        },
+        has() {
+          trapsCalled++;
+          throw new Error('TRAP_HAS');
+        },
+        isExtensible() {
+          trapsCalled++;
+          throw new Error('TRAP_EXTENSIBLE');
+        },
+        defineProperty() {
+          trapsCalled++;
+          throw new Error('TRAP_DEFINE');
+        },
+      };
+      const proxyRow = new Proxy(createValidRawUserRow(), handler);
+      expect(() => mapUserRow(proxyRow)).toThrow(DatabaseError);
+      expect(trapsCalled).toBe(0);
+
+      try {
+        mapUserRow(proxyRow);
+      } catch (err) {
+        expect(err).toBeInstanceOf(DatabaseError);
+        expect((err as DatabaseError).message).toBe('Failed to map user row');
+      }
+    });
+
+    it('rejects revoked proxy row safely with zero traps executed', () => {
+      let trapsCalled = 0;
+      const { proxy, revoke } = Proxy.revocable(createValidRawUserRow(), {
+        get() {
+          trapsCalled++;
+          throw new Error('TRAP_GET');
+        },
+        getOwnPropertyDescriptor() {
+          trapsCalled++;
+          throw new Error('TRAP_DESC');
+        },
+      });
+      revoke();
+      expect(() => mapUserRow(proxy)).toThrow(DatabaseError);
+      expect(trapsCalled).toBe(0);
+    });
+
+    it('rejects row with custom prototype, symbol keys, extra keys, or missing keys', () => {
+      class CustomRow {}
+      const customProtoRow = Object.assign(new CustomRow(), createValidRawUserRow());
+      expect(() => mapUserRow(customProtoRow as unknown as RawUserRow)).toThrow(DatabaseError);
+
+      const symbolKeyRow = {
+        ...createValidRawUserRow(),
+        [Symbol('hostile')]: 'secret',
+      };
+      expect(() => mapUserRow(symbolKeyRow as unknown as RawUserRow)).toThrow(DatabaseError);
+
+      const extraKeyRow = { ...createValidRawUserRow(), extra: 'forbidden' };
+      expect(() => mapUserRow(extraKeyRow as unknown as RawUserRow)).toThrow(DatabaseError);
+
+      const missingKeyRow = { ...createValidRawUserRow() };
+      delete (missingKeyRow as Record<string, unknown>).status;
+      expect(() => mapUserRow(missingKeyRow as unknown as RawUserRow)).toThrow(DatabaseError);
+
+      const inheritedKeyRow = Object.create({ status: 'active' });
+      Object.assign(inheritedKeyRow, createValidRawUserRow());
+      delete inheritedKeyRow.status;
+      expect(() => mapUserRow(inheritedKeyRow as unknown as RawUserRow)).toThrow(DatabaseError);
+    });
+
+    it('rejects non-object rows and primitives', () => {
+      const invalidRows = [null, undefined, 123, 'row', true, [], () => {}, Symbol('row'), 99n];
+      for (const invalid of invalidRows) {
+        expect(() => mapUserRow(invalid as unknown as RawUserRow)).toThrow(DatabaseError);
+      }
+    });
+
+    it('rejects getters and setters without executing getter code', () => {
+      let getterCalled = false;
+      const getterRow = {
+        ...createValidRawUserRow(),
+        get id() {
+          getterCalled = true;
+          return '018f6c38-7654-7123-8abc-def012345678';
+        },
+      };
+      expect(() => mapUserRow(getterRow as unknown as RawUserRow)).toThrow(DatabaseError);
+      expect(getterCalled).toBe(false);
+
+      const setterRow = {
+        ...createValidRawUserRow(),
+        set id(_v: string) {},
+      };
+      expect(() => mapUserRow(setterRow as unknown as RawUserRow)).toThrow(DatabaseError);
+    });
+
+    it('accepts and converts valid number, string, and bigint versions to positive integer number', () => {
+      const numMapped = mapUserRow(createValidRawUserRow({ version: 42 }));
+      expect(numMapped.version).toBe(42);
+
+      const maxNumMapped = mapUserRow(createValidRawUserRow({ version: Number.MAX_SAFE_INTEGER }));
+      expect(maxNumMapped.version).toBe(Number.MAX_SAFE_INTEGER);
+
+      const strMapped = mapUserRow(createValidRawUserRow({ version: '42' as unknown as number }));
+      expect(strMapped.version).toBe(42);
+
+      const maxStrMapped = mapUserRow(
+        createValidRawUserRow({ version: '9007199254740991' as unknown as number }),
+      );
+      expect(maxStrMapped.version).toBe(Number.MAX_SAFE_INTEGER);
+
+      const bigMapped = mapUserRow(createValidRawUserRow({ version: 42n as unknown as number }));
+      expect(bigMapped.version).toBe(42);
+
+      const maxBigMapped = mapUserRow(
+        createValidRawUserRow({ version: BigInt(Number.MAX_SAFE_INTEGER) as unknown as number }),
+      );
+      expect(maxBigMapped.version).toBe(Number.MAX_SAFE_INTEGER);
+    });
+
+    it('rejects invalid numbers, non-canonical strings, and out-of-range bigints for version', () => {
+      const invalidVersions = [
+        0,
+        -1,
+        1.5,
+        NaN,
+        Infinity,
+        -Infinity,
+        Number.MAX_SAFE_INTEGER + 1,
+        '0',
+        '01',
+        '007',
+        '+1',
+        '-1',
+        '1.0',
+        '1e5',
+        '9007199254740992',
+        '999999999999999999',
+        'invalid',
+        ' 1 ',
+        '',
+        0n,
+        -1n,
+        BigInt(Number.MAX_SAFE_INTEGER) + 1n,
+        true,
+        false,
+        {},
+        [],
+        null,
+        undefined,
+        Symbol('v'),
+      ];
+      for (const v of invalidVersions) {
+        expect(() =>
+          mapUserRow(createValidRawUserRow({ version: v as unknown as number })),
+        ).toThrow(DatabaseError);
+      }
+    });
+
+    it('rejects invalid provider and subject values (empty, whitespace-padded, non-string)', () => {
+      const invalidKeys = ['', '   ', ' idp', 'idp ', '  sub  ', 123, null, undefined, {}];
+      for (const k of invalidKeys) {
+        expect(() =>
+          mapUserRow(createValidRawUserRow({ identity_provider: k as unknown as string })),
+        ).toThrow(DatabaseError);
+        expect(() =>
+          mapUserRow(createValidRawUserRow({ identity_subject: k as unknown as string })),
+        ).toThrow(DatabaseError);
+      }
+    });
+
+    it('accepts string or null for email and displayName and rejects objects/booleans/numbers', () => {
+      const mappedNull = mapUserRow(createValidRawUserRow({ email: null, display_name: null }));
+      expect(mappedNull.email).toBeNull();
+      expect(mappedNull.displayName).toBeNull();
+
+      const invalidOptionals = [123, true, false, {}, [], Symbol('opt'), 10n, undefined];
+      for (const opt of invalidOptionals) {
+        expect(() =>
+          mapUserRow(createValidRawUserRow({ email: opt as unknown as string })),
+        ).toThrow(DatabaseError);
+        expect(() =>
+          mapUserRow(createValidRawUserRow({ display_name: opt as unknown as string })),
+        ).toThrow(DatabaseError);
+      }
+    });
+
+    it('validates created_at and updated_at with canonical string or genuine Date and rejects hostile Dates', () => {
+      const genuineDate = new Date('2026-11-01T12:00:00.000Z');
+      const mappedDate = mapUserRow(
+        createValidRawUserRow({ created_at: genuineDate, updated_at: genuineDate }),
+      );
+      expect(mappedDate.createdAt).toBe('2026-11-01T12:00:00.000Z');
+      expect(mappedDate.updatedAt).toBe('2026-11-01T12:00:00.000Z');
+
+      let ownGetTimeCalled = false;
+      const hostileDate = new Date('2026-11-01T12:00:00.000Z');
+      hostileDate.getTime = () => {
+        ownGetTimeCalled = true;
+        return 0;
+      };
+      expect(() => mapUserRow(createValidRawUserRow({ created_at: hostileDate }))).toThrow(
+        DatabaseError,
+      );
+      expect(ownGetTimeCalled).toBe(false);
+
+      let ownIsoCalled = false;
+      const hostileIsoDate = new Date('2026-11-01T12:00:00.000Z');
+      hostileIsoDate.toISOString = () => {
+        ownIsoCalled = true;
+        return 'hostile';
+      };
+      expect(() => mapUserRow(createValidRawUserRow({ created_at: hostileIsoDate }))).toThrow(
+        DatabaseError,
+      );
+      expect(ownIsoCalled).toBe(false);
+
+      class HostileDateSubclass extends Date {}
+      const subclassDate = new HostileDateSubclass();
+      expect(() => mapUserRow(createValidRawUserRow({ created_at: subclassDate }))).toThrow(
+        DatabaseError,
+      );
+
+      let proxyDateTrap = false;
+      const proxyDate = new Proxy(new Date(), {
+        get(t, p) {
+          proxyDateTrap = true;
+          return Reflect.get(t, p);
+        },
+      });
+      expect(() => mapUserRow(createValidRawUserRow({ created_at: proxyDate }))).toThrow(
+        DatabaseError,
+      );
+      expect(proxyDateTrap).toBe(false);
+
+      const invalidDate = new Date('invalid');
+      expect(() => mapUserRow(createValidRawUserRow({ created_at: invalidDate }))).toThrow(
+        DatabaseError,
+      );
+    });
+
+    it('never executes toString, valueOf, toJSON, or custom inspection hooks on unknown row values', () => {
+      let hookExecuted = false;
+      const hostileHookObject = {
+        toString() {
+          hookExecuted = true;
+          return 'hook';
+        },
+        valueOf() {
+          hookExecuted = true;
+          return 1;
+        },
+        toJSON() {
+          hookExecuted = true;
+          return {};
+        },
+        [Symbol.iterator]() {
+          hookExecuted = true;
+          return [][Symbol.iterator]();
+        },
+        [Symbol.for('nodejs.util.inspect.custom')]() {
+          hookExecuted = true;
+          return 'hook';
+        },
+      };
+
+      expect(() =>
+        mapUserRow(createValidRawUserRow({ email: hostileHookObject as unknown as string })),
+      ).toThrow(DatabaseError);
+      expect(() =>
+        mapUserRow(createValidRawUserRow({ version: hostileHookObject as unknown as number })),
+      ).toThrow(DatabaseError);
+      expect(() =>
+        mapUserRow(createValidRawUserRow({ created_at: hostileHookObject as unknown as string })),
+      ).toThrow(DatabaseError);
+      expect(hookExecuted).toBe(false);
+    });
+
+    it('throws a fresh safe DatabaseError and never preserves crafted DatabaseError identity or secret', () => {
+      const secretSentinel = 'postgresql://admin:super_secret_password@db.example.com/acos';
+      const craftedError = new DatabaseError(secretSentinel, { code: 'DATABASE_ERROR' });
+      const hostileRow = {
+        ...createValidRawUserRow(),
+        get status() {
+          throw craftedError;
+        },
+      };
+
+      let caughtError: unknown;
+      try {
+        mapUserRow(hostileRow as unknown as RawUserRow);
+      } catch (err) {
+        caughtError = err;
+      }
+
+      expect(caughtError).toBeInstanceOf(DatabaseError);
+      expect(caughtError).not.toBe(craftedError);
+      const dbErr = caughtError as DatabaseError;
+      expect(dbErr.message).toBe('Failed to map user row');
+      expect(dbErr.message).not.toContain(secretSentinel);
+      expect(dbErr.stack ?? '').not.toContain(secretSentinel);
+      expect(String(dbErr)).not.toContain(secretSentinel);
+      expect(JSON.stringify(dbErr)).not.toContain(secretSentinel);
+    });
+
+    it('proves hostile row sentinels never leak to child process stdout, stderr, or inspect', async () => {
+      const { spawn } = await import('node:child_process');
+      const sentinel = 'SECRET_ROW_CREDENTIAL_98765';
+      const childScript = `
+        import { mapUserRow } from './packages/infrastructure/src/tenancy/mappers.ts';
+        import { DatabaseError } from './packages/infrastructure/src/database/errors.ts';
+        import util from 'node:util';
+
+        const crafted = new DatabaseError('${sentinel}');
+        const hostileRow = {
+          id: '018f6c38-7654-7123-8abc-def012345678',
+          identity_provider: 'https://issuer.com',
+          identity_subject: 'sub-1',
+          email: null,
+          display_name: null,
+          status: 'active',
+          created_at: '2026-11-01T00:00:00.000Z',
+          updated_at: '2026-11-01T00:00:00.000Z',
+          version: 1,
+          get status() {
+            throw crafted;
+          }
+        };
+
+        try {
+          mapUserRow(hostileRow as any);
+          process.exit(1);
+        } catch (err: any) {
+          const str = String(err);
+          const json = JSON.stringify(err);
+          const insp1 = util.inspect(err, { customInspect: true });
+          const insp2 = util.inspect(err, { customInspect: false });
+          const out = str + json + insp1 + insp2 + (err.stack ?? '');
+          if (out.includes('${sentinel}')) {
+            process.exit(2);
+          }
+          process.exit(0);
+        }
+      `;
+
+      const child = spawn(
+        process.execPath,
+        ['--conditions=development', '--import', 'tsx', '-e', childScript],
+        {
+          cwd: process.cwd(),
+          stdio: ['pipe', 'pipe', 'pipe'],
+        },
+      );
+
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (d) => {
+        stdout += d.toString();
+      });
+      child.stderr.on('data', (d) => {
+        stderr += d.toString();
+      });
+
+      const exitCode = await new Promise<number>((resolve) => {
+        child.on('close', resolve);
+      });
+
+      expect(exitCode).toBe(0);
+      expect(stdout).not.toContain(sentinel);
+      expect(stderr).not.toContain(sentinel);
+    }, 15000);
   });
 });

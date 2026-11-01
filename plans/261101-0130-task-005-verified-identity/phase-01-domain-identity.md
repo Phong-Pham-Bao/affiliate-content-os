@@ -8,8 +8,8 @@
 
 ## Overview
 
-Status: completed  
-Priority: high  
+Status: completed
+Priority: high
 Define exact framework-free identity types, claims validation primitives, and immutable application principal structures.
 
 ## Requirements
