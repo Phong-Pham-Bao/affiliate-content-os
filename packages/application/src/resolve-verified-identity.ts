@@ -48,9 +48,9 @@ function validateClaimsSafe(claims: unknown): VerifiedIdentityClaims {
     return validateIdentityClaims(claims);
   } catch (err) {
     if (err instanceof DomainValidationError && isIdentityClaimField(err.field)) {
-      throw new IdentityClaimsValidationError(err.field, 'Invalid identity claims');
+      throw new IdentityClaimsValidationError(err.field);
     }
-    throw new IdentityClaimsValidationError('claims', 'Invalid identity claims');
+    throw new IdentityClaimsValidationError('claims');
   }
 }
 

@@ -56,8 +56,8 @@ export class IdentityClaimsValidationError extends ApplicationError {
   readonly code = 'IDENTITY_CLAIMS_INVALID';
   readonly field: IdentityClaimField;
 
-  constructor(field: IdentityClaimField, message = 'Invalid identity claims') {
-    super(message);
+  constructor(field: IdentityClaimField) {
+    super('Invalid identity claims');
     this.name = 'IdentityClaimsValidationError';
     this.field = field;
   }
@@ -66,8 +66,8 @@ export class IdentityClaimsValidationError extends ApplicationError {
 export class IdentityUnavailableError extends ApplicationError {
   readonly code = 'IDENTITY_UNAVAILABLE';
 
-  constructor(message = 'Identity is unavailable') {
-    super(message);
+  constructor() {
+    super('Identity is unavailable');
     this.name = 'IdentityUnavailableError';
   }
 }
@@ -76,8 +76,8 @@ export class IdentityPersistenceError extends ApplicationError {
   readonly code = 'IDENTITY_PERSISTENCE_INVALID';
   readonly operation: 'lookup' | 'insert' | 'recovery';
 
-  constructor(operation: 'lookup' | 'insert' | 'recovery', message = 'Identity persistence error') {
-    super(message);
+  constructor(operation: 'lookup' | 'insert' | 'recovery') {
+    super('Identity persistence error');
     this.name = 'IdentityPersistenceError';
     this.operation = operation;
   }
@@ -87,8 +87,8 @@ export class IdentityProvisioningRaceError extends ApplicationError {
   readonly code = 'IDENTITY_PROVISIONING_RACE';
   readonly retryable = true as const;
 
-  constructor(message = 'Concurrent identity provisioning race detected') {
-    super(message);
+  constructor() {
+    super('Concurrent identity provisioning race detected');
     this.name = 'IdentityProvisioningRaceError';
   }
 }
