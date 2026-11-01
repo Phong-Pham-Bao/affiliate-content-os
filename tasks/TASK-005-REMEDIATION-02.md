@@ -1,6 +1,6 @@
 # TASK-005 Remediation 02 - Proxy-Safe Claims and Genuine Persistence Arrays
 
-Status: Proposed for Product Owner approval
+Status: Approved by Product Owner
 
 Owner: Antigravity (Implementation Engineer)
 
@@ -419,7 +419,7 @@ Report every skipped, unavailable, failed, or environment-limited check honestly
 
 ## Implementation handoff requirements
 
-This remediation is proposed for Product Owner approval. Antigravity must not implement it until the Product Owner explicitly approves it.
+This remediation is approved by the Product Owner. Antigravity may implement it on the existing TASK-005 branch.
 
 Before implementation, Antigravity must read:
 
