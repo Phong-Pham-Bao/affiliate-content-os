@@ -1,0 +1,264 @@
+import pg from 'pg';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { setupIsolatedTestDatabase, type TestDatabaseContext } from './helpers/setup.js';
+
+describe('Real PostgreSQL Auth Schema and Constraints Integration', () => {
+  let context: TestDatabaseContext;
+  let client: pg.Client;
+
+  beforeAll(async () => {
+    context = await setupIsolatedTestDatabase();
+    client = new pg.Client({ connectionString: context.dbUrl });
+    await client.connect();
+  });
+
+  afterAll(async () => {
+    if (client) {
+      await client.end();
+    }
+    if (context) {
+      await context.cleanup();
+    }
+  });
+
+  it('inspects exact tables created by migration 0003', async () => {
+    const res = await client.query<{ table_name: string }>(`
+      SELECT table_name
+      FROM information_schema.tables
+      WHERE table_schema = 'public'
+      ORDER BY table_name ASC;
+    `);
+
+    const tableNames = res.rows.map((r) => r.table_name);
+    expect(tableNames).toEqual([
+      'application_sessions',
+      'oidc_login_transactions',
+      'schema_migrations',
+      'users',
+      'workspace_memberships',
+      'workspaces',
+    ]);
+  });
+
+  it('proves oidc_login_transactions constraints enforce pending vs consumed lifecycle', async () => {
+    const txId1 = '0192b012-3456-789a-8bcd-ef0123456701';
+    const stateHash = Buffer.alloc(32, 1);
+    const browserBindingHash = Buffer.alloc(32, 2);
+    const iv = Buffer.alloc(12, 3);
+    const tag = Buffer.alloc(16, 4);
+    const ciphertext = Buffer.from('encrypted-data');
+    const now = new Date('2026-11-02T12:00:00.000Z');
+    const expires = new Date('2026-11-02T12:10:00.000Z');
+
+    // Valid pending insert
+    await client.query(
+      `INSERT INTO oidc_login_transactions (
+        id, state_hash, browser_binding_hash, secrets_ciphertext, secrets_iv, secrets_auth_tag,
+        key_version, return_to, status, created_at, expires_at, consumed_at, version
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NULL, 1);`,
+      [
+        txId1,
+        stateHash,
+        browserBindingHash,
+        ciphertext,
+        iv,
+        tag,
+        'v1',
+        '/dashboard',
+        'pending',
+        now,
+        expires,
+      ],
+    );
+
+    // Cannot insert consumed with secrets
+    const txId2 = '0192b012-3456-789a-8bcd-ef0123456702';
+    const stateHash2 = Buffer.alloc(32, 5);
+    await expect(
+      client.query(
+        `INSERT INTO oidc_login_transactions (
+          id, state_hash, browser_binding_hash, secrets_ciphertext, secrets_iv, secrets_auth_tag,
+          key_version, return_to, status, created_at, expires_at, consumed_at, version
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 1);`,
+        [
+          txId2,
+          stateHash2,
+          browserBindingHash,
+          ciphertext,
+          iv,
+          tag,
+          'v1',
+          '/dashboard',
+          'consumed',
+          now,
+          expires,
+          now,
+        ],
+      ),
+    ).rejects.toThrow();
+
+    // Consume txId1: transition to consumed and scrub secrets
+    const consumedAt = new Date('2026-11-02T12:05:00.000Z');
+    await client.query(
+      `UPDATE oidc_login_transactions
+       SET status = 'consumed',
+           consumed_at = $1,
+           secrets_ciphertext = NULL,
+           secrets_iv = NULL,
+           secrets_auth_tag = NULL,
+           version = version + 1
+       WHERE id = $2;`,
+      [consumedAt, txId1],
+    );
+
+    const updated = await client.query<{
+      status: string;
+      consumed_at: Date;
+      secrets_ciphertext: Buffer | null;
+    }>(
+      `SELECT status, consumed_at, secrets_ciphertext FROM oidc_login_transactions WHERE id = $1;`,
+      [txId1],
+    );
+    expect(updated.rows[0]!.status).toBe('consumed');
+    expect(updated.rows[0]!.consumed_at).toEqual(consumedAt);
+    expect(updated.rows[0]!.secrets_ciphertext).toBeNull();
+  });
+
+  it('proves oidc_login_transactions rejects wrong hash byte lengths and return paths', async () => {
+    const txId = '0192b012-3456-789a-8bcd-ef0123456703';
+    const badHash = Buffer.alloc(31, 1);
+    const validHash = Buffer.alloc(32, 1);
+    const iv = Buffer.alloc(12, 3);
+    const tag = Buffer.alloc(16, 4);
+    const ciphertext = Buffer.from('ciphertext');
+    const now = new Date('2026-11-02T12:00:00.000Z');
+    const expires = new Date('2026-11-02T12:10:00.000Z');
+
+    // 31-byte state_hash rejected
+    await expect(
+      client.query(
+        `INSERT INTO oidc_login_transactions (
+          id, state_hash, browser_binding_hash, secrets_ciphertext, secrets_iv, secrets_auth_tag,
+          key_version, return_to, status, created_at, expires_at, version
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 1);`,
+        [txId, badHash, validHash, ciphertext, iv, tag, 'v1', '/valid', 'pending', now, expires],
+      ),
+    ).rejects.toThrow();
+
+    // Protocol-relative return_to rejected (//evil.com)
+    const stateHash3 = Buffer.alloc(32, 6);
+    await expect(
+      client.query(
+        `INSERT INTO oidc_login_transactions (
+          id, state_hash, browser_binding_hash, secrets_ciphertext, secrets_iv, secrets_auth_tag,
+          key_version, return_to, status, created_at, expires_at, version
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 1);`,
+        [
+          txId,
+          stateHash3,
+          validHash,
+          ciphertext,
+          iv,
+          tag,
+          'v1',
+          '//evil.com',
+          'pending',
+          now,
+          expires,
+        ],
+      ),
+    ).rejects.toThrow();
+  });
+
+  it('proves application_sessions constraints enforce active vs revoked lifecycle and token hashing', async () => {
+    const userId = '0192b012-3456-789a-8bcd-ef0123456710';
+    const now = new Date('2026-11-02T12:00:00.000Z');
+
+    // Create user
+    await client.query(
+      `INSERT INTO users (id, identity_provider, identity_subject, email, display_name, status, created_at, updated_at, version)
+       VALUES ($1, 'https://issuer.example.com', 'sub-1', 'u@ex.com', 'User 1', 'active', $2, $2, 1);`,
+      [userId, now],
+    );
+
+    const sessionId = '0192b012-3456-789a-8bcd-ef0123456720';
+    const tokenHash = Buffer.alloc(32, 10);
+    const idleExpires = new Date('2026-11-02T12:30:00.000Z');
+    const absExpires = new Date('2026-11-02T20:00:00.000Z');
+
+    // Insert active session
+    await client.query(
+      `INSERT INTO application_sessions (
+        id, user_id, current_token_hash, previous_token_hash, previous_token_valid_until,
+        created_at, last_seen_at, idle_expires_at, absolute_expires_at, rotated_at,
+        revoked_at, revocation_reason, version
+      ) VALUES ($1, $2, $3, NULL, NULL, $4, $4, $5, $6, $4, NULL, NULL, 1);`,
+      [sessionId, userId, tokenHash, now, idleExpires, absExpires],
+    );
+
+    // Rotate token: move current to previous, install new current
+    const newTokenHash = Buffer.alloc(32, 11);
+    const rotatedAt = new Date('2026-11-02T12:15:00.000Z');
+    const graceValidUntil = new Date('2026-11-02T12:15:30.000Z');
+
+    await client.query(
+      `UPDATE application_sessions
+       SET current_token_hash = $1,
+           previous_token_hash = $2,
+           previous_token_valid_until = $3,
+           rotated_at = $4,
+           last_seen_at = $4,
+           version = version + 1
+       WHERE id = $5;`,
+      [newTokenHash, tokenHash, graceValidUntil, rotatedAt, sessionId],
+    );
+
+    // Partial unique index prevents duplicate current token hash
+    const session2Id = '0192b012-3456-789a-8bcd-ef0123456721';
+    await expect(
+      client.query(
+        `INSERT INTO application_sessions (
+          id, user_id, current_token_hash, previous_token_hash, previous_token_valid_until,
+          created_at, last_seen_at, idle_expires_at, absolute_expires_at, rotated_at,
+          revoked_at, revocation_reason, version
+        ) VALUES ($1, $2, $3, NULL, NULL, $4, $4, $5, $6, $4, NULL, NULL, 1);`,
+        [session2Id, userId, newTokenHash, now, idleExpires, absExpires],
+      ),
+    ).rejects.toThrow();
+
+    // Revocation: nulls token hashes and sets revoked_at + revocation_reason
+    const revokedAt = new Date('2026-11-02T12:20:00.000Z');
+    await client.query(
+      `UPDATE application_sessions
+       SET current_token_hash = NULL,
+           previous_token_hash = NULL,
+           previous_token_valid_until = NULL,
+           revoked_at = $1,
+           revocation_reason = 'logout',
+           version = version + 1
+       WHERE id = $2;`,
+      [revokedAt, sessionId],
+    );
+
+    const revoked = await client.query<{
+      current_token_hash: Buffer | null;
+      previous_token_hash: Buffer | null;
+      revocation_reason: string;
+    }>(
+      `SELECT current_token_hash, previous_token_hash, revocation_reason
+       FROM application_sessions WHERE id = $1;`,
+      [sessionId],
+    );
+    expect(revoked.rows[0]!.current_token_hash).toBeNull();
+    expect(revoked.rows[0]!.previous_token_hash).toBeNull();
+    expect(revoked.rows[0]!.revocation_reason).toBe('logout');
+
+    // Revoked row cannot have token hashes (lifecycle check)
+    await expect(
+      client.query(`UPDATE application_sessions SET current_token_hash = $1 WHERE id = $2;`, [
+        newTokenHash,
+        sessionId,
+      ]),
+    ).rejects.toThrow();
+  });
+});

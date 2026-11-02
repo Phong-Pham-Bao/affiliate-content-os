@@ -31,6 +31,8 @@ describe('Real PostgreSQL Tenancy Schema and Constraints Integration', () => {
 
     const tableNames = res.rows.map((r) => r.table_name);
     expect(tableNames).toEqual([
+      'application_sessions',
+      'oidc_login_transactions',
       'schema_migrations',
       'users',
       'workspace_memberships',

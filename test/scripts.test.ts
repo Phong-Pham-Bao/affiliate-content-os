@@ -507,6 +507,26 @@ describe('Scripts unit verification', () => {
     });
   });
 
+  describe('OpenAPI verification', () => {
+    it('verifies that openapi/openapi.json exists and matches runtime schemas', async () => {
+      const openApiPath = path.resolve(process.cwd(), 'openapi', 'openapi.json');
+      expect(fs.existsSync(openApiPath)).toBe(true);
+
+      const openApiContent = fs.readFileSync(openApiPath, 'utf8');
+      const { buildOpenApiDocument } = await import('../apps/api/src/auth/openapi.js');
+      const prettier = await import('prettier');
+      const expectedDoc = buildOpenApiDocument();
+      const rawJson = JSON.stringify(expectedDoc, null, 2);
+      const prettierConfig = (await prettier.default.resolveConfig(openApiPath)) ?? {};
+      const expectedContent = await prettier.default.format(rawJson, {
+        ...prettierConfig,
+        parser: 'json',
+      });
+
+      expect(openApiContent).toBe(expectedContent);
+    });
+  });
+
   describe('README privilege contract', () => {
     it('accurately states local development reuses bootstrap superuser without claiming lack of privileges', () => {
       const readmePath = path.resolve(process.cwd(), 'README.md');

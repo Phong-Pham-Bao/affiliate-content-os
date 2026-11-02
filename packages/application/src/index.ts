@@ -32,3 +32,4 @@ export {
   type ResolveVerifiedIdentityCommand,
   type ResolveVerifiedIdentityDependencies,
 } from './resolve-verified-identity.js';
+export * from './auth/index.js';

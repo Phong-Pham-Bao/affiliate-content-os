@@ -19,6 +19,13 @@ export const DEFAULT_DATABASE_SSL_MODE: DatabaseSslMode = 'disable';
 export const TEST_DATABASE_DISPOSABLE_SENTINEL =
   'YES_I_UNDERSTAND_TEST_DATABASES_WILL_BE_DROPPED' as const;
 
+export const DEFAULT_AUTH_TRANSACTION_TTL_SECONDS = 600;
+export const DEFAULT_AUTH_SESSION_IDLE_TTL_SECONDS = 1800;
+export const DEFAULT_AUTH_SESSION_ABSOLUTE_TTL_SECONDS = 28800;
+export const DEFAULT_AUTH_SESSION_ROTATION_SECONDS = 900;
+export const DEFAULT_AUTH_SESSION_ROTATION_GRACE_SECONDS = 30;
+export const DEFAULT_AUTH_SESSION_TOUCH_INTERVAL_SECONDS = 300;
+
 export interface AppConfig {
   readonly nodeEnv: NodeEnv;
   readonly logLevel: LogLevel;
@@ -71,6 +78,40 @@ export interface RedactedDatabaseMetadata {
   readonly statementTimeoutMs: number;
   readonly sslMode: DatabaseSslMode;
   readonly hasSslCaFile: boolean;
+}
+
+export interface AuthConfig {
+  readonly enabled: boolean;
+  readonly issuer: string | null;
+  readonly clientId: string | null;
+  readonly clientSecret: string | null;
+  readonly redirectUri: string | null;
+  readonly transactionEncryptionKeyBase64Url: string | null;
+  readonly transactionKeyVersion: string | null;
+  readonly transactionTtlSeconds: number;
+  readonly sessionIdleTtlSeconds: number;
+  readonly sessionAbsoluteTtlSeconds: number;
+  readonly sessionRotationSeconds: number;
+  readonly sessionRotationGraceSeconds: number;
+  readonly sessionTouchIntervalSeconds: number;
+  readonly cookieSecure: boolean;
+}
+
+export interface RedactedAuthConfigMetadata {
+  readonly enabled: boolean;
+  readonly hasIssuer: boolean;
+  readonly hasClientId: boolean;
+  readonly hasClientSecret: boolean;
+  readonly hasRedirectUri: boolean;
+  readonly hasTransactionEncryptionKey: boolean;
+  readonly transactionKeyVersion: string | null;
+  readonly transactionTtlSeconds: number;
+  readonly sessionIdleTtlSeconds: number;
+  readonly sessionAbsoluteTtlSeconds: number;
+  readonly sessionRotationSeconds: number;
+  readonly sessionRotationGraceSeconds: number;
+  readonly sessionTouchIntervalSeconds: number;
+  readonly cookieSecure: boolean;
 }
 
 export type RawEnvironment = Record<string, string | undefined>;

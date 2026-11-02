@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import type { AppConfig } from '@affiliate-content-os/config';
 import type { Database } from '@affiliate-content-os/infrastructure/database';
 import { createApp } from './app.js';
+import type { AuthDependencies } from './auth/index.js';
 import {
   raceWithDeadline,
   type ClearTimerFn,
@@ -19,6 +20,7 @@ export interface ApiServerHandle {
 export interface StartServerOptions {
   readonly config: AppConfig;
   readonly database: Database;
+  readonly auth?: AuthDependencies | undefined;
   readonly app?: FastifyInstance | undefined;
   readonly installSignalHandlers?: boolean | undefined;
   readonly shutdownTimeoutMs?: number | undefined;
@@ -40,7 +42,7 @@ export async function startApiServer(options: StartServerOptions): Promise<ApiSe
     clearTimer: options.clearTimer,
   };
 
-  const app = options.app ?? createApp({ config });
+  const app = options.app ?? createApp({ config, auth: options.auth });
 
   type ServerState = 'starting' | 'running' | 'closing' | 'closed';
   let state: ServerState = 'starting';

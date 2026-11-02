@@ -49,6 +49,65 @@ Constraints: unique normalized `slug`; valid IANA timezone at application bounda
 
 Constraints: unique (`workspace_id`, `user_id`); role in `owner`, `editor`, `viewer`; at least one active owner must remain, enforced transactionally by the workspace use case.
 
+### `oidc_login_transactions`
+
+Stores pending one-time login state and browser-binding hashes with encrypted PKCE/nonce secrets.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | `UUID PRIMARY KEY` | Generated UUIDv7 |
+| `state_hash` | `BYTEA NOT NULL UNIQUE` | Exactly 32 bytes (SHA-256 of raw state) |
+| `browser_binding_hash` | `BYTEA NOT NULL` | Exactly 32 bytes (SHA-256 of transaction cookie) |
+| `secrets_ciphertext` | `BYTEA NULL` | AES-256-GCM ciphertext of `{pkceVerifier, nonce}` payload |
+| `secrets_iv` | `BYTEA NULL` | Exactly 12 random bytes while pending |
+| `secrets_auth_tag` | `BYTEA NULL` | Exactly 16 bytes while pending |
+| `key_version` | `TEXT NOT NULL` | Safe key identifier |
+| `return_to` | `TEXT NOT NULL` | Validated relative application path (max 2048 chars) |
+| `status` | `TEXT NOT NULL` | Exact `'pending'` or `'consumed'` |
+| `created_at` | `TIMESTAMPTZ NOT NULL` | Creation instant |
+| `expires_at` | `TIMESTAMPTZ NOT NULL` | Creation plus configured transaction TTL |
+| `consumed_at` | `TIMESTAMPTZ NULL` | Set on one-time consumption |
+| `version` | `BIGINT NOT NULL DEFAULT 1` | Positive row version |
+
+Constraints:
+- Fixed hash lengths (`octet_length(state_hash) = 32`, `octet_length(browser_binding_hash) = 32`).
+- Fixed IV and auth tag lengths when present (`octet_length(secrets_iv) = 12`, `octet_length(secrets_auth_tag) = 16`).
+- Timestamp ordering: `expires_at > created_at`.
+- Pending rows require all encrypted fields and `consumed_at IS NULL`.
+- Consumed rows require `consumed_at IS NOT NULL`, null encrypted fields (`secrets_ciphertext IS NULL`, `secrets_iv IS NULL`, `secrets_auth_tag IS NULL`), and `created_at <= consumed_at`.
+- Indexes: lookup index on `(state_hash, browser_binding_hash)` where status = `'pending'`; maintenance index on `(expires_at)` where status = `'pending'`.
+- Sensitive data rules: raw state, raw nonce, raw PKCE verifier, and raw transaction cookies never persist in plaintext. All secrets are immediately scrubbed upon atomic consumption. Retention purge requires a separate approved task.
+
+### `application_sessions`
+
+Stores opaque server-side application sessions. Browser holds a 32-byte secure random token; PostgreSQL stores only SHA-256 hashes.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | `UUID PRIMARY KEY` | Generated UUIDv7; never sent to browser |
+| `user_id` | `UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT` | Application user |
+| `current_token_hash` | `BYTEA NULL` | Exactly 32 bytes while active |
+| `previous_token_hash` | `BYTEA NULL` | Exactly 32 bytes during rotation grace only |
+| `previous_token_valid_until` | `TIMESTAMPTZ NULL` | Expiry of previous token during grace |
+| `created_at` | `TIMESTAMPTZ NOT NULL` | Creation instant |
+| `last_seen_at` | `TIMESTAMPTZ NOT NULL` | Last touch instant |
+| `idle_expires_at` | `TIMESTAMPTZ NOT NULL` | Sliding idle expiry |
+| `absolute_expires_at` | `TIMESTAMPTZ NOT NULL` | Fixed maximum session expiry |
+| `rotated_at` | `TIMESTAMPTZ NOT NULL` | Last current token rotation instant |
+| `revoked_at` | `TIMESTAMPTZ NULL` | Set on revocation/logout |
+| `revocation_reason` | `TEXT NULL` | `'logout'`, `'user_unavailable'`, `'idle_expired'`, `'absolute_expired'` |
+| `version` | `BIGINT NOT NULL DEFAULT 1` | Positive row version |
+
+Constraints:
+- Hash lengths: `current_token_hash` and `previous_token_hash` are exactly 32 bytes when present.
+- Timestamp ordering: `absolute_expires_at >= idle_expires_at >= last_seen_at`, `rotated_at >= created_at`.
+- Active rows: `current_token_hash IS NOT NULL`, `revoked_at IS NULL`, `revocation_reason IS NULL`.
+- Revoked rows: both token hashes and grace timestamp are `NULL`, `revoked_at IS NOT NULL`, valid safe `revocation_reason`.
+- Previous token pair consistency: `previous_token_hash` and `previous_token_valid_until` are either both null or both non-null.
+- Partial unique indexes: unique `(current_token_hash)` where `current_token_hash IS NOT NULL`; unique `(previous_token_hash)` where `previous_token_hash IS NOT NULL`.
+- Lookup indexes: `(user_id)`, `(idle_expires_at)`, `(absolute_expires_at)`.
+- Sensitive data rules: raw session tokens are never stored; only SHA-256 hashes persist. On logout or invalidation, hashes are scrubbed immediately. Retention purge requires a separate approved task.
+
 ## 3. Catalog and facts
 
 ### `products`
