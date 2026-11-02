@@ -66,7 +66,8 @@ CREATE TABLE application_sessions (
   CONSTRAINT application_sessions_timestamps_order_check CHECK (
     last_seen_at >= created_at AND
     rotated_at >= created_at AND
-    idle_expires_at >= created_at AND
+    last_seen_at >= rotated_at AND
+    idle_expires_at >= last_seen_at AND
     absolute_expires_at > created_at AND
     idle_expires_at <= absolute_expires_at
   ),

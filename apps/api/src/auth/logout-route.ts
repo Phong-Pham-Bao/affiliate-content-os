@@ -41,18 +41,14 @@ export function createLogoutRoute(deps: AuthDependencies): FastifyPluginAsync {
 
         const sessionCookie = request.cookies[COOKIE_SESSION];
         if (sessionCookie) {
-          try {
-            await logoutApplicationSession(
-              { sessionCookie },
-              {
-                crypto: deps.crypto,
-                sessionStore: deps.sessionStore,
-                now: deps.now ?? (() => new Date()),
-              },
-            );
-          } catch {
-            // Idempotent: invalid or already-revoked session still succeeds with 204
-          }
+          await logoutApplicationSession(
+            { sessionCookie },
+            {
+              crypto: deps.crypto,
+              sessionStore: deps.sessionStore,
+              now: deps.now ?? (() => new Date()),
+            },
+          );
         }
 
         return reply.status(204).send();

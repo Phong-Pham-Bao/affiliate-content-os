@@ -126,7 +126,7 @@ export const meRouteSchema = {
                   name: { type: 'string' },
                   slug: { type: 'string' },
                   timezone: { type: 'string' },
-                  role: { type: 'string', enum: ['owner', 'admin', 'member'] },
+                  role: { type: 'string', enum: ['owner', 'editor', 'viewer'] },
                 },
                 additionalProperties: false,
               },

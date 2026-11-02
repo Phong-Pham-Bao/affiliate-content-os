@@ -1,6 +1,6 @@
 import type { Database, TransactionExecutor } from '../database/index.js';
 import { DatabaseError } from '../database/errors.js';
-import { mapSessionRow, type ApplicationSessionRow } from './mappers.js';
+import { mapSessionRow, type ApplicationSessionRow, isProxySafe } from './mappers.js';
 import {
   INSERT_SESSION_SQL,
   FIND_CANDIDATE_SESSIONS_SQL,
@@ -28,7 +28,7 @@ export interface PostgresSessionAdapter {
   findCandidateSessions(
     criteria: { tokenHash: Uint8Array; now: string },
     runner?: QueryRunner,
-  ): Promise<ApplicationSessionRow[]>;
+  ): Promise<readonly ApplicationSessionRow[]>;
   rotateSession(
     criteria: {
       sessionId: string;
@@ -68,13 +68,13 @@ export interface PostgresSessionAdapter {
     },
     runner?: QueryRunner,
   ): Promise<void>;
-  withTransaction<T>(fn: (tx: TransactionExecutor) => Promise<T>): Promise<T>;
+  withTransaction<T>(fn: (txStore: PostgresSessionAdapter) => Promise<T>): Promise<T>;
 }
 
-export function createPostgresSessionAdapter(database: Database): PostgresSessionAdapter {
+function createAdapterForRunner(runner: QueryRunner): PostgresSessionAdapter {
   return {
-    async createSession(s: ApplicationSessionInsert, runner?: QueryRunner): Promise<void> {
-      const q = runner ?? database;
+    async createSession(s: ApplicationSessionInsert, overrideRunner?: QueryRunner): Promise<void> {
+      const q = overrideRunner ?? runner;
       const params = [
         s.id,
         s.userId,
@@ -90,15 +90,24 @@ export function createPostgresSessionAdapter(database: Database): PostgresSessio
 
     async findCandidateSessions(
       c: { tokenHash: Uint8Array; now: string },
-      runner?: QueryRunner,
-    ): Promise<ApplicationSessionRow[]> {
-      const q = runner ?? database;
+      overrideRunner?: QueryRunner,
+    ): Promise<readonly ApplicationSessionRow[]> {
+      const q = overrideRunner ?? runner;
       const params = [Buffer.from(c.tokenHash), c.now];
       const result = await q.query(FIND_CANDIDATE_SESSIONS_SQL, params);
-      if (!Array.isArray(result.rows)) {
+      const rawRows = result.rows;
+      if (
+        typeof rawRows !== 'object' ||
+        rawRows === null ||
+        isProxySafe(rawRows) ||
+        !Array.isArray(rawRows)
+      ) {
         throw new DatabaseError('Database result rows must be an array');
       }
-      return result.rows.map((r) => mapSessionRow(r));
+      if (Object.getPrototypeOf(rawRows) !== Array.prototype) {
+        throw new DatabaseError('Database result rows must have Array.prototype');
+      }
+      return Object.freeze(rawRows.map((r) => mapSessionRow(r)));
     },
 
     async rotateSession(
@@ -112,9 +121,9 @@ export function createPostgresSessionAdapter(database: Database): PostgresSessio
         lastSeenAt: string;
         idleExpiresAt: string;
       },
-      runner?: QueryRunner,
+      overrideRunner?: QueryRunner,
     ): Promise<void> {
-      const q = runner ?? database;
+      const q = overrideRunner ?? runner;
       const params = [
         Buffer.from(c.newCurrentHash),
         Buffer.from(c.oldCurrentHash),
@@ -138,9 +147,9 @@ export function createPostgresSessionAdapter(database: Database): PostgresSessio
         lastSeenAt: string;
         idleExpiresAt: string;
       },
-      runner?: QueryRunner,
+      overrideRunner?: QueryRunner,
     ): Promise<void> {
-      const q = runner ?? database;
+      const q = overrideRunner ?? runner;
       const params = [c.lastSeenAt, c.idleExpiresAt, c.sessionId, c.currentVersion];
       const result = await q.query(TOUCH_SESSION_SQL, params);
       if (result.rowCount !== 1) {
@@ -155,9 +164,9 @@ export function createPostgresSessionAdapter(database: Database): PostgresSessio
         revokedAt: string;
         reason: string;
       },
-      runner?: QueryRunner,
+      overrideRunner?: QueryRunner,
     ): Promise<void> {
-      const q = runner ?? database;
+      const q = overrideRunner ?? runner;
       const params = [c.revokedAt, c.reason, c.sessionId, c.currentVersion];
       const result = await q.query(REVOKE_SESSION_SQL, params);
       if (result.rowCount !== 1) {
@@ -171,15 +180,28 @@ export function createPostgresSessionAdapter(database: Database): PostgresSessio
         revokedAt: string;
         reason: string;
       },
-      runner?: QueryRunner,
+      overrideRunner?: QueryRunner,
     ): Promise<void> {
-      const q = runner ?? database;
+      const q = overrideRunner ?? runner;
       const params = [c.revokedAt, c.reason, Buffer.from(c.tokenHash)];
       await q.query(REVOKE_MATCHING_BY_HASH_SQL, params);
     },
 
-    async withTransaction<T>(fn: (tx: TransactionExecutor) => Promise<T>): Promise<T> {
-      return database.withTransaction(fn);
+    async withTransaction<T>(fn: (txStore: PostgresSessionAdapter) => Promise<T>): Promise<T> {
+      return fn(this);
+    },
+  };
+}
+
+export function createPostgresSessionAdapter(database: Database): PostgresSessionAdapter {
+  const rootAdapter = createAdapterForRunner(database);
+  return {
+    ...rootAdapter,
+    async withTransaction<T>(fn: (txStore: PostgresSessionAdapter) => Promise<T>): Promise<T> {
+      return database.withTransaction(async (tx) => {
+        const txAdapter = createAdapterForRunner(tx);
+        return fn(txAdapter);
+      });
     },
   };
 }

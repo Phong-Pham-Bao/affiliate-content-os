@@ -1,3 +1,4 @@
+import util from 'node:util';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import {
   AuthConfigurationUnavailableError,
@@ -110,8 +111,40 @@ export function resolveProblemSpec(error: unknown): ProblemSpec {
     return PROBLEM_SPECS['INTERNAL_ERROR']!;
   }
 
-  const maybeCode = (error as { code?: string } | undefined)?.code;
-  const maybeStatus = (error as { statusCode?: number } | undefined)?.statusCode;
+  if (typeof error !== 'object' || error === null) {
+    return PROBLEM_SPECS['INTERNAL_ERROR']!;
+  }
+
+  try {
+    if (util.types.isProxy(error)) {
+      return PROBLEM_SPECS['INTERNAL_ERROR']!;
+    }
+  } catch {
+    return PROBLEM_SPECS['INTERNAL_ERROR']!;
+  }
+
+  let maybeCode: string | undefined;
+  let maybeStatus: number | undefined;
+
+  const codeDesc = Object.getOwnPropertyDescriptor(error, 'code');
+  if (
+    codeDesc &&
+    codeDesc.get === undefined &&
+    codeDesc.set === undefined &&
+    typeof codeDesc.value === 'string'
+  ) {
+    maybeCode = codeDesc.value;
+  }
+
+  const statusDesc = Object.getOwnPropertyDescriptor(error, 'statusCode');
+  if (
+    statusDesc &&
+    statusDesc.get === undefined &&
+    statusDesc.set === undefined &&
+    typeof statusDesc.value === 'number'
+  ) {
+    maybeStatus = statusDesc.value;
+  }
 
   if (maybeStatus === 429 || maybeCode === 'FST_ERR_RATE_LIMIT') {
     return PROBLEM_SPECS['RATE_LIMIT_EXCEEDED']!;

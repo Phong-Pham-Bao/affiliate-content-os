@@ -1,7 +1,7 @@
-import { randomUUID } from 'node:crypto';
 import type { FastifyPluginAsync } from 'fastify';
 import {
   AuthConfigurationUnavailableError,
+  OidcCallbackInvalidError,
   completeOidcLogin,
   validateReturnTo,
 } from '@affiliate-content-os/application';
@@ -26,6 +26,26 @@ export function createCallbackRoute(deps: AuthDependencies): FastifyPluginAsync 
             timeWindow: RATE_LIMIT_CALLBACK_WINDOW_MS,
           },
         },
+        preValidation: async (request) => {
+          const rawUrl = new URL(request.raw?.url ?? request.url, 'http://127.0.0.1');
+          const queryEntries = [...rawUrl.searchParams.entries()];
+          const seenKeys = new Set<string>();
+          for (const [key] of queryEntries) {
+            if (seenKeys.has(key)) {
+              throw new OidcCallbackInvalidError();
+            }
+            seenKeys.add(key);
+            if (
+              key !== 'code' &&
+              key !== 'state' &&
+              key !== 'error' &&
+              key !== 'error_description' &&
+              key !== 'error_uri'
+            ) {
+              throw new OidcCallbackInvalidError();
+            }
+          }
+        },
       },
       async (request, reply) => {
         if (
@@ -34,7 +54,8 @@ export function createCallbackRoute(deps: AuthDependencies): FastifyPluginAsync 
           !deps.loginTransactionStore ||
           !deps.sessionStore ||
           !deps.identityResolution ||
-          !deps.crypto
+          !deps.crypto ||
+          !deps.generateId
         ) {
           throw new AuthConfigurationUnavailableError();
         }
@@ -42,9 +63,23 @@ export function createCallbackRoute(deps: AuthDependencies): FastifyPluginAsync 
         const transactionCookie = request.cookies[COOKIE_TRANSACTION];
         clearTransactionCookie(reply, deps.config);
 
+        // Extract raw URL search parameters to preserve unknown/duplicate keys before Fastify strips them
+        const rawUrl = new URL(request.raw?.url ?? request.url, 'http://127.0.0.1');
+        const queryEntries = [...rawUrl.searchParams.entries()];
+
+        const seenKeys = new Set<string>();
+        const rawQuery: Record<string, string> = Object.create(null);
+        for (const [key, value] of queryEntries) {
+          if (seenKeys.has(key)) {
+            throw new OidcCallbackInvalidError();
+          }
+          seenKeys.add(key);
+          rawQuery[key] = value;
+        }
+
         const result = await completeOidcLogin(
           {
-            query: request.query,
+            query: rawQuery,
             transactionCookie,
           },
           {
@@ -53,7 +88,7 @@ export function createCallbackRoute(deps: AuthDependencies): FastifyPluginAsync 
             sessionStore: deps.sessionStore,
             oidc: deps.oidcProtocolPort,
             identityResolution: deps.identityResolution,
-            generateId: deps.generateId ?? (() => randomUUID()),
+            generateId: deps.generateId,
             now: deps.now ?? (() => new Date()),
             sessionIdleTtlSeconds: deps.config.sessionIdleTtlSeconds,
             sessionAbsoluteTtlSeconds: deps.config.sessionAbsoluteTtlSeconds,

@@ -105,7 +105,9 @@ export function createMockAuthDeps(overrides?: Partial<AuthDependencies>): MockA
     touchSession: vi.fn(async () => {}),
     revokeSession: vi.fn(async () => {}),
     revokeMatchingSessionsByTokenHash: vi.fn(async () => {}),
-    withTransaction: vi.fn(async (fn) => fn({} as never)),
+    withTransaction: vi.fn(async function (fn) {
+      return fn(sessionStore);
+    }),
   };
 
   const oidcProtocolPort: OidcProtocolPort = {
@@ -156,7 +158,10 @@ export function createMockAuthDeps(overrides?: Partial<AuthDependencies>): MockA
     config,
     appBaseUrl: overrides?.appBaseUrl ?? 'http://127.0.0.1:3000',
     now: overrides?.now ?? (() => new Date('2026-11-02T12:00:00.000Z')),
-    generateId: overrides?.generateId ?? (() => '0192b012-3456-789a-8bcd-ef0123456789'),
+    generateId:
+      overrides && 'generateId' in overrides
+        ? (overrides.generateId as () => string)
+        : () => '0192b012-3456-789a-8bcd-ef0123456789',
     crypto: overrides?.crypto ?? crypto,
     loginTransactionStore: overrides?.loginTransactionStore ?? loginTransactionStore,
     sessionStore: overrides?.sessionStore ?? sessionStore,

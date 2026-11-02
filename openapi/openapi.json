@@ -458,7 +458,7 @@
                               },
                               "role": {
                                 "type": "string",
-                                "enum": ["owner", "admin", "member"]
+                                "enum": ["owner", "editor", "viewer"]
                               }
                             },
                             "additionalProperties": false

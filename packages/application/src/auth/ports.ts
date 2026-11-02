@@ -132,7 +132,7 @@ export interface SessionStorePort {
     readonly reason: string;
   }): Promise<void>;
 
-  withTransaction<T>(fn: () => Promise<T>): Promise<T>;
+  withTransaction<T>(fn: (txStore: SessionStorePort) => Promise<T>): Promise<T>;
 }
 
 export interface OidcProtocolPort {

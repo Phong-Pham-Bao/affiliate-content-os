@@ -99,6 +99,52 @@ describe('GET /auth/callback route', { timeout: 15000 }, () => {
     expect(txClearCookie).toContain('Max-Age=0');
   });
 
+  it('rejects unexpected query parameters with 400 and causes zero persistence calls', async () => {
+    const auth = createMockAuthDeps();
+    let consumeCalled = false;
+    auth.loginTransactionStore.consumePendingTransaction = async () => {
+      consumeCalled = true;
+      return null;
+    };
+
+    const app = createApp({ auth });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/auth/callback?code=valid-code&state=valid-state&unexpected=intruder',
+      cookies: {
+        [COOKIE_TRANSACTION]: 'binding-raw-value-32-chars-long-12345678901',
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json().code).toBe('OIDC_CALLBACK_INVALID');
+    expect(consumeCalled).toBe(false);
+  });
+
+  it('rejects duplicate query parameters with 400 and causes zero persistence calls', async () => {
+    const auth = createMockAuthDeps();
+    let consumeCalled = false;
+    auth.loginTransactionStore.consumePendingTransaction = async () => {
+      consumeCalled = true;
+      return null;
+    };
+
+    const app = createApp({ auth });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/auth/callback?code=valid-code1&code=valid-code2&state=valid-state',
+      cookies: {
+        [COOKIE_TRANSACTION]: 'binding-raw-value-32-chars-long-12345678901',
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json().code).toBe('OIDC_CALLBACK_INVALID');
+    expect(consumeCalled).toBe(false);
+  });
+
   it('enforces rate limit of 20 requests per 60 seconds per IP', async () => {
     const auth = createMockAuthDeps();
     const app = createApp({ auth });

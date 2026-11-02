@@ -21,6 +21,19 @@ describe('GET /auth/login route', { timeout: 15000 }, () => {
     expect(response.headers['set-cookie']).toBeUndefined();
   });
 
+  it('returns 503 AUTH_NOT_CONFIGURED when generateId is missing', async () => {
+    const auth = createMockAuthDeps({ generateId: undefined });
+    const app = createApp({ auth });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/auth/login',
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json().code).toBe('AUTH_NOT_CONFIGURED');
+  });
+
   it('returns 400 AUTH_REQUEST_INVALID when unexpected query parameters are provided', async () => {
     const auth = createMockAuthDeps();
     const app = createApp({ auth });

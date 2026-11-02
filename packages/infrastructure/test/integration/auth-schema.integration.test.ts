@@ -261,4 +261,85 @@ describe('Real PostgreSQL Auth Schema and Constraints Integration', () => {
       ]),
     ).rejects.toThrow();
   });
+
+  it('proves application_sessions_timestamps_order_check strictly enforces all timestamp invariants', async () => {
+    const userId = '0192b012-3456-789a-8bcd-ef0123456711';
+    const createdAt = new Date('2026-11-02T12:00:00.000Z');
+
+    await client.query(
+      `INSERT INTO users (id, identity_provider, identity_subject, email, display_name, status, created_at, updated_at, version)
+       VALUES ($1, 'https://issuer.example.com', 'sub-timestamps', 'ts@ex.com', 'TS User', 'active', $2, $2, 1);`,
+      [userId, createdAt],
+    );
+
+    const tokenHash = Buffer.alloc(32, 20);
+    const validIdle = new Date('2026-11-02T12:30:00.000Z');
+    const validAbs = new Date('2026-11-02T20:00:00.000Z');
+
+    // Invariant 1: last_seen_at > idle_expires_at must be rejected (Finding 7 regression)
+    const badSession1 = '0192b012-3456-789a-8bcd-ef0123456722';
+    const badLastSeen = new Date('2026-11-02T12:35:00.000Z'); // after idleExpires
+    await expect(
+      client.query(
+        `INSERT INTO application_sessions (
+          id, user_id, current_token_hash, previous_token_hash, previous_token_valid_until,
+          created_at, last_seen_at, idle_expires_at, absolute_expires_at, rotated_at,
+          revoked_at, revocation_reason, version
+        ) VALUES ($1, $2, $3, NULL, NULL, $4, $5, $6, $7, $4, NULL, NULL, 1);`,
+        [badSession1, userId, tokenHash, createdAt, badLastSeen, validIdle, validAbs],
+      ),
+    ).rejects.toThrow();
+
+    // Invariant 2: rotated_at > last_seen_at must be rejected
+    const badSession2 = '0192b012-3456-789a-8bcd-ef0123456723';
+    const badRotatedAt = new Date('2026-11-02T12:15:00.000Z');
+    const pastLastSeen = new Date('2026-11-02T12:10:00.000Z');
+    await expect(
+      client.query(
+        `INSERT INTO application_sessions (
+          id, user_id, current_token_hash, previous_token_hash, previous_token_valid_until,
+          created_at, last_seen_at, idle_expires_at, absolute_expires_at, rotated_at,
+          revoked_at, revocation_reason, version
+        ) VALUES ($1, $2, $3, NULL, NULL, $4, $5, $6, $7, $8, NULL, NULL, 1);`,
+        [
+          badSession2,
+          userId,
+          tokenHash,
+          createdAt,
+          pastLastSeen,
+          validIdle,
+          validAbs,
+          badRotatedAt,
+        ],
+      ),
+    ).rejects.toThrow();
+
+    // Invariant 3: created_at > rotated_at must be rejected
+    const badSession3 = '0192b012-3456-789a-8bcd-ef0123456724';
+    const preCreatedAt = new Date('2026-11-02T11:50:00.000Z');
+    await expect(
+      client.query(
+        `INSERT INTO application_sessions (
+          id, user_id, current_token_hash, previous_token_hash, previous_token_valid_until,
+          created_at, last_seen_at, idle_expires_at, absolute_expires_at, rotated_at,
+          revoked_at, revocation_reason, version
+        ) VALUES ($1, $2, $3, NULL, NULL, $4, $4, $5, $6, $7, NULL, NULL, 1);`,
+        [badSession3, userId, tokenHash, createdAt, validIdle, validAbs, preCreatedAt],
+      ),
+    ).rejects.toThrow();
+
+    // Invariant 4: idle_expires_at > absolute_expires_at must be rejected
+    const badSession4 = '0192b012-3456-789a-8bcd-ef0123456725';
+    const excessiveIdle = new Date('2026-11-02T21:00:00.000Z'); // after abs
+    await expect(
+      client.query(
+        `INSERT INTO application_sessions (
+          id, user_id, current_token_hash, previous_token_hash, previous_token_valid_until,
+          created_at, last_seen_at, idle_expires_at, absolute_expires_at, rotated_at,
+          revoked_at, revocation_reason, version
+        ) VALUES ($1, $2, $3, NULL, NULL, $4, $4, $5, $6, $4, NULL, NULL, 1);`,
+        [badSession4, userId, tokenHash, createdAt, excessiveIdle, validAbs],
+      ),
+    ).rejects.toThrow();
+  });
 });

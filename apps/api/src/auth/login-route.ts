@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import type { FastifyPluginAsync } from 'fastify';
 import {
   AuthConfigurationUnavailableError,
@@ -29,7 +28,8 @@ export function createLoginRoute(deps: AuthDependencies): FastifyPluginAsync {
           !deps.config.enabled ||
           !deps.oidcProtocolPort ||
           !deps.loginTransactionStore ||
-          !deps.crypto
+          !deps.crypto ||
+          !deps.generateId
         ) {
           throw new AuthConfigurationUnavailableError();
         }
@@ -50,7 +50,7 @@ export function createLoginRoute(deps: AuthDependencies): FastifyPluginAsync {
             crypto: deps.crypto,
             transactionStore: deps.loginTransactionStore,
             oidc: deps.oidcProtocolPort,
-            generateId: deps.generateId ?? (() => randomUUID()),
+            generateId: deps.generateId,
             now: deps.now ?? (() => new Date()),
             transactionTtlSeconds: deps.config.transactionTtlSeconds,
           },

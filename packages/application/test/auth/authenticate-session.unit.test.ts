@@ -55,7 +55,12 @@ describe('packages/application - authenticateApplicationSession', () => {
         touchSession: vi.fn().mockResolvedValue(undefined),
         revokeSession: vi.fn().mockResolvedValue(undefined),
         revokeMatchingSessionsByTokenHash: vi.fn(),
-        withTransaction: vi.fn((fn) => fn()),
+        withTransaction: vi.fn(async function <T>(
+          this: SessionStorePort,
+          fn: (txStore: SessionStorePort) => Promise<T>,
+        ): Promise<T> {
+          return fn(this);
+        }) as unknown as SessionStorePort['withTransaction'],
       },
       userDirectory: {
         findUserById: vi.fn().mockResolvedValue({

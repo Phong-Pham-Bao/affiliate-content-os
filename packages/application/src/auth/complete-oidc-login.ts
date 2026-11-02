@@ -46,38 +46,71 @@ interface ParsedCallbackQuery {
   readonly code?: string;
 }
 
+function isProxySafe(value: unknown): boolean {
+  try {
+    return util.types.isProxy(value);
+  } catch {
+    return true;
+  }
+}
+
 function parseCallbackQuery(query: unknown): ParsedCallbackQuery {
-  if (typeof query !== 'object' || query === null || util.types.isProxy(query)) {
-    throw new OidcCallbackInvalidError();
-  }
-  const q = query as Record<string, unknown>;
-  const keys = Object.keys(q);
-
-  const state = q['state'];
-  if (typeof state !== 'string' || state.length === 0 || state.length > 512) {
+  if (typeof query !== 'object' || query === null || isProxySafe(query)) {
     throw new OidcCallbackInvalidError();
   }
 
-  const error = q['error'];
+  const proto = Object.getPrototypeOf(query);
+  if (proto !== Object.prototype && proto !== null) {
+    throw new OidcCallbackInvalidError();
+  }
+
+  const ownKeys = Reflect.ownKeys(query);
+  const values: Record<string, string> = Object.create(null);
+
+  for (const key of ownKeys) {
+    if (typeof key !== 'string') {
+      throw new OidcCallbackInvalidError();
+    }
+    const desc = Object.getOwnPropertyDescriptor(query, key);
+    if (
+      !desc ||
+      desc.get !== undefined ||
+      desc.set !== undefined ||
+      typeof desc.value !== 'string'
+    ) {
+      throw new OidcCallbackInvalidError();
+    }
+    values[key] = desc.value;
+  }
+
+  const state = values['state'];
+  if (!state || state.length === 0 || state.length > 512) {
+    throw new OidcCallbackInvalidError();
+  }
+
+  const error = values['error'];
   if (error !== undefined) {
-    if (typeof error !== 'string' || error.length === 0 || error.length > 128) {
+    if (error.length === 0 || error.length > 128) {
       throw new OidcCallbackInvalidError();
     }
     const allowed = new Set(['error', 'state', 'error_description', 'error_uri']);
-    for (const k of keys) {
-      if (!allowed.has(k)) throw new OidcCallbackInvalidError();
-      if (typeof q[k] !== 'string' || (q[k] as string).length > 2048) {
+    for (const k of ownKeys) {
+      if (typeof k !== 'string' || !allowed.has(k)) {
+        throw new OidcCallbackInvalidError();
+      }
+      const val = values[k]!;
+      if (val.length > 2048) {
         throw new OidcCallbackInvalidError();
       }
     }
     return { isDenial: true, state };
   }
 
-  const code = q['code'];
-  if (typeof code !== 'string' || code.length === 0 || code.length > 2048) {
+  const code = values['code'];
+  if (!code || code.length === 0 || code.length > 2048) {
     throw new OidcCallbackInvalidError();
   }
-  if (keys.length !== 2 || !keys.includes('code') || !keys.includes('state')) {
+  if (ownKeys.length !== 2 || !ownKeys.includes('code') || !ownKeys.includes('state')) {
     throw new OidcCallbackInvalidError();
   }
   return { isDenial: false, state, code };

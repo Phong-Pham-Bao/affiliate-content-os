@@ -10,6 +10,7 @@ import {
   DefaultIdGenerator,
   SystemClock,
 } from '@affiliate-content-os/application';
+import { isValidUuidV7 } from '@affiliate-content-os/domain';
 import { createDatabase, type Database } from '../../src/database/index.js';
 import {
   createAuthCryptoAdapter,
@@ -84,7 +85,7 @@ describe('Real PostgreSQL & Local OIDC End-to-End Integration Flow', () => {
         crypto,
         transactionStore: txStore,
         oidc: oidcAdapter,
-        generateId: () => idGenerator.generateUserId(),
+        generateId: () => idGenerator.generateId(),
         now: () => now,
         transactionTtlSeconds: 600,
       },
@@ -93,10 +94,20 @@ describe('Real PostgreSQL & Local OIDC End-to-End Integration Flow', () => {
     expect(startResult.authorizationUrl).toContain('/authorize?');
     expect(startResult.transactionCookieValue).toBeDefined();
 
-    // Parse state from auth URL
+    // Verify transaction was persisted with UUIDv7
+    const txDbRes = await client.query<{ id: string }>(
+      `SELECT id FROM oidc_login_transactions WHERE status = 'pending'`,
+    );
+    expect(txDbRes.rowCount).toBe(1);
+    expect(isValidUuidV7(txDbRes.rows[0]!.id)).toBe(true);
+
+    // Parse state and PKCE challenge from auth URL
     const authUrl = new URL(startResult.authorizationUrl);
     const state = authUrl.searchParams.get('state')!;
     const nonce = authUrl.searchParams.get('nonce')!;
+    const codeChallenge = authUrl.searchParams.get('code_challenge')!;
+
+    const code = issuer.issueCode({ redirectUri, codeChallenge, nonce });
 
     // 2. Complete Callback
     issuer.setTokenClaims({
@@ -109,7 +120,7 @@ describe('Real PostgreSQL & Local OIDC End-to-End Integration Flow', () => {
 
     const callbackResult = await completeOidcLogin(
       {
-        query: { code: 'test-auth-code', state },
+        query: { code, state },
         transactionCookie: startResult.transactionCookieValue,
       },
       {
@@ -118,7 +129,7 @@ describe('Real PostgreSQL & Local OIDC End-to-End Integration Flow', () => {
         sessionStore,
         oidc: oidcAdapter,
         identityResolution: { identityDirectory: tenancyAdapter, clock, idGenerator },
-        generateId: () => idGenerator.generateUserId(),
+        generateId: () => idGenerator.generateId(),
         now: () => now,
         sessionIdleTtlSeconds: 1800,
         sessionAbsoluteTtlSeconds: 28800,
@@ -129,11 +140,12 @@ describe('Real PostgreSQL & Local OIDC End-to-End Integration Flow', () => {
     expect(callbackResult.sessionToken).toBeDefined();
     expect(callbackResult.sessionToken.length).toBe(43);
 
-    // Verify user was provisioned in PostgreSQL
+    // Verify user was provisioned in PostgreSQL with valid UUIDv7
     const userRes = await client.query(
       `SELECT id, identity_provider, identity_subject, email, display_name, status FROM users WHERE identity_subject = 'int-subject-42'`,
     );
     expect(userRes.rowCount).toBe(1);
+    expect(isValidUuidV7(userRes.rows[0].id)).toBe(true);
     expect(userRes.rows[0].email).toBe('integrator@example.com');
     expect(userRes.rows[0].status).toBe('active');
 
@@ -154,6 +166,8 @@ describe('Real PostgreSQL & Local OIDC End-to-End Integration Flow', () => {
 
     expect(authContext.user.id).toBe(userRes.rows[0].id);
     expect(authContext.session.userId).toBe(userRes.rows[0].id);
+    expect(isValidUuidV7(authContext.session.id)).toBe(true);
+    expect(isValidUuidV7(authContext.session.userId)).toBe(true);
     expect(authContext.rotatedToken).toBeNull(); // 5 min elapsed, rotation threshold is 15 min
 
     // 4. Get Current User & Workspaces

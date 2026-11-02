@@ -145,6 +145,29 @@ describe('POST /api/v1/logout route', { timeout: 15000 }, () => {
     expect(setCookie).toContain('Max-Age=0');
   });
 
+  it('propagates database revocation failure as 500 Problem Details instead of 204', async () => {
+    const auth = createMockAuthDeps();
+    auth.sessionStore.revokeMatchingSessionsByTokenHash = async () => {
+      throw new Error('Database connection lost');
+    };
+
+    const app = createApp({ auth });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/logout',
+      headers: {
+        origin: 'http://127.0.0.1:3000',
+      },
+      cookies: {
+        [COOKIE_SESSION]: validSessionCookie,
+      },
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json().code).toBe('INTERNAL_ERROR');
+  });
+
   it('enforces rate limit of 30 requests per 60 seconds per IP', async () => {
     const auth = createMockAuthDeps();
     const app = createApp({ auth });

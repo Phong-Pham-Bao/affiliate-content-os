@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   OidcCallbackInvalidError,
@@ -11,6 +12,8 @@ describe('packages/infrastructure - OIDC Protocol Adapter', () => {
   const clientId = 'test-client-id';
   const clientSecret = 'test-client-secret';
   const redirectUri = 'http://localhost:3001/auth/callback';
+  const verifier = 'test-verifier-string-43-chars-long-12345678901';
+  const challenge = crypto.createHash('sha256').update(verifier).digest('base64url');
 
   beforeAll(async () => {
     issuer = await createTestOidcIssuer(clientId, clientSecret);
@@ -63,6 +66,12 @@ describe('packages/infrastructure - OIDC Protocol Adapter', () => {
   });
 
   it('exchanges code, validates ID token, and extracts verified claims', async () => {
+    const code = issuer.issueCode({
+      redirectUri,
+      codeChallenge: challenge,
+      nonce: 'test-nonce',
+    });
+
     const adapter = await discoverOidcAdapter({
       issuer: issuer.issuerUrl,
       clientId,
@@ -72,8 +81,8 @@ describe('packages/infrastructure - OIDC Protocol Adapter', () => {
     });
 
     const claims = await adapter.exchangeCodeAndValidateIdToken({
-      code: 'valid-test-code',
-      pkceVerifier: 'test-verifier',
+      code,
+      pkceVerifier: verifier,
       nonce: 'test-nonce',
     });
 
@@ -85,6 +94,11 @@ describe('packages/infrastructure - OIDC Protocol Adapter', () => {
 
   it('passes null email when email_verified is false', async () => {
     issuer.setTokenClaims({ email: 'unverified@example.com', email_verified: false });
+    const code = issuer.issueCode({
+      redirectUri,
+      codeChallenge: challenge,
+      nonce: 'test-nonce',
+    });
 
     const adapter = await discoverOidcAdapter({
       issuer: issuer.issuerUrl,
@@ -95,8 +109,8 @@ describe('packages/infrastructure - OIDC Protocol Adapter', () => {
     });
 
     const claims = await adapter.exchangeCodeAndValidateIdToken({
-      code: 'valid-test-code-2',
-      pkceVerifier: 'test-verifier',
+      code,
+      pkceVerifier: verifier,
       nonce: 'test-nonce',
     });
 
@@ -109,6 +123,11 @@ describe('packages/infrastructure - OIDC Protocol Adapter', () => {
 
   it('rejects sub with surrounding whitespace', async () => {
     issuer.setTokenClaims({ sub: ' padded-sub ' });
+    const code = issuer.issueCode({
+      redirectUri,
+      codeChallenge: challenge,
+      nonce: 'test-nonce',
+    });
 
     const adapter = await discoverOidcAdapter({
       issuer: issuer.issuerUrl,
@@ -120,8 +139,8 @@ describe('packages/infrastructure - OIDC Protocol Adapter', () => {
 
     await expect(
       adapter.exchangeCodeAndValidateIdToken({
-        code: 'valid-test-code-3',
-        pkceVerifier: 'test-verifier',
+        code,
+        pkceVerifier: verifier,
         nonce: 'test-nonce',
       }),
     ).rejects.toThrow(OidcCallbackInvalidError);

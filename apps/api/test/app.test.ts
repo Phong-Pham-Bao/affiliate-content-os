@@ -3,6 +3,8 @@ import { loadConfig, ConfigurationError, type AppConfig } from '@affiliate-conte
 import type { Database } from '@affiliate-content-os/infrastructure/database';
 import { createApp } from '../src/app.js';
 import { startApiServer } from '../src/server.js';
+import type { AuthDependencies } from '../src/auth/index.js';
+import { createTestAuthConfig } from './helpers/auth-test-fakes.js';
 
 const testConfig: AppConfig = Object.freeze({
   nodeEnv: 'test',
@@ -452,5 +454,71 @@ describe('apps/api - startApiServer lifecycle', () => {
 
     await expect(startPromise).rejects.toThrow(/timed out/);
     expect(terminateSpy).toHaveBeenCalledWith(1);
+  });
+
+  it('fails cleanly and closes database pool exactly once when auth provider factory fails during startup', async () => {
+    const mockDb = createMockDatabase();
+    const terminateSpy = vi.fn();
+    const listenerSpy = vi.fn();
+    const authError = new Error('OIDC provider unreachable');
+
+    await expect(
+      startApiServer({
+        config: testConfig,
+        database: mockDb,
+        auth: vi.fn().mockRejectedValue(authError),
+        listener: listenerSpy,
+        terminate: terminateSpy,
+        installSignalHandlers: false,
+      }),
+    ).rejects.toThrow('OIDC provider unreachable');
+
+    expect(listenerSpy).not.toHaveBeenCalled();
+    expect(mockDb.close).toHaveBeenCalledTimes(1);
+    expect(terminateSpy).toHaveBeenCalledWith(1);
+  });
+
+  it('passes startup cancellation signal to auth provider and aborts in-flight discovery on SIGINT', async () => {
+    const mockDb = createMockDatabase();
+    const terminateSpy = vi.fn();
+    const listenerSpy = vi.fn();
+
+    let capturedSignal: AbortSignal | undefined;
+    let resolveAuth: () => void;
+    const authPromise = new Promise<AuthDependencies>((resolve) => {
+      resolveAuth = () =>
+        resolve({
+          config: createTestAuthConfig({ enabled: false }),
+          appBaseUrl: 'http://127.0.0.1:3000',
+        });
+    });
+
+    const startPromise = startApiServer({
+      config: testConfig,
+      database: mockDb,
+      auth: (signal) => {
+        capturedSignal = signal;
+        return authPromise;
+      },
+      installSignalHandlers: true,
+      terminate: terminateSpy,
+      listener: listenerSpy,
+    });
+
+    // Wait microtask for auth factory to be called
+    await new Promise((r) => setTimeout(r, 10));
+    expect(capturedSignal).toBeDefined();
+    expect(capturedSignal!.aborted).toBe(false);
+
+    // Fire SIGINT while auth is in flight
+    process.emit('SIGINT');
+
+    expect(capturedSignal!.aborted).toBe(true);
+    resolveAuth!();
+
+    await expect(startPromise).rejects.toThrow();
+    expect(listenerSpy).not.toHaveBeenCalled();
+    expect(mockDb.close).toHaveBeenCalledTimes(1);
+    expect(terminateSpy).toHaveBeenCalledWith(0);
   });
 });

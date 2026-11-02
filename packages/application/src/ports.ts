@@ -50,6 +50,7 @@ export interface ClockPort {
 }
 
 export interface IdGeneratorPort {
+  generateId?(): string;
   generateWorkspaceId(): WorkspaceId;
   generateMembershipId(): MembershipId;
   generateUserId(): UserId;

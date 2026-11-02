@@ -114,23 +114,56 @@ export class OidcProtocolAdapter implements OidcProtocolPort {
 
 export async function discoverOidcAdapter(
   adapterConfig: OidcAdapterConfig,
-  _options?: { signal?: AbortSignal },
+  options?: { signal?: AbortSignal },
 ): Promise<OidcProtocolAdapter> {
+  const signal = options?.signal;
+  if (signal?.aborted) {
+    throw new OidcProviderUnavailableError();
+  }
+
   let configuration: client.Configuration;
   try {
     const issuerUrl = new URL(adapterConfig.issuer);
     const execute = adapterConfig.allowInsecureRequests ? [client.allowInsecureRequests] : [];
 
-    configuration = await client.discovery(
+    const discoveryOptions: client.DiscoveryRequestOptions = {
+      execute,
+      timeout: 5,
+    };
+
+    if (signal) {
+      discoveryOptions[client.customFetch] = (url, init) => {
+        const reqInit: RequestInit = {
+          method: init.method,
+          headers: init.headers,
+          redirect: init.redirect,
+          signal,
+        };
+        if (init.body !== undefined) {
+          reqInit.body = init.body;
+        }
+        return fetch(url, reqInit);
+      };
+    }
+
+    const discoveryPromise = client.discovery(
       issuerUrl,
       adapterConfig.clientId,
       adapterConfig.clientSecret,
       client.ClientSecretBasic(),
-      {
-        execute,
-        timeout: 5,
-      },
+      discoveryOptions,
     );
+
+    if (signal) {
+      const abortPromise = new Promise<never>((_, reject) => {
+        signal.addEventListener('abort', () => reject(new OidcProviderUnavailableError()), {
+          once: true,
+        });
+      });
+      configuration = await Promise.race([discoveryPromise, abortPromise]);
+    } else {
+      configuration = await discoveryPromise;
+    }
   } catch {
     throw new OidcProviderUnavailableError();
   }
