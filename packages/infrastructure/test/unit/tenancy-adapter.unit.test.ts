@@ -432,7 +432,7 @@ describe('PostgresTenancyAdapter Unit Tests', () => {
           mapMembershipRow({ ...validBaseMem, joined_at: val as unknown as string }),
         'joined_at',
       ],
-    ])('%s field validation', (_, mapperCall, fieldName) => {
+    ])('%s field validation', (targetName, mapperCall, fieldName) => {
       it.each(noncanonicalCases)(
         'rejects noncanonical timestamp (%s) as safe DatabaseError without leaking raw value',
         (_, val) => {
@@ -450,7 +450,10 @@ describe('PostgresTenancyAdapter Unit Tests', () => {
 
           expect(thrown).toBeInstanceOf(DatabaseError);
           const dbErr = thrown as DatabaseError;
-          expect(dbErr.message).toBe(`Invalid timestamp value for field "${fieldName}"`);
+          const expectedMessage = targetName.startsWith('UserSnapshot')
+            ? 'Failed to map user row'
+            : `Invalid timestamp value for field "${fieldName}"`;
+          expect(dbErr.message).toBe(expectedMessage);
 
           if (typeof val === 'string' && val.length > 0) {
             expect(dbErr.message).not.toContain(val);

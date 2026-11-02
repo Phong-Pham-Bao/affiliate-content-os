@@ -48,3 +48,47 @@ export class SlugConflictError extends ApplicationError {
     this.slug = slug;
   }
 }
+
+export type IdentityClaimField =
+  'claims' | 'identityProvider' | 'identitySubject' | 'email' | 'displayName';
+
+export class IdentityClaimsValidationError extends ApplicationError {
+  readonly code = 'IDENTITY_CLAIMS_INVALID';
+  readonly field: IdentityClaimField;
+
+  constructor(field: IdentityClaimField) {
+    super('Invalid identity claims');
+    this.name = 'IdentityClaimsValidationError';
+    this.field = field;
+  }
+}
+
+export class IdentityUnavailableError extends ApplicationError {
+  readonly code = 'IDENTITY_UNAVAILABLE';
+
+  constructor() {
+    super('Identity is unavailable');
+    this.name = 'IdentityUnavailableError';
+  }
+}
+
+export class IdentityPersistenceError extends ApplicationError {
+  readonly code = 'IDENTITY_PERSISTENCE_INVALID';
+  readonly operation: 'lookup' | 'insert' | 'recovery';
+
+  constructor(operation: 'lookup' | 'insert' | 'recovery') {
+    super('Identity persistence error');
+    this.name = 'IdentityPersistenceError';
+    this.operation = operation;
+  }
+}
+
+export class IdentityProvisioningRaceError extends ApplicationError {
+  readonly code = 'IDENTITY_PROVISIONING_RACE';
+  readonly retryable = true as const;
+
+  constructor() {
+    super('Concurrent identity provisioning race detected');
+    this.name = 'IdentityProvisioningRaceError';
+  }
+}
