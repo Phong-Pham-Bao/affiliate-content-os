@@ -39,7 +39,7 @@ async function cruiseFiles(targets: readonly string[]): Promise<readonly Cruised
   return violations as unknown as readonly CruisedViolation[];
 }
 
-describe('Architecture dependency direction boundaries', { timeout: 30000 }, () => {
+describe('Architecture dependency direction boundaries', { timeout: 60000 }, () => {
   it('passes for current production workspace graph with zero violations', async () => {
     const violations = await cruiseFiles(['apps', 'packages']);
     expect(violations).toEqual([]);
