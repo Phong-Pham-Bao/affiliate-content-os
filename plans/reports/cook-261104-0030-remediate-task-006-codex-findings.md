@@ -10,9 +10,11 @@
 ## 1. Finding 1 (HIGH) — Session Auth Self-Starvation with `DATABASE_POOL_MAX=1`
 
 ### Root Cause
+
 Session candidate locking occurred inside `withTransaction`, holding the sole connection in single-connection pool configurations (`poolMax=1`). The subsequent user lookup called the root `deps.userDirectory` adapter, which attempted to acquire a second connection from the exhausted pool, causing query timeout and self-starvation.
 
 ### Implementation
+
 - Added transaction-scoped `findUserById(userId: string)` to `SessionStorePort` (`packages/application/src/auth/ports.ts`).
 - Modularized interfaces into `packages/infrastructure/src/auth/postgres-session-types.ts` (65 lines).
 - Implemented `findUserById` in `packages/infrastructure/src/auth/postgres-session-adapter.ts` (197 lines) using `runner.query` on the existing transactional client (`FIND_USER_BY_ID_SQL`, `LIMIT 2`, safe descriptor inspection, zero proxy traps).
@@ -24,7 +26,9 @@ Session candidate locking occurred inside `withTransaction`, holding the sole co
 ## 2. Finding 2 (HIGH) — Hostile Values & Proxies Executing Traps / Getters
 
 ### Root Cause
+
 Unsafe property lookups, premature `instanceof` / prototype inspections, and unvalidated descriptor access in:
+
 1. `apps/api/src/auth/problem-details.ts`
 2. `packages/application/src/auth/authenticate-session.ts`
 3. `packages/application/src/auth/complete-oidc-login.ts`
@@ -33,7 +37,8 @@ Unsafe property lookups, premature `instanceof` / prototype inspections, and unv
 6. `packages/infrastructure/src/auth/postgres-workspace-summary-adapter.ts`
 
 ### Implementation
-- **Problem Details** (`apps/api/src/auth/problem-details.ts`, 177 lines, specs modularized in `apps/api/src/auth/problem-details-specs.ts`, 77 lines): `util.types.isProxy` check runs first. Prototype chain proxy checks execute *before* any `instanceof` check or property access. Hostile traps map to safe fresh `INTERNAL_ERROR` (HTTP 500) without sentinel leakage.
+
+- **Problem Details** (`apps/api/src/auth/problem-details.ts`, 177 lines, specs modularized in `apps/api/src/auth/problem-details-specs.ts`, 77 lines): `util.types.isProxy` check runs first. Prototype chain proxy checks execute _before_ any `instanceof` check or property access. Hostile traps map to safe fresh `INTERNAL_ERROR` (HTTP 500) without sentinel leakage.
 - **Candidate Session Snapshotting** (`packages/application/src/auth/authenticate-session-candidate.ts`, 149 lines): Strict inspection of own data descriptors (`Object.getOwnPropertyDescriptor(raw, prop)` checking `desc.get === undefined && desc.set === undefined`), defensive copy of byte arrays (`copyBytes`), prototype verification (`proto === Object.prototype || proto === null`).
 - **OIDC Completion Snapshots** (`packages/application/src/auth/complete-oidc-login-snapshots.ts`, 194 lines): Snapshots consumed transaction DTO (`snapshotConsumedTx`), verified claims (`snapshotVerifiedClaims`), and decrypted secrets (`snapshotSecrets`) with own data descriptors and byte cloning.
 - **Current User Resolution** (`packages/application/src/auth/get-current-user.ts`, 139 lines): Validates and snapshots `context.user`, `context.session`, and `deps.workspaceSummary` array items via own data descriptors before access.
@@ -45,9 +50,11 @@ Unsafe property lookups, premature `instanceof` / prototype inspections, and unv
 ## 3. Finding 3 (HIGH) — Malformed Callback Encoding Consuming Login Transaction
 
 ### Root Cause
+
 `new URL(..., dummyBase).searchParams` leniently accepted invalid percent encodings (such as `%` or incomplete hex sequences) as raw strings. The pre-validation check did not inspect raw percent triplets before `completeOidcLogin` ran, prematurely consuming the pending transaction in the database.
 
 ### Implementation
+
 - Added raw query grammar and percent triplet validation in `apps/api/src/auth/callback-route.ts` (187 lines):
   - Validates raw query string matching `^[A-Za-z0-9_.~%!$&'()*+,;=:@/?-]*$`.
   - Checks every `%` is followed by two valid hex digits `[0-9A-Fa-f]{2}`.
@@ -62,9 +69,11 @@ Unsafe property lookups, premature `instanceof` / prototype inspections, and unv
 ## 4. Finding 4 (MEDIUM) — `returnTo` Canonical Path Contract Hardening
 
 ### Root Cause
+
 `validateReturnTo` lacked checks for fragments (`#`), encoded path separators (`%2f`, `%5c`), double encoding (`%25`), and `/auth/login` did not reject duplicate `returnTo` query keys or malformed percent triplets in raw query targets.
 
 ### Implementation
+
 - Hardened `validateReturnTo` (`packages/application/src/auth/begin-oidc-login.ts`, 168 lines):
   - Rejects hash fragments (`#`).
   - Rejects encoded slashes/backslashes (`%2f`, `%5c`, `%2F`, `%5C`, `%25`).
@@ -82,9 +91,11 @@ Unsafe property lookups, premature `instanceof` / prototype inspections, and unv
 ## 5. Finding 5 (MEDIUM) — Boundary & Upgrade Test Coverage
 
 ### Root Cause
+
 Missing real PostgreSQL tests for TASK-005 to TASK-006 schema upgrade, timestamp equality boundaries, forced concurrent current/previous order schedules, and exact grace boundary checks.
 
 ### Implementation
+
 - **Schema Upgrade Test** (`packages/infrastructure/test/integration/auth-schema.integration.test.ts`):
   - Creates isolated test database, applies migrations 0001 and 0002 (TASK-005 schema).
   - Seeds tenant, workspace, user, and membership rows.
@@ -102,6 +113,7 @@ Missing real PostgreSQL tests for TASK-005 to TASK-006 schema upgrade, timestamp
 ## 6. Verification & Quality Gates
 
 All quality gates executed and passing:
+
 1. `corepack pnpm format:check`: Passed (all files conform to Prettier).
 2. `corepack pnpm lint`: Passed (0 ESLint errors).
 3. `corepack pnpm lint:boundaries`: Passed (0 dependency boundary violations across 411 modules).
