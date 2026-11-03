@@ -103,7 +103,7 @@ export interface SessionStorePort {
     readonly now: string;
   }): Promise<readonly SessionSnapshotDTO[]>;
 
-  findUserById?(userId: string): Promise<UserSnapshot | null>;
+  findUserById(userId: string): Promise<UserSnapshot | null>;
 
   rotateSession(params: {
     readonly sessionId: string;

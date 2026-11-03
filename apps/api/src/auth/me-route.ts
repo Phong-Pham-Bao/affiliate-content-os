@@ -35,7 +35,6 @@ export function createMeRoute(deps: AuthDependencies): FastifyPluginAsync {
             {
               crypto: deps.crypto,
               sessionStore: deps.sessionStore,
-              userDirectory: deps.userDirectory,
               now: deps.now ?? (() => new Date()),
               sessionIdleTtlSeconds: deps.config.sessionIdleTtlSeconds,
               sessionRotationSeconds: deps.config.sessionRotationSeconds,

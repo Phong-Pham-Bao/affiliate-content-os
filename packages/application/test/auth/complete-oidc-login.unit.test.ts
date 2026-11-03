@@ -61,6 +61,7 @@ describe('packages/application - completeOidcLogin', () => {
       sessionStore: {
         createSession: vi.fn().mockResolvedValue(undefined),
         findCandidateSessions: vi.fn(),
+        findUserById: vi.fn(),
         rotateSession: vi.fn(),
         touchSession: vi.fn(),
         revokeSession: vi.fn(),

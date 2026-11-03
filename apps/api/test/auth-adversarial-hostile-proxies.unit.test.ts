@@ -72,6 +72,7 @@ describe('Auth Adversarial Hostile Proxies and Traps', () => {
       sessionStore: {
         createSession: vi.fn(),
         findCandidateSessions: vi.fn().mockResolvedValue([hostileSession]),
+        findUserById: vi.fn(),
         rotateSession: vi.fn(),
         touchSession: vi.fn(),
         revokeSession: vi.fn(),
@@ -132,6 +133,7 @@ describe('Auth Adversarial Hostile Proxies and Traps', () => {
       sessionStore: {
         createSession: vi.fn(),
         findCandidateSessions: vi.fn(),
+        findUserById: vi.fn(),
         rotateSession: vi.fn(),
         touchSession: vi.fn(),
         revokeSession: vi.fn(),

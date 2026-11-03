@@ -10,6 +10,7 @@ export {
 } from './crypto.js';
 
 export {
+  copyBytes,
   mapConsumedTransactionRow,
   mapSessionRow,
   mapWorkspaceSummaryRow,

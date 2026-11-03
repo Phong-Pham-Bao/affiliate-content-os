@@ -155,7 +155,6 @@ describe('Real PostgreSQL & Local OIDC End-to-End Integration Flow', () => {
       {
         crypto,
         sessionStore,
-        userDirectory: tenancyAdapter,
         now: () => new Date('2026-11-02T12:05:00.000Z'),
         sessionIdleTtlSeconds: 1800,
         sessionRotationSeconds: 900,
@@ -200,7 +199,6 @@ describe('Real PostgreSQL & Local OIDC End-to-End Integration Flow', () => {
         {
           crypto,
           sessionStore,
-          userDirectory: tenancyAdapter,
           now: () => new Date('2026-11-02T12:15:00.000Z'),
           sessionIdleTtlSeconds: 1800,
           sessionRotationSeconds: 900,

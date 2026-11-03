@@ -24,6 +24,9 @@ export interface GetCurrentUserDependencies {
 }
 
 function isProxySafe(value: unknown): boolean {
+  if (value === null || (typeof value !== 'object' && typeof value !== 'function')) {
+    return false;
+  }
   try {
     return util.types.isProxy(value);
   } catch {
@@ -39,6 +42,31 @@ function getOwnData(obj: object, prop: string): unknown {
   return desc.value;
 }
 
+function validateClosedKeys(obj: object, allowed: Set<string>): void {
+  const keys = Reflect.ownKeys(obj);
+  for (const k of keys) {
+    if (typeof k !== 'string' || !allowed.has(k)) {
+      throw new AuthenticationRequiredError();
+    }
+  }
+}
+
+const ALLOWED_CTX_KEYS = new Set(['user', 'session', 'rotatedToken']);
+const ALLOWED_USER_KEYS = new Set([
+  'id',
+  'identityProvider',
+  'identitySubject',
+  'email',
+  'displayName',
+  'status',
+  'createdAt',
+  'updatedAt',
+  'version',
+]);
+const ALLOWED_SESS_KEYS = new Set(['id', 'userId', 'idleExpiresAt', 'absoluteExpiresAt']);
+const ALLOWED_SUMMARIES_KEYS = new Set(['items', 'hasMore']);
+const ALLOWED_ITEM_KEYS = new Set(['id', 'name', 'slug', 'timezone', 'role']);
+
 export async function getCurrentUser(
   context: AuthenticatedSessionContext,
   deps: GetCurrentUserDependencies,
@@ -46,11 +74,21 @@ export async function getCurrentUser(
   if (typeof context !== 'object' || context === null || isProxySafe(context)) {
     throw new AuthenticationRequiredError();
   }
+  const ctxProto = Object.getPrototypeOf(context);
+  if (ctxProto !== Object.prototype && ctxProto !== null) {
+    throw new AuthenticationRequiredError();
+  }
+  validateClosedKeys(context, ALLOWED_CTX_KEYS);
 
   const rawUser = getOwnData(context, 'user');
   if (typeof rawUser !== 'object' || rawUser === null || isProxySafe(rawUser)) {
     throw new AuthenticationRequiredError();
   }
+  const userProto = Object.getPrototypeOf(rawUser);
+  if (userProto !== Object.prototype && userProto !== null) {
+    throw new AuthenticationRequiredError();
+  }
+  validateClosedKeys(rawUser, ALLOWED_USER_KEYS);
 
   const userId = getOwnData(rawUser, 'id');
   const userEmail = getOwnData(rawUser, 'email');
@@ -63,6 +101,11 @@ export async function getCurrentUser(
   if (typeof rawSession !== 'object' || rawSession === null || isProxySafe(rawSession)) {
     throw new AuthenticationRequiredError();
   }
+  const sessProto = Object.getPrototypeOf(rawSession);
+  if (sessProto !== Object.prototype && sessProto !== null) {
+    throw new AuthenticationRequiredError();
+  }
+  validateClosedKeys(rawSession, ALLOWED_SESS_KEYS);
 
   const idleExpiresAt = getOwnData(rawSession, 'idleExpiresAt');
   const absoluteExpiresAt = getOwnData(rawSession, 'absoluteExpiresAt');
@@ -74,6 +117,11 @@ export async function getCurrentUser(
   if (typeof rawSummaries !== 'object' || rawSummaries === null || isProxySafe(rawSummaries)) {
     throw new AuthenticationRequiredError();
   }
+  const sumProto = Object.getPrototypeOf(rawSummaries);
+  if (sumProto !== Object.prototype && sumProto !== null) {
+    throw new AuthenticationRequiredError();
+  }
+  validateClosedKeys(rawSummaries, ALLOWED_SUMMARIES_KEYS);
 
   const hasMore = getOwnData(rawSummaries, 'hasMore');
   const rawItems = getOwnData(rawSummaries, 'items');
@@ -93,6 +141,10 @@ export async function getCurrentUser(
   ) {
     throw new AuthenticationRequiredError();
   }
+  const itemKeys = Reflect.ownKeys(rawItems);
+  if (itemKeys.length !== lenDesc.value + 1) {
+    throw new AuthenticationRequiredError();
+  }
 
   const items: WorkspaceSummaryItemDTO[] = [];
   for (let i = 0; i < lenDesc.value; i++) {
@@ -104,6 +156,12 @@ export async function getCurrentUser(
     if (typeof item !== 'object' || item === null || isProxySafe(item)) {
       throw new AuthenticationRequiredError();
     }
+    const itemProto = Object.getPrototypeOf(item);
+    if (itemProto !== Object.prototype && itemProto !== null) {
+      throw new AuthenticationRequiredError();
+    }
+    validateClosedKeys(item, ALLOWED_ITEM_KEYS);
+
     const id = getOwnData(item, 'id');
     const name = getOwnData(item, 'name');
     const slug = getOwnData(item, 'slug');

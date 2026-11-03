@@ -1,43 +1,13 @@
-import util from 'node:util';
 import type { UserSnapshot } from '@affiliate-content-os/domain';
-import { AuthenticationRequiredError } from './errors.js';
 import type { SessionSnapshotDTO } from './ports.js';
+import {
+  copyBytes,
+  isProxySafe,
+  bytesEqual,
+  validateSessionCookie,
+} from './byte-snapshot-helpers.js';
 
-export function isProxySafe(value: unknown): boolean {
-  try {
-    return util.types.isProxy(value);
-  } catch {
-    return true;
-  }
-}
-
-export function copyBytes(val: unknown): Uint8Array | null {
-  if (val === null) return null;
-  if (!(val instanceof Uint8Array) || isProxySafe(val)) return null;
-  const copy = new Uint8Array(val.byteLength);
-  copy.set(val);
-  return copy;
-}
-
-export function bytesEqual(a: Uint8Array | null, b: Uint8Array): boolean {
-  if (!a || a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) {
-    if (a[i] !== b[i]) return false;
-  }
-  return true;
-}
-
-export function validateSessionCookie(cookie: unknown): string {
-  if (
-    typeof cookie !== 'string' ||
-    cookie.length !== 43 ||
-    cookie.includes('=') ||
-    !/^[A-Za-z0-9_-]{43}$/.test(cookie)
-  ) {
-    throw new AuthenticationRequiredError();
-  }
-  return cookie;
-}
+export { copyBytes, isProxySafe, bytesEqual, validateSessionCookie };
 
 function getOwnDataProp(obj: object, prop: string): unknown | undefined {
   const desc = Object.getOwnPropertyDescriptor(obj, prop);
@@ -47,6 +17,22 @@ function getOwnDataProp(obj: object, prop: string): unknown | undefined {
   return desc.value;
 }
 
+const ALLOWED_CANDIDATE_KEYS = new Set([
+  'id',
+  'userId',
+  'currentTokenHash',
+  'previousTokenHash',
+  'previousTokenValidUntil',
+  'createdAt',
+  'lastSeenAt',
+  'idleExpiresAt',
+  'absoluteExpiresAt',
+  'rotatedAt',
+  'revokedAt',
+  'revocationReason',
+  'version',
+]);
+
 export function extractSingleCandidate(candidates: unknown): SessionSnapshotDTO | null {
   if (typeof candidates !== 'object' || candidates === null || isProxySafe(candidates)) {
     return null;
@@ -54,6 +40,8 @@ export function extractSingleCandidate(candidates: unknown): SessionSnapshotDTO 
   if (!Array.isArray(candidates) || Object.getPrototypeOf(candidates) !== Array.prototype) {
     return null;
   }
+  const candKeys = Reflect.ownKeys(candidates);
+  if (candKeys.length !== 2) return null;
   const lenDesc = Object.getOwnPropertyDescriptor(candidates, 'length');
   if (!lenDesc || lenDesc.get !== undefined || lenDesc.set !== undefined || lenDesc.value !== 1) {
     return null;
@@ -69,6 +57,15 @@ export function extractSingleCandidate(candidates: unknown): SessionSnapshotDTO 
   const proto = Object.getPrototypeOf(raw);
   if (proto !== Object.prototype && proto !== null) {
     return null;
+  }
+  const rawKeys = Reflect.ownKeys(raw);
+  if (rawKeys.length !== ALLOWED_CANDIDATE_KEYS.size) {
+    return null;
+  }
+  for (const k of rawKeys) {
+    if (typeof k !== 'string' || !ALLOWED_CANDIDATE_KEYS.has(k)) {
+      return null;
+    }
   }
 
   const id = getOwnDataProp(raw, 'id');
@@ -132,9 +129,34 @@ export function extractSingleCandidate(candidates: unknown): SessionSnapshotDTO 
   });
 }
 
+const ALLOWED_USER_KEYS = new Set([
+  'id',
+  'identityProvider',
+  'identitySubject',
+  'email',
+  'displayName',
+  'status',
+  'createdAt',
+  'updatedAt',
+  'version',
+]);
+
 export function safeExtractUser(user: unknown): UserSnapshot | null {
   if (typeof user !== 'object' || user === null || isProxySafe(user)) {
     return null;
+  }
+  const proto = Object.getPrototypeOf(user);
+  if (proto !== Object.prototype && proto !== null) {
+    return null;
+  }
+  const userKeys = Reflect.ownKeys(user);
+  if (userKeys.length !== ALLOWED_USER_KEYS.size) {
+    return null;
+  }
+  for (const k of userKeys) {
+    if (typeof k !== 'string' || !ALLOWED_USER_KEYS.has(k)) {
+      return null;
+    }
   }
   const statusDesc = Object.getOwnPropertyDescriptor(user, 'status');
   if (
@@ -142,6 +164,28 @@ export function safeExtractUser(user: unknown): UserSnapshot | null {
     statusDesc.get !== undefined ||
     statusDesc.set !== undefined ||
     statusDesc.value !== 'active'
+  ) {
+    return null;
+  }
+  for (const prop of ['id', 'identityProvider', 'identitySubject', 'createdAt', 'updatedAt']) {
+    const d = Object.getOwnPropertyDescriptor(user, prop);
+    if (!d || d.get !== undefined || d.set !== undefined || typeof d.value !== 'string') {
+      return null;
+    }
+  }
+  for (const prop of ['email', 'displayName']) {
+    const d = Object.getOwnPropertyDescriptor(user, prop);
+    if (!d || d.get !== undefined || d.set !== undefined) return null;
+    if (d.value !== null && typeof d.value !== 'string') return null;
+  }
+  const vDesc = Object.getOwnPropertyDescriptor(user, 'version');
+  if (
+    !vDesc ||
+    vDesc.get !== undefined ||
+    vDesc.set !== undefined ||
+    typeof vDesc.value !== 'number' ||
+    !Number.isSafeInteger(vDesc.value) ||
+    vDesc.value < 1
   ) {
     return null;
   }

@@ -1,5 +1,4 @@
 import type { UserSnapshot } from '@affiliate-content-os/domain';
-import type { UserDirectoryPort } from '../ports.js';
 import type { AuthCryptoPort, SessionStorePort } from './ports.js';
 
 export interface AuthenticateSessionCommand {
@@ -9,7 +8,6 @@ export interface AuthenticateSessionCommand {
 export interface AuthenticateSessionDependencies {
   readonly crypto: AuthCryptoPort;
   readonly sessionStore: SessionStorePort;
-  readonly userDirectory?: UserDirectoryPort;
   readonly now: () => Date;
   readonly sessionIdleTtlSeconds: number;
   readonly sessionRotationSeconds: number;

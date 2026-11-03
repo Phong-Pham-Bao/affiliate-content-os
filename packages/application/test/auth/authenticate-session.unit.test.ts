@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from 'vitest';
 import { authenticateApplicationSession } from '../../src/auth/authenticate-session.js';
 import { AuthenticationRequiredError } from '../../src/auth/errors.js';
 import type { AuthCryptoPort, SessionSnapshotDTO, SessionStorePort } from '../../src/auth/ports.js';
-import type { UserDirectoryPort } from '../../src/ports.js';
 
 describe('packages/application - authenticateApplicationSession', () => {
   const sampleNow = new Date('2026-11-02T12:00:00.000Z');
@@ -35,7 +34,6 @@ describe('packages/application - authenticateApplicationSession', () => {
   function createFakes(sessionRow = createActiveSessionSnapshot()): {
     crypto: AuthCryptoPort;
     sessionStore: SessionStorePort;
-    userDirectory: UserDirectoryPort;
   } {
     return {
       crypto: {
@@ -51,18 +49,6 @@ describe('packages/application - authenticateApplicationSession', () => {
       sessionStore: {
         createSession: vi.fn(),
         findCandidateSessions: vi.fn().mockResolvedValue([sessionRow]),
-        rotateSession: vi.fn().mockResolvedValue(undefined),
-        touchSession: vi.fn().mockResolvedValue(undefined),
-        revokeSession: vi.fn().mockResolvedValue(undefined),
-        revokeMatchingSessionsByTokenHash: vi.fn(),
-        withTransaction: vi.fn(async function <T>(
-          this: SessionStorePort,
-          fn: (txStore: SessionStorePort) => Promise<T>,
-        ): Promise<T> {
-          return fn(this);
-        }) as unknown as SessionStorePort['withTransaction'],
-      },
-      userDirectory: {
         findUserById: vi.fn().mockResolvedValue({
           id: sampleUserId,
           identityProvider: 'https://auth.example.com',
@@ -74,6 +60,16 @@ describe('packages/application - authenticateApplicationSession', () => {
           updatedAt: '2026-11-02T11:00:00.000Z',
           version: 1,
         }),
+        rotateSession: vi.fn().mockResolvedValue(undefined),
+        touchSession: vi.fn().mockResolvedValue(undefined),
+        revokeSession: vi.fn().mockResolvedValue(undefined),
+        revokeMatchingSessionsByTokenHash: vi.fn(),
+        withTransaction: vi.fn(async function <T>(
+          this: SessionStorePort,
+          fn: (txStore: SessionStorePort) => Promise<T>,
+        ): Promise<T> {
+          return fn(this);
+        }) as unknown as SessionStorePort['withTransaction'],
       },
     };
   }
@@ -170,7 +166,7 @@ describe('packages/application - authenticateApplicationSession', () => {
 
   it('revokes session when user is inactive or missing', async () => {
     const fakes = createFakes();
-    (fakes.userDirectory.findUserById as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+    (fakes.sessionStore.findUserById as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       status: 'disabled',
     });
 

@@ -101,6 +101,7 @@ export function createMockAuthDeps(overrides?: Partial<AuthDependencies>): MockA
   const sessionStore: SessionStorePort = {
     createSession: vi.fn(async () => {}),
     findCandidateSessions: vi.fn(async () => []),
+    findUserById: vi.fn(async () => null),
     rotateSession: vi.fn(async () => {}),
     touchSession: vi.fn(async () => {}),
     revokeSession: vi.fn(async () => {}),

@@ -87,8 +87,8 @@ describe('GET /api/v1/me route', { timeout: 15000 }, () => {
 
     type UserRecord = NonNullable<Awaited<ReturnType<UserDirectoryPort['findUserById']>>>;
 
-    // Mock active user in userDirectory
-    auth.userDirectory.findUserById = async () =>
+    // Mock active user in sessionStore
+    auth.sessionStore.findUserById = async () =>
       Object.freeze({
         id: userId as unknown as UserRecord['id'],
         identityProvider: 'https://auth.example.com',

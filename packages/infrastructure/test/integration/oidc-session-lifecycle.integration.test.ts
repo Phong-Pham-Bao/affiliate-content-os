@@ -305,7 +305,6 @@ describe('Real PostgreSQL & Local OIDC Lifecycle and Security Edge Cases', () =>
         {
           crypto,
           sessionStore,
-          userDirectory: tenancyAdapter,
           now: () => new Date('2026-11-02T12:05:00.000Z'),
           sessionIdleTtlSeconds: 1800,
           sessionRotationSeconds: 900,

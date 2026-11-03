@@ -33,8 +33,7 @@ export async function authenticateApplicationSession(
     | { readonly status: 'authenticated'; readonly context: AuthenticatedSessionContext };
 
   const outcome: AuthOutcome = await deps.sessionStore.withTransaction(async (txStore) => {
-    const store = txStore ?? deps.sessionStore;
-    const rawCandidates = await store.findCandidateSessions({
+    const rawCandidates = await txStore.findCandidateSessions({
       tokenHash,
       now: nowIso,
     });
@@ -46,7 +45,7 @@ export async function authenticateApplicationSession(
 
     const absExpiresMs = new Date(s.absoluteExpiresAt).getTime();
     if (nowMs >= absExpiresMs) {
-      await store.revokeSession({
+      await txStore.revokeSession({
         sessionId: s.id,
         currentVersion: s.version,
         revokedAt: nowIso,
@@ -57,7 +56,7 @@ export async function authenticateApplicationSession(
 
     const idleExpiresMs = new Date(s.idleExpiresAt).getTime();
     if (nowMs >= idleExpiresMs) {
-      await store.revokeSession({
+      await txStore.revokeSession({
         sessionId: s.id,
         currentVersion: s.version,
         revokedAt: nowIso,
@@ -73,13 +72,11 @@ export async function authenticateApplicationSession(
       return { status: 'unauthenticated' };
     }
 
-    const rawUser = store.findUserById
-      ? await store.findUserById(parsedUserId)
-      : await deps.userDirectory?.findUserById(parsedUserId);
+    const rawUser = await txStore.findUserById(parsedUserId);
 
     const user = safeExtractUser(rawUser);
     if (!user) {
-      await store.revokeSession({
+      await txStore.revokeSession({
         sessionId: s.id,
         currentVersion: s.version,
         revokedAt: nowIso,
@@ -108,7 +105,7 @@ export async function authenticateApplicationSession(
         const newIdleMs = Math.min(nowMs + deps.sessionIdleTtlSeconds * 1000, absExpiresMs);
         effectiveIdleExpiresAt = new Date(newIdleMs).toISOString();
 
-        await store.rotateSession({
+        await txStore.rotateSession({
           sessionId: s.id,
           currentVersion: s.version,
           newCurrentHash: newHash,
@@ -128,7 +125,7 @@ export async function authenticateApplicationSession(
           const newIdleMs = Math.min(nowMs + deps.sessionIdleTtlSeconds * 1000, absExpiresMs);
           effectiveIdleExpiresAt = new Date(newIdleMs).toISOString();
 
-          await store.touchSession({
+          await txStore.touchSession({
             sessionId: s.id,
             currentVersion: s.version,
             lastSeenAt: nowIso,

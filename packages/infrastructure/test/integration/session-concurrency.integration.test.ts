@@ -6,7 +6,6 @@ import {
 } from '@affiliate-content-os/application';
 import { createDatabase, type Database } from '../../src/database/index.js';
 import { createAuthCryptoAdapter, createPostgresSessionAdapter } from '../../src/auth/index.js';
-import { createPostgresTenancyAdapter } from '../../src/tenancy/index.js';
 import { setupIsolatedTestDatabase, type TestDatabaseContext } from './helpers/setup.js';
 
 describe('Real PostgreSQL Session Concurrency Integration', () => {
@@ -41,7 +40,6 @@ describe('Real PostgreSQL Session Concurrency Integration', () => {
   it('proves concurrent requests on rotation serialize cleanly: one rotates, waiter authenticates via grace, zero conflicts', async () => {
     const crypto = createAuthCryptoAdapter(encryptionKey, keyVersion);
     const sessionStore = createPostgresSessionAdapter(database);
-    const userDirectory = createPostgresTenancyAdapter(database);
 
     const userId = '0192b012-3456-789a-8bcd-ef0123456830';
     const createdAt = new Date('2026-11-02T12:00:00.000Z');
@@ -75,7 +73,6 @@ describe('Real PostgreSQL Session Concurrency Integration', () => {
     const deps = {
       crypto,
       sessionStore,
-      userDirectory,
       now: () => evalTime,
       sessionIdleTtlSeconds: 1800,
       sessionRotationSeconds: 900,
@@ -112,7 +109,6 @@ describe('Real PostgreSQL Session Concurrency Integration', () => {
   it('proves old-token during grace and new-token schedules authenticate in both orders without conflict', async () => {
     const crypto = createAuthCryptoAdapter(encryptionKey, keyVersion);
     const sessionStore = createPostgresSessionAdapter(database);
-    const userDirectory = createPostgresTenancyAdapter(database);
 
     const userId = '0192b012-3456-789a-8bcd-ef0123456831';
     const createdAt = new Date('2026-11-02T12:00:00.000Z');
@@ -144,7 +140,6 @@ describe('Real PostgreSQL Session Concurrency Integration', () => {
       {
         crypto,
         sessionStore,
-        userDirectory,
         now: () => rotTime,
         sessionIdleTtlSeconds: 1800,
         sessionRotationSeconds: 900,
@@ -162,7 +157,6 @@ describe('Real PostgreSQL Session Concurrency Integration', () => {
       {
         crypto,
         sessionStore,
-        userDirectory,
         now: () => withinGraceTime,
         sessionIdleTtlSeconds: 1800,
         sessionRotationSeconds: 900,
@@ -178,7 +172,6 @@ describe('Real PostgreSQL Session Concurrency Integration', () => {
       {
         crypto,
         sessionStore,
-        userDirectory,
         now: () => withinGraceTime,
         sessionIdleTtlSeconds: 1800,
         sessionRotationSeconds: 900,
@@ -195,7 +188,6 @@ describe('Real PostgreSQL Session Concurrency Integration', () => {
       {
         crypto,
         sessionStore,
-        userDirectory,
         now: () => withinGraceTime,
         sessionIdleTtlSeconds: 1800,
         sessionRotationSeconds: 900,
@@ -210,7 +202,6 @@ describe('Real PostgreSQL Session Concurrency Integration', () => {
       {
         crypto,
         sessionStore,
-        userDirectory,
         now: () => withinGraceTime,
         sessionIdleTtlSeconds: 1800,
         sessionRotationSeconds: 900,
@@ -225,7 +216,6 @@ describe('Real PostgreSQL Session Concurrency Integration', () => {
   it('proves concurrent requests with old-token and new-token succeed in both forced orders and enforces exact before, at, and after grace boundaries', async () => {
     const crypto = createAuthCryptoAdapter(encryptionKey, keyVersion);
     const sessionStore = createPostgresSessionAdapter(database);
-    const userDirectory = createPostgresTenancyAdapter(database);
 
     const userId = '0192b012-3456-789a-8bcd-ef0123456832';
     const createdAt = new Date('2026-11-02T12:00:00.000Z');
@@ -257,7 +247,6 @@ describe('Real PostgreSQL Session Concurrency Integration', () => {
       {
         crypto,
         sessionStore,
-        userDirectory,
         now: () => rotTime,
         sessionIdleTtlSeconds: 1800,
         sessionRotationSeconds: 900,
@@ -276,7 +265,6 @@ describe('Real PostgreSQL Session Concurrency Integration', () => {
         {
           crypto,
           sessionStore,
-          userDirectory,
           now: () => schedATime,
           sessionIdleTtlSeconds: 1800,
           sessionRotationSeconds: 900,
@@ -289,7 +277,6 @@ describe('Real PostgreSQL Session Concurrency Integration', () => {
         {
           crypto,
           sessionStore,
-          userDirectory,
           now: () => schedATime,
           sessionIdleTtlSeconds: 1800,
           sessionRotationSeconds: 900,
@@ -309,7 +296,6 @@ describe('Real PostgreSQL Session Concurrency Integration', () => {
         {
           crypto,
           sessionStore,
-          userDirectory,
           now: () => schedBTime,
           sessionIdleTtlSeconds: 1800,
           sessionRotationSeconds: 900,
@@ -322,7 +308,6 @@ describe('Real PostgreSQL Session Concurrency Integration', () => {
         {
           crypto,
           sessionStore,
-          userDirectory,
           now: () => schedBTime,
           sessionIdleTtlSeconds: 1800,
           sessionRotationSeconds: 900,
@@ -342,7 +327,6 @@ describe('Real PostgreSQL Session Concurrency Integration', () => {
       {
         crypto,
         sessionStore,
-        userDirectory,
         now: () => beforeGrace,
         sessionIdleTtlSeconds: 1800,
         sessionRotationSeconds: 900,
@@ -359,7 +343,6 @@ describe('Real PostgreSQL Session Concurrency Integration', () => {
       {
         crypto,
         sessionStore,
-        userDirectory,
         now: () => atGrace,
         sessionIdleTtlSeconds: 1800,
         sessionRotationSeconds: 900,
@@ -377,7 +360,6 @@ describe('Real PostgreSQL Session Concurrency Integration', () => {
         {
           crypto,
           sessionStore,
-          userDirectory,
           now: () => afterGrace,
           sessionIdleTtlSeconds: 1800,
           sessionRotationSeconds: 900,

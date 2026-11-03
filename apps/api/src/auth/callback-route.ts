@@ -25,10 +25,13 @@ function parseAndValidateRawCallback(rawUrlStr: string): Record<string, string> 
   }
 
   const rawQuery = rawUrlStr.slice(qIdx + 1);
-  if (rawQuery.includes('?')) {
-    throw new OidcCallbackInvalidError();
-  }
-  if (rawQuery.startsWith('&') || rawQuery.endsWith('&') || rawQuery.includes('&&')) {
+  if (
+    rawQuery.includes('?') ||
+    rawQuery.startsWith('&') ||
+    rawQuery.endsWith('&') ||
+    rawQuery.includes('&&') ||
+    rawQuery.includes(';')
+  ) {
     throw new OidcCallbackInvalidError();
   }
 
@@ -84,14 +87,14 @@ function parseAndValidateRawCallback(rawUrlStr: string): Record<string, string> 
     seenDecodedKeys.add(decodedKey);
 
     for (let i = 0; i < decodedKey.length; i++) {
-      const code = decodedKey.charCodeAt(i);
-      if ((code >= 0 && code <= 0x1f) || code === 0x7f) {
+      const c = decodedKey.charCodeAt(i);
+      if ((c >= 0 && c <= 0x1f) || c === 0x7f) {
         throw new OidcCallbackInvalidError();
       }
     }
     for (let i = 0; i < decodedVal.length; i++) {
-      const code = decodedVal.charCodeAt(i);
-      if (code === 0) {
+      const c = decodedVal.charCodeAt(i);
+      if ((c >= 0 && c <= 0x1f) || c === 0x7f) {
         throw new OidcCallbackInvalidError();
       }
     }
@@ -99,7 +102,24 @@ function parseAndValidateRawCallback(rawUrlStr: string): Record<string, string> 
     parsedRecord[decodedKey] = decodedVal;
   }
 
-  if (!parsedRecord['state'] || (!parsedRecord['code'] && !parsedRecord['error'])) {
+  const hasCode = Object.prototype.hasOwnProperty.call(parsedRecord, 'code');
+  const hasError = Object.prototype.hasOwnProperty.call(parsedRecord, 'error');
+  if ((hasCode && hasError) || (!hasCode && !hasError)) {
+    throw new OidcCallbackInvalidError();
+  }
+  if (!parsedRecord['state'] || parsedRecord['state'].length === 0) {
+    throw new OidcCallbackInvalidError();
+  }
+  if (hasCode) {
+    if (
+      Object.prototype.hasOwnProperty.call(parsedRecord, 'error_description') ||
+      Object.prototype.hasOwnProperty.call(parsedRecord, 'error_uri') ||
+      !parsedRecord['code'] ||
+      parsedRecord['code'].length === 0
+    ) {
+      throw new OidcCallbackInvalidError();
+    }
+  } else if (!parsedRecord['error'] || parsedRecord['error'].length === 0) {
     throw new OidcCallbackInvalidError();
   }
 

@@ -1,68 +1,29 @@
-import util from 'node:util';
-import { OidcCallbackInvalidError } from './errors.js';
 import type { ConsumedLoginTransactionDTO, VerifiedOidcClaimsDTO } from './ports.js';
+import { copyBytes, isProxySafe } from './byte-snapshot-helpers.js';
 
-export function isProxySafe(value: unknown): boolean {
-  try {
-    return util.types.isProxy(value);
-  } catch {
-    return true;
-  }
-}
+export { copyBytes, isProxySafe };
+export { parseCallbackQuery, validateTransactionCookie } from './complete-oidc-login-query.js';
 
-export function parseCallbackQuery(query: unknown): {
-  readonly code?: string | undefined;
-  readonly state: string;
-  readonly isDenial: boolean;
-} {
-  if (typeof query !== 'object' || query === null || isProxySafe(query)) {
-    throw new OidcCallbackInvalidError();
-  }
-
-  const allowedKeys = new Set(['code', 'state', 'error', 'error_description', 'error_uri']);
-  for (const key of Reflect.ownKeys(query)) {
-    if (typeof key !== 'string' || !allowedKeys.has(key)) {
-      throw new OidcCallbackInvalidError();
-    }
-  }
-
-  const codeDesc = Object.getOwnPropertyDescriptor(query, 'code');
-  const stateDesc = Object.getOwnPropertyDescriptor(query, 'state');
-  const errorDesc = Object.getOwnPropertyDescriptor(query, 'error');
-
-  const code = codeDesc && typeof codeDesc.value === 'string' ? codeDesc.value : undefined;
-  const state = stateDesc && typeof stateDesc.value === 'string' ? stateDesc.value : undefined;
-  const error = errorDesc && typeof errorDesc.value === 'string' ? errorDesc.value : undefined;
-
-  if (!state || (!code && !error)) {
-    throw new OidcCallbackInvalidError();
-  }
-  return { code, state, isDenial: Boolean(error) };
-}
-
-export function validateTransactionCookie(cookie: unknown): string {
-  if (
-    typeof cookie !== 'string' ||
-    cookie.length !== 43 ||
-    cookie.includes('=') ||
-    !/^[A-Za-z0-9_-]{43}$/.test(cookie)
-  ) {
-    throw new OidcCallbackInvalidError();
-  }
-  return cookie;
-}
-
-export function copyBytes(val: unknown): Uint8Array | null {
-  if (!(val instanceof Uint8Array) || isProxySafe(val)) return null;
-  const copy = new Uint8Array(val.byteLength);
-  copy.set(val);
-  return copy;
-}
+const ALLOWED_TX_KEYS = new Set([
+  'id',
+  'keyVersion',
+  'returnTo',
+  'encryptedSecrets',
+  'createdAt',
+  'expiresAt',
+]);
+const ALLOWED_SEC_KEYS = new Set(['ciphertext', 'iv', 'authTag', 'keyVersion']);
 
 export function snapshotConsumedTx(val: unknown): ConsumedLoginTransactionDTO | null {
   if (typeof val !== 'object' || val === null || isProxySafe(val)) return null;
   const proto = Object.getPrototypeOf(val);
   if (proto !== Object.prototype && proto !== null) return null;
+
+  const valKeys = Reflect.ownKeys(val);
+  if (valKeys.length !== ALLOWED_TX_KEYS.size) return null;
+  for (const k of valKeys) {
+    if (typeof k !== 'string' || !ALLOWED_TX_KEYS.has(k)) return null;
+  }
 
   const idDesc = Object.getOwnPropertyDescriptor(val, 'id');
   const returnToDesc = Object.getOwnPropertyDescriptor(val, 'returnTo');
@@ -85,7 +46,17 @@ export function snapshotConsumedTx(val: unknown): ConsumedLoginTransactionDTO | 
   ) {
     return null;
   }
+
   const rawSec = secDesc.value;
+  const secProto = Object.getPrototypeOf(rawSec);
+  if (secProto !== Object.prototype && secProto !== null) return null;
+
+  const secKeys = Reflect.ownKeys(rawSec);
+  if (secKeys.length !== ALLOWED_SEC_KEYS.size) return null;
+  for (const k of secKeys) {
+    if (typeof k !== 'string' || !ALLOWED_SEC_KEYS.has(k)) return null;
+  }
+
   const cipherDesc = Object.getOwnPropertyDescriptor(rawSec, 'ciphertext');
   const ivDesc = Object.getOwnPropertyDescriptor(rawSec, 'iv');
   const tagDesc = Object.getOwnPropertyDescriptor(rawSec, 'authTag');
@@ -107,6 +78,7 @@ export function snapshotConsumedTx(val: unknown): ConsumedLoginTransactionDTO | 
   ) {
     return null;
   }
+
   const ciphertext = copyBytes(cipherDesc.value);
   const iv = copyBytes(ivDesc.value);
   const authTag = copyBytes(tagDesc.value);
@@ -127,16 +99,20 @@ export function snapshotConsumedTx(val: unknown): ConsumedLoginTransactionDTO | 
   });
 }
 
+const ALLOWED_CLAIMS_KEYS = new Set(['issuer', 'subject', 'email', 'displayName']);
+
 export function snapshotVerifiedClaims(claims: unknown): VerifiedOidcClaimsDTO | null {
   if (typeof claims !== 'object' || claims === null || isProxySafe(claims)) return null;
   const proto = Object.getPrototypeOf(claims);
   if (proto !== Object.prototype && proto !== null) return null;
 
+  const claimKeys = Reflect.ownKeys(claims);
+  for (const k of claimKeys) {
+    if (typeof k !== 'string' || !ALLOWED_CLAIMS_KEYS.has(k)) return null;
+  }
+
   const issDesc = Object.getOwnPropertyDescriptor(claims, 'issuer');
   const subDesc = Object.getOwnPropertyDescriptor(claims, 'subject');
-  const emailDesc = Object.getOwnPropertyDescriptor(claims, 'email');
-  const nameDesc = Object.getOwnPropertyDescriptor(claims, 'displayName');
-
   if (
     !issDesc ||
     issDesc.get !== undefined ||
@@ -149,16 +125,22 @@ export function snapshotVerifiedClaims(claims: unknown): VerifiedOidcClaimsDTO |
   ) {
     return null;
   }
+
   let email: string | null = null;
-  if (emailDesc && emailDesc.get === undefined && emailDesc.set === undefined) {
+  const emailDesc = Object.getOwnPropertyDescriptor(claims, 'email');
+  if (emailDesc) {
+    if (emailDesc.get !== undefined || emailDesc.set !== undefined) return null;
     if (typeof emailDesc.value === 'string' || emailDesc.value === null) {
       email = emailDesc.value;
     } else {
       return null;
     }
   }
+
   let displayName: string | null = null;
-  if (nameDesc && nameDesc.get === undefined && nameDesc.set === undefined) {
+  const nameDesc = Object.getOwnPropertyDescriptor(claims, 'displayName');
+  if (nameDesc) {
+    if (nameDesc.get !== undefined || nameDesc.set !== undefined) return null;
     if (typeof nameDesc.value === 'string' || nameDesc.value === null) {
       displayName = nameDesc.value;
     } else {
@@ -174,8 +156,19 @@ export function snapshotVerifiedClaims(claims: unknown): VerifiedOidcClaimsDTO |
   });
 }
 
+const ALLOWED_SECRETS_KEYS = new Set(['pkceVerifier', 'nonce']);
+
 export function snapshotSecrets(sec: unknown): { pkceVerifier: string; nonce: string } | null {
   if (typeof sec !== 'object' || sec === null || isProxySafe(sec)) return null;
+  const proto = Object.getPrototypeOf(sec);
+  if (proto !== Object.prototype && proto !== null) return null;
+
+  const secKeys = Reflect.ownKeys(sec);
+  if (secKeys.length !== ALLOWED_SECRETS_KEYS.size) return null;
+  for (const k of secKeys) {
+    if (typeof k !== 'string' || !ALLOWED_SECRETS_KEYS.has(k)) return null;
+  }
+
   const pkceDesc = Object.getOwnPropertyDescriptor(sec, 'pkceVerifier');
   const nonceDesc = Object.getOwnPropertyDescriptor(sec, 'nonce');
   if (

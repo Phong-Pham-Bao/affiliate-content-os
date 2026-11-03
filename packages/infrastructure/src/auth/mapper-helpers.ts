@@ -3,6 +3,9 @@ import type { IsoTimestamp } from '@affiliate-content-os/domain';
 import { DatabaseError } from '../database/errors.js';
 
 export function isProxySafe(value: unknown): boolean {
+  if (value === null || (typeof value !== 'object' && typeof value !== 'function')) {
+    return false;
+  }
   try {
     return util.types.isProxy(value);
   } catch {
@@ -46,6 +49,9 @@ export function parseVersion(val: unknown): number {
   throw new DatabaseError('Failed to map row version');
 }
 
+const TypedArrayProto = Object.getPrototypeOf(Uint8Array.prototype);
+const getByteLength = Object.getOwnPropertyDescriptor(TypedArrayProto, 'byteLength')?.get;
+
 export function copyBytes(val: unknown): Uint8Array | null {
   if (val === null || val === undefined) {
     return null;
@@ -56,9 +62,41 @@ export function copyBytes(val: unknown): Uint8Array | null {
   if (!util.types.isUint8Array(val)) {
     throw new DatabaseError('Failed to map byte column');
   }
-  const copy = new Uint8Array(val.length);
-  for (let i = 0; i < val.length; i++) {
-    copy[i] = val[i]!;
+  const proto = Object.getPrototypeOf(val);
+  if (proto !== Uint8Array.prototype && proto !== Buffer.prototype) {
+    throw new DatabaseError('Failed to map byte column');
+  }
+  if (!getByteLength) {
+    throw new DatabaseError('Failed to map byte column');
+  }
+  let len: number;
+  try {
+    len = getByteLength.call(val);
+  } catch {
+    throw new DatabaseError('Failed to map byte column');
+  }
+  if (typeof len !== 'number' || !Number.isSafeInteger(len) || len < 0) {
+    throw new DatabaseError('Failed to map byte column');
+  }
+  const ownKeys = Reflect.ownKeys(val);
+  if (ownKeys.length !== len) {
+    throw new DatabaseError('Failed to map byte column');
+  }
+  const copy = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    if (ownKeys[i] !== String(i)) {
+      throw new DatabaseError('Failed to map byte column');
+    }
+    const desc = Object.getOwnPropertyDescriptor(val, String(i));
+    if (
+      !desc ||
+      desc.get !== undefined ||
+      desc.set !== undefined ||
+      typeof desc.value !== 'number'
+    ) {
+      throw new DatabaseError('Failed to map byte column');
+    }
+    copy[i] = desc.value;
   }
   return copy;
 }
