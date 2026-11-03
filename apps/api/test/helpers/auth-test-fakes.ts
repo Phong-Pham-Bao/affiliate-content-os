@@ -114,10 +114,13 @@ export function createMockAuthDeps(overrides?: Partial<AuthDependencies>): MockA
   const oidcProtocolPort: OidcProtocolPort = {
     buildAuthorizationUrl: vi.fn(() => 'https://auth.example.com/oauth/authorize?state=123'),
     exchangeCodeAndValidateIdToken: vi.fn(async () => ({
-      issuer: 'https://auth.example.com',
-      subject: 'sub-123',
-      email: 'user@example.com',
-      displayName: 'Test User',
+      status: 'verified' as const,
+      claims: {
+        issuer: 'https://auth.example.com',
+        subject: 'sub-123',
+        email: 'user@example.com',
+        displayName: 'Test User',
+      },
     })),
   };
 

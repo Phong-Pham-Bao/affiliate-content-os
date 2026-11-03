@@ -15,8 +15,8 @@ export function isProxySafe(value: unknown): boolean {
 
 export function parseIsoTimestamp(val: unknown): IsoTimestamp {
   if (typeof val === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(val)) {
-    const epoch = new Date(val).getTime();
-    if (Number.isFinite(epoch)) {
+    const d = new Date(val);
+    if (!Number.isNaN(d.getTime()) && d.toISOString() === val) {
       return val as IsoTimestamp;
     }
   }
@@ -24,8 +24,12 @@ export function parseIsoTimestamp(val: unknown): IsoTimestamp {
     if (Object.getPrototypeOf(val) === Date.prototype) {
       if (Reflect.ownKeys(val).length === 0) {
         const epoch = Date.prototype.getTime.call(val);
-        if (Number.isFinite(epoch)) {
-          return new Date(epoch).toISOString() as IsoTimestamp;
+        if (typeof epoch === 'number' && Number.isFinite(epoch)) {
+          const freshDate = new Date(epoch);
+          const isoString = Date.prototype.toISOString.call(freshDate);
+          if (new Date(isoString).toISOString() === isoString) {
+            return isoString as IsoTimestamp;
+          }
         }
       }
     }

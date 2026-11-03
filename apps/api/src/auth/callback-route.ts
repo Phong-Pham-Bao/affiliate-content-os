@@ -192,13 +192,8 @@ export function createCallbackRoute(deps: AuthDependencies): FastifyPluginAsync 
         const destinationUrl = new URL(validatedReturnTo, appBaseUrl).toString();
 
         const currentNow = deps.now ? deps.now() : new Date();
-        setSessionCookie(
-          reply,
-          result.sessionToken,
-          result.absoluteExpiresAt,
-          deps.config,
-          currentNow,
-        );
+        const absoluteExpiresDate = new Date(result.absoluteExpiresAt);
+        setSessionCookie(reply, result.sessionToken, absoluteExpiresDate, deps.config, currentNow);
 
         return reply.status(303).redirect(destinationUrl);
       },

@@ -5,11 +5,11 @@ import type {
 } from '@affiliate-content-os/application';
 import type { Database } from '../database/index.js';
 import { DatabaseError } from '../database/errors.js';
+import { mapConsumedTransactionRow, type ConsumedLoginTransactionRow } from './mappers.js';
 import {
-  mapConsumedTransactionRow,
-  type ConsumedLoginTransactionRow,
-  isProxySafe,
-} from './mappers.js';
+  validateDatabaseQueryResult,
+  validateGenuineRowsArray,
+} from './postgres-result-validator.js';
 
 export interface OidcLoginTransactionInsert {
   readonly id: string;
@@ -114,38 +114,20 @@ export function createPostgresLoginTransactionAdapter(
       ];
       const result = await database.query(sql, params);
 
-      const rawRows = result.rows;
-      if (
-        typeof rawRows !== 'object' ||
-        rawRows === null ||
-        isProxySafe(rawRows) ||
-        !Array.isArray(rawRows)
-      ) {
-        throw new DatabaseError('Database result rows must be an array');
+      const validated = validateDatabaseQueryResult(result, 'SELECT');
+      const rows = validateGenuineRowsArray(validated.rows, 0, 2);
+      if (validated.rowCount !== rows.length) {
+        throw new DatabaseError('Database query result validation failed');
       }
-      if (Object.getPrototypeOf(rawRows) !== Array.prototype) {
-        throw new DatabaseError('Database result rows must have Array.prototype');
-      }
-      const lenDesc = Object.getOwnPropertyDescriptor(rawRows, 'length');
-      if (
-        !lenDesc ||
-        lenDesc.get !== undefined ||
-        lenDesc.set !== undefined ||
-        typeof lenDesc.value !== 'number'
-      ) {
-        throw new DatabaseError('Invalid result rows length');
-      }
-      if (lenDesc.value === 0) {
+
+      if (rows.length === 0) {
         return null;
       }
-      if (lenDesc.value > 1) {
+      if (rows.length > 1) {
         throw new DatabaseError('Unexpected duplicate login transaction match');
       }
-      const desc0 = Object.getOwnPropertyDescriptor(rawRows, '0');
-      if (!desc0 || desc0.get !== undefined || desc0.set !== undefined) {
-        throw new DatabaseError('Invalid result row item');
-      }
-      return mapConsumedTransactionRow(desc0.value);
+
+      return mapConsumedTransactionRow(rows[0]);
     },
 
     async createPendingTransaction(params: {

@@ -1,20 +1,24 @@
 import type { UserSnapshot } from '@affiliate-content-os/domain';
 import type { SessionSnapshotDTO } from './ports.js';
 import {
+  bytesEqual,
   copyBytes,
   isProxySafe,
-  bytesEqual,
   validateSessionCookie,
 } from './byte-snapshot-helpers.js';
 
-export { copyBytes, isProxySafe, bytesEqual, validateSessionCookie };
+export { bytesEqual, copyBytes, isProxySafe, validateSessionCookie };
 
-function getOwnDataProp(obj: object, prop: string): unknown | undefined {
-  const desc = Object.getOwnPropertyDescriptor(obj, prop);
-  if (!desc || desc.get !== undefined || desc.set !== undefined) {
-    return undefined;
-  }
-  return desc.value;
+function isValidUuidV7(val: unknown): boolean {
+  if (typeof val !== 'string') return false;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(val);
+}
+
+function isValidIsoTimestamp(val: unknown): boolean {
+  if (typeof val !== 'string') return false;
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(val)) return false;
+  const t = Date.parse(val);
+  return Number.isFinite(t) && new Date(t).toISOString() === val;
 }
 
 const ALLOWED_CANDIDATE_KEYS = new Set([
@@ -33,7 +37,18 @@ const ALLOWED_CANDIDATE_KEYS = new Set([
   'version',
 ]);
 
-export function extractSingleCandidate(candidates: unknown): SessionSnapshotDTO | null {
+const ALLOWED_REVOCATION_REASONS = new Set([
+  'user_requested',
+  'user_logged_out',
+  'user_unavailable',
+  'idle_expired',
+  'absolute_expired',
+]);
+
+export function extractSingleCandidate(
+  candidates: unknown,
+  nowIso?: string,
+): SessionSnapshotDTO | null {
   if (typeof candidates !== 'object' || candidates === null || isProxySafe(candidates)) {
     return null;
   }
@@ -68,48 +83,124 @@ export function extractSingleCandidate(candidates: unknown): SessionSnapshotDTO 
     }
   }
 
-  const id = getOwnDataProp(raw, 'id');
-  const userId = getOwnDataProp(raw, 'userId');
-  const rawCurrentHash = getOwnDataProp(raw, 'currentTokenHash');
-  const rawPreviousHash = getOwnDataProp(raw, 'previousTokenHash');
-  const rawPrevValidUntil = getOwnDataProp(raw, 'previousTokenValidUntil');
-  const createdAt = getOwnDataProp(raw, 'createdAt');
-  const lastSeenAt = getOwnDataProp(raw, 'lastSeenAt');
-  const idleExpiresAt = getOwnDataProp(raw, 'idleExpiresAt');
-  const absoluteExpiresAt = getOwnDataProp(raw, 'absoluteExpiresAt');
-  const rotatedAt = getOwnDataProp(raw, 'rotatedAt');
-  const revokedAt = getOwnDataProp(raw, 'revokedAt');
-  const revocationReason = getOwnDataProp(raw, 'revocationReason');
-  const version = getOwnDataProp(raw, 'version');
+  const descriptors: Record<string, PropertyDescriptor | undefined> = Object.create(null);
+  for (const k of ALLOWED_CANDIDATE_KEYS) {
+    const d = Object.getOwnPropertyDescriptor(raw, k);
+    if (!d || d.get !== undefined || d.set !== undefined) {
+      return null;
+    }
+    descriptors[k] = d;
+  }
+
+  const id = descriptors['id']!.value;
+  const userId = descriptors['userId']!.value;
+  const rawCurrentHash = descriptors['currentTokenHash']!.value;
+  const rawPreviousHash = descriptors['previousTokenHash']!.value;
+  const rawPrevValidUntil = descriptors['previousTokenValidUntil']!.value;
+  const createdAt = descriptors['createdAt']!.value;
+  const lastSeenAt = descriptors['lastSeenAt']!.value;
+  const idleExpiresAt = descriptors['idleExpiresAt']!.value;
+  const absoluteExpiresAt = descriptors['absoluteExpiresAt']!.value;
+  const rotatedAt = descriptors['rotatedAt']!.value;
+  const revokedAt = descriptors['revokedAt']!.value;
+  const revocationReason = descriptors['revocationReason']!.value;
+  const version = descriptors['version']!.value;
 
   if (
     typeof id !== 'string' ||
+    !isValidUuidV7(id) ||
     typeof userId !== 'string' ||
+    !isValidUuidV7(userId) ||
     typeof createdAt !== 'string' ||
+    !isValidIsoTimestamp(createdAt) ||
     typeof lastSeenAt !== 'string' ||
+    !isValidIsoTimestamp(lastSeenAt) ||
     typeof idleExpiresAt !== 'string' ||
+    !isValidIsoTimestamp(idleExpiresAt) ||
     typeof absoluteExpiresAt !== 'string' ||
+    !isValidIsoTimestamp(absoluteExpiresAt) ||
     typeof rotatedAt !== 'string' ||
+    !isValidIsoTimestamp(rotatedAt) ||
     typeof version !== 'number' ||
     !Number.isSafeInteger(version) ||
     version < 1
   ) {
     return null;
   }
-  if (revokedAt !== null && typeof revokedAt !== 'string') return null;
-  if (revocationReason !== null && typeof revocationReason !== 'string') return null;
-  if (rawPrevValidUntil !== null && typeof rawPrevValidUntil !== 'string') return null;
 
-  let currentTokenHash: Uint8Array | null = null;
-  if (rawCurrentHash !== null) {
-    currentTokenHash = copyBytes(rawCurrentHash);
-    if (!currentTokenHash || currentTokenHash.length !== 32) return null;
+  if (revokedAt !== null && (typeof revokedAt !== 'string' || !isValidIsoTimestamp(revokedAt))) {
+    return null;
+  }
+  if (
+    revocationReason !== null &&
+    (typeof revocationReason !== 'string' || !ALLOWED_REVOCATION_REASONS.has(revocationReason))
+  ) {
+    return null;
+  }
+  if (
+    rawPrevValidUntil !== null &&
+    (typeof rawPrevValidUntil !== 'string' || !isValidIsoTimestamp(rawPrevValidUntil))
+  ) {
+    return null;
+  }
+
+  // Active authenticatable candidate must have null revocation fields
+  if (revokedAt !== null || revocationReason !== null) {
+    return null;
+  }
+
+  const currentTokenHash = copyBytes(rawCurrentHash);
+  if (!currentTokenHash || currentTokenHash.length !== 32) {
+    return null;
   }
 
   let previousTokenHash: Uint8Array | null = null;
   if (rawPreviousHash !== null) {
     previousTokenHash = copyBytes(rawPreviousHash);
-    if (!previousTokenHash || previousTokenHash.length !== 32) return null;
+    if (!previousTokenHash || previousTokenHash.length !== 32) {
+      return null;
+    }
+  }
+
+  // Previous hash and previous valid until must be both null or both non-null
+  if (
+    (previousTokenHash === null && rawPrevValidUntil !== null) ||
+    (previousTokenHash !== null && rawPrevValidUntil === null)
+  ) {
+    return null;
+  }
+
+  // Current and previous hashes must differ
+  if (previousTokenHash !== null && bytesEqual(currentTokenHash, previousTokenHash)) {
+    return null;
+  }
+
+  // Timestamp ordering invariants from spec Section 3.2:
+  // createdAt <= lastSeenAt
+  // createdAt <= rotatedAt
+  // createdAt <= idleExpiresAt
+  // createdAt <= absoluteExpiresAt
+  if (
+    createdAt > lastSeenAt ||
+    createdAt > rotatedAt ||
+    createdAt > idleExpiresAt ||
+    createdAt > absoluteExpiresAt
+  ) {
+    return null;
+  }
+
+  // idleExpiresAt <= absoluteExpiresAt (if not already past absolute expiry)
+  if (idleExpiresAt > absoluteExpiresAt) {
+    if (!nowIso || nowIso < absoluteExpiresAt) {
+      return null;
+    }
+  }
+
+  // When previous-token fields present: rotatedAt <= previousTokenValidUntil <= absoluteExpiresAt
+  if (rawPrevValidUntil !== null) {
+    if (rotatedAt > rawPrevValidUntil || rawPrevValidUntil > absoluteExpiresAt) {
+      return null;
+    }
   }
 
   return Object.freeze({
@@ -117,14 +208,14 @@ export function extractSingleCandidate(candidates: unknown): SessionSnapshotDTO 
     userId,
     currentTokenHash,
     previousTokenHash,
-    previousTokenValidUntil: (rawPrevValidUntil as string | null) ?? null,
+    previousTokenValidUntil: rawPrevValidUntil as string | null,
     createdAt,
     lastSeenAt,
     idleExpiresAt,
     absoluteExpiresAt,
     rotatedAt,
-    revokedAt: (revokedAt as string | null) ?? null,
-    revocationReason: (revocationReason as string | null) ?? null,
+    revokedAt: null,
+    revocationReason: null,
     version,
   });
 }
@@ -158,36 +249,65 @@ export function safeExtractUser(user: unknown): UserSnapshot | null {
       return null;
     }
   }
-  const statusDesc = Object.getOwnPropertyDescriptor(user, 'status');
-  if (
-    !statusDesc ||
-    statusDesc.get !== undefined ||
-    statusDesc.set !== undefined ||
-    statusDesc.value !== 'active'
-  ) {
-    return null;
-  }
-  for (const prop of ['id', 'identityProvider', 'identitySubject', 'createdAt', 'updatedAt']) {
-    const d = Object.getOwnPropertyDescriptor(user, prop);
-    if (!d || d.get !== undefined || d.set !== undefined || typeof d.value !== 'string') {
+
+  const descriptors: Record<string, PropertyDescriptor | undefined> = Object.create(null);
+  for (const k of ALLOWED_USER_KEYS) {
+    const d = Object.getOwnPropertyDescriptor(user, k);
+    if (!d || d.get !== undefined || d.set !== undefined) {
       return null;
     }
+    descriptors[k] = d;
   }
-  for (const prop of ['email', 'displayName']) {
-    const d = Object.getOwnPropertyDescriptor(user, prop);
-    if (!d || d.get !== undefined || d.set !== undefined) return null;
-    if (d.value !== null && typeof d.value !== 'string') return null;
-  }
-  const vDesc = Object.getOwnPropertyDescriptor(user, 'version');
+
+  const id = descriptors['id']!.value;
+  const identityProvider = descriptors['identityProvider']!.value;
+  const identitySubject = descriptors['identitySubject']!.value;
+  const email = descriptors['email']!.value;
+  const displayName = descriptors['displayName']!.value;
+  const status = descriptors['status']!.value;
+  const createdAt = descriptors['createdAt']!.value;
+  const updatedAt = descriptors['updatedAt']!.value;
+  const version = descriptors['version']!.value;
+
   if (
-    !vDesc ||
-    vDesc.get !== undefined ||
-    vDesc.set !== undefined ||
-    typeof vDesc.value !== 'number' ||
-    !Number.isSafeInteger(vDesc.value) ||
-    vDesc.value < 1
+    typeof id !== 'string' ||
+    !isValidUuidV7(id) ||
+    typeof identityProvider !== 'string' ||
+    identityProvider.length === 0 ||
+    identityProvider.trim() !== identityProvider ||
+    typeof identitySubject !== 'string' ||
+    identitySubject.length === 0 ||
+    identitySubject.trim() !== identitySubject ||
+    status !== 'active' ||
+    typeof createdAt !== 'string' ||
+    !isValidIsoTimestamp(createdAt) ||
+    typeof updatedAt !== 'string' ||
+    !isValidIsoTimestamp(updatedAt) ||
+    createdAt > updatedAt ||
+    typeof version !== 'number' ||
+    !Number.isSafeInteger(version) ||
+    version < 1
   ) {
     return null;
   }
-  return user as UserSnapshot;
+
+  if (email !== null && typeof email !== 'string') {
+    return null;
+  }
+  if (displayName !== null && typeof displayName !== 'string') {
+    return null;
+  }
+
+  // MUST return a newly allocated frozen plain object populated only from validated descriptors
+  return Object.freeze({
+    id,
+    identityProvider,
+    identitySubject,
+    email,
+    displayName,
+    status,
+    createdAt,
+    updatedAt,
+    version,
+  }) as UserSnapshot;
 }

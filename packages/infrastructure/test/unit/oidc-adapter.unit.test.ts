@@ -1,9 +1,6 @@
 import crypto from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import {
-  OidcCallbackInvalidError,
-  OidcProviderUnavailableError,
-} from '@affiliate-content-os/application';
+import { OidcProviderUnavailableError } from '@affiliate-content-os/application';
 import { discoverOidcAdapter } from '../../src/auth/oidc-adapter.js';
 import { createTestOidcIssuer, type TestOidcIssuer } from '../helpers/test-oidc-issuer.js';
 
@@ -80,16 +77,19 @@ describe('packages/infrastructure - OIDC Protocol Adapter', () => {
       allowInsecureRequests: true,
     });
 
-    const claims = await adapter.exchangeCodeAndValidateIdToken({
+    const result = await adapter.exchangeCodeAndValidateIdToken({
       code,
       pkceVerifier: verifier,
       nonce: 'test-nonce',
     });
 
-    expect(claims.issuer).toBe(issuer.issuerUrl);
-    expect(claims.subject).toBe('test-subject-001');
-    expect(claims.email).toBe('user@example.com');
-    expect(claims.displayName).toBe('Test OIDC User');
+    expect(result.status).toBe('verified');
+    if (result.status === 'verified') {
+      expect(result.claims.issuer).toBe(issuer.issuerUrl);
+      expect(result.claims.subject).toBe('test-subject-001');
+      expect(result.claims.email).toBe('user@example.com');
+      expect(result.claims.displayName).toBe('Test OIDC User');
+    }
   });
 
   it('passes null email when email_verified is false', async () => {
@@ -108,14 +108,17 @@ describe('packages/infrastructure - OIDC Protocol Adapter', () => {
       allowInsecureRequests: true,
     });
 
-    const claims = await adapter.exchangeCodeAndValidateIdToken({
+    const result = await adapter.exchangeCodeAndValidateIdToken({
       code,
       pkceVerifier: verifier,
       nonce: 'test-nonce',
     });
 
-    expect(claims.email).toBeNull();
-    expect(claims.subject).toBe('test-subject-001');
+    expect(result.status).toBe('verified');
+    if (result.status === 'verified') {
+      expect(result.claims.email).toBeNull();
+      expect(result.claims.subject).toBe('test-subject-001');
+    }
 
     // Reset claims
     issuer.setTokenClaims({});
@@ -137,19 +140,19 @@ describe('packages/infrastructure - OIDC Protocol Adapter', () => {
       allowInsecureRequests: true,
     });
 
-    await expect(
-      adapter.exchangeCodeAndValidateIdToken({
-        code,
-        pkceVerifier: verifier,
-        nonce: 'test-nonce',
-      }),
-    ).rejects.toThrow(OidcCallbackInvalidError);
+    const result = await adapter.exchangeCodeAndValidateIdToken({
+      code,
+      pkceVerifier: verifier,
+      nonce: 'test-nonce',
+    });
+
+    expect(result).toEqual({ status: 'invalid' });
 
     // Reset claims
     issuer.setTokenClaims({});
   });
 
-  it('translates upstream token endpoint 500 error to OidcProviderUnavailableError', async () => {
+  it('translates upstream token endpoint 500 error to status: unavailable', async () => {
     issuer.setFailNextTokenRequest(true);
 
     const adapter = await discoverOidcAdapter({
@@ -160,13 +163,13 @@ describe('packages/infrastructure - OIDC Protocol Adapter', () => {
       allowInsecureRequests: true,
     });
 
-    await expect(
-      adapter.exchangeCodeAndValidateIdToken({
-        code: 'any-code',
-        pkceVerifier: 'any-verifier',
-        nonce: 'any-nonce',
-      }),
-    ).rejects.toThrow(OidcProviderUnavailableError);
+    const result = await adapter.exchangeCodeAndValidateIdToken({
+      code: 'any-code',
+      pkceVerifier: 'any-verifier',
+      nonce: 'any-nonce',
+    });
+
+    expect(result).toEqual({ status: 'unavailable' });
   });
 
   it('fails discovery with OidcProviderUnavailableError when issuer is unreachable', async () => {

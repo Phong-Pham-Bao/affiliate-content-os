@@ -32,7 +32,7 @@ describe('packages/infrastructure/auth/postgres-auth-adapters', () => {
   describe('PostgresLoginTransactionAdapter', () => {
     it('executes parameterized INSERT with exact column order', async () => {
       const { database, query } = createMockDatabase();
-      query.mockResolvedValueOnce({ rows: [], rowCount: 1 });
+      query.mockResolvedValueOnce({ rows: [], rowCount: 1, command: 'INSERT' });
       const adapter = createPostgresLoginTransactionAdapter(database);
 
       await adapter.createLoginTransaction({
@@ -68,6 +68,7 @@ describe('packages/infrastructure/auth/postgres-auth-adapters', () => {
     it('consumes transaction atomically via locking CTE and maps result', async () => {
       const { database, query } = createMockDatabase();
       query.mockResolvedValueOnce({
+        command: 'SELECT',
         rowCount: 1,
         rows: [
           {
@@ -105,7 +106,7 @@ describe('packages/infrastructure/auth/postgres-auth-adapters', () => {
 
     it('returns null when no pending transaction matches', async () => {
       const { database, query } = createMockDatabase();
-      query.mockResolvedValueOnce({ rowCount: 0, rows: [] });
+      query.mockResolvedValueOnce({ rowCount: 0, rows: [], command: 'SELECT' });
       const adapter = createPostgresLoginTransactionAdapter(database);
 
       const result = await adapter.consumeLoginTransaction({
@@ -119,6 +120,7 @@ describe('packages/infrastructure/auth/postgres-auth-adapters', () => {
     it('fails closed when duplicate rows are returned', async () => {
       const { database, query } = createMockDatabase();
       query.mockResolvedValueOnce({
+        command: 'SELECT',
         rowCount: 2,
         rows: [{}, {}],
       } as unknown as DatabaseQueryResult<unknown>);
@@ -137,7 +139,7 @@ describe('packages/infrastructure/auth/postgres-auth-adapters', () => {
   describe('PostgresSessionAdapter', () => {
     it('creates active session with parameterized SQL', async () => {
       const { database, query } = createMockDatabase();
-      query.mockResolvedValueOnce({ rows: [], rowCount: 1 });
+      query.mockResolvedValueOnce({ rows: [], rowCount: 1, command: 'INSERT' });
       const adapter = createPostgresSessionAdapter(database);
 
       await adapter.createSession({
@@ -169,6 +171,7 @@ describe('packages/infrastructure/auth/postgres-auth-adapters', () => {
     it('finds candidate sessions by current or valid previous hash', async () => {
       const { database, query } = createMockDatabase();
       query.mockResolvedValueOnce({
+        command: 'SELECT',
         rowCount: 1,
         rows: [
           {
@@ -203,7 +206,7 @@ describe('packages/infrastructure/auth/postgres-auth-adapters', () => {
 
     it('rotates session and increments version', async () => {
       const { database, query } = createMockDatabase();
-      query.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+      query.mockResolvedValueOnce({ rowCount: 1, rows: [], command: 'UPDATE' });
       const adapter = createPostgresSessionAdapter(database);
 
       const newHash = new Uint8Array(32).fill(9);
@@ -228,7 +231,7 @@ describe('packages/infrastructure/auth/postgres-auth-adapters', () => {
 
     it('throws DatabaseError when rotation encounters version mismatch (concurrency conflict)', async () => {
       const { database, query } = createMockDatabase();
-      query.mockResolvedValueOnce({ rowCount: 0, rows: [] });
+      query.mockResolvedValueOnce({ rowCount: 0, rows: [], command: 'UPDATE' });
       const adapter = createPostgresSessionAdapter(database);
 
       await expect(
@@ -247,7 +250,7 @@ describe('packages/infrastructure/auth/postgres-auth-adapters', () => {
 
     it('touches session and updates idle expiry', async () => {
       const { database, query } = createMockDatabase();
-      query.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+      query.mockResolvedValueOnce({ rowCount: 1, rows: [], command: 'UPDATE' });
       const adapter = createPostgresSessionAdapter(database);
 
       await adapter.touchSession({
@@ -265,7 +268,7 @@ describe('packages/infrastructure/auth/postgres-auth-adapters', () => {
 
     it('revokes session and scrubs token hashes', async () => {
       const { database, query } = createMockDatabase();
-      query.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+      query.mockResolvedValueOnce({ rowCount: 1, rows: [], command: 'UPDATE' });
       const adapter = createPostgresSessionAdapter(database);
 
       await adapter.revokeSession({
@@ -287,6 +290,7 @@ describe('packages/infrastructure/auth/postgres-auth-adapters', () => {
     it('queries active memberships and workspaces with LIMIT 101 and stable order', async () => {
       const { database, query } = createMockDatabase();
       query.mockResolvedValueOnce({
+        command: 'SELECT',
         rowCount: 1,
         rows: [
           {
@@ -326,6 +330,7 @@ describe('packages/infrastructure/auth/postgres-auth-adapters', () => {
         role: 'editor',
       }));
       query.mockResolvedValueOnce({
+        command: 'SELECT',
         rowCount: 101,
         rows: mockRows,
       } as unknown as DatabaseQueryResult<unknown>);

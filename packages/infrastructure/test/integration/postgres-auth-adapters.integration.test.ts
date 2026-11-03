@@ -80,6 +80,8 @@ describe('Real PostgreSQL Auth Adapters Concurrency & Lifecycle Integration', ()
     expect(winner).not.toBeNull();
     expect(loser).toBeNull();
     expect(winner!.id).toBe(txId);
+    expect(winner!.createdAt).toBe(now);
+    expect(winner!.expiresAt).toBe(expires);
     expect(winner!.secretsCiphertext).toEqual(cipher);
     expect(winner!.secretsIv).toEqual(iv);
     expect(winner!.secretsAuthTag).toEqual(tag);

@@ -26,5 +26,5 @@ export interface CompleteOidcLoginDependencies {
 export interface CompleteOidcLoginResult {
   readonly sessionToken: string;
   readonly returnTo: string;
-  readonly absoluteExpiresAt: Date;
+  readonly absoluteExpiresAt: string;
 }

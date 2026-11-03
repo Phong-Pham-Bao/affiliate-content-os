@@ -1,9 +1,8 @@
 import * as client from 'openid-client';
 import {
-  OidcCallbackInvalidError,
   OidcProviderUnavailableError,
+  type OidcExchangeResult,
   type OidcProtocolPort,
-  type VerifiedOidcClaimsDTO,
 } from '@affiliate-content-os/application';
 
 export interface OidcAdapterConfig {
@@ -40,7 +39,7 @@ export class OidcProtocolAdapter implements OidcProtocolPort {
     readonly code: string;
     readonly pkceVerifier: string;
     readonly nonce: string;
-  }): Promise<VerifiedOidcClaimsDTO> {
+  }): Promise<OidcExchangeResult> {
     const callbackUrl = new URL(this.adapterConfig.redirectUri);
     callbackUrl.searchParams.set('code', params.code);
 
@@ -51,42 +50,23 @@ export class OidcProtocolAdapter implements OidcProtocolPort {
         expectedNonce: params.nonce,
         expectedState: client.skipStateCheck,
       });
-    } catch (err) {
-      if (err instanceof client.ResponseBodyError) {
-        if (
-          err.status >= 500 ||
-          err.error === 'server_error' ||
-          err.error === 'temporarily_unavailable'
-        ) {
-          throw new OidcProviderUnavailableError();
-        }
-        throw new OidcCallbackInvalidError();
-      }
-      if (err instanceof client.ClientError) {
-        if (err.cause instanceof Response && err.cause.status >= 500) {
-          throw new OidcProviderUnavailableError();
-        }
-        throw new OidcCallbackInvalidError();
-      }
-      if (err instanceof client.AuthorizationResponseError) {
-        throw new OidcCallbackInvalidError();
-      }
-      throw new OidcProviderUnavailableError();
-    }
-
-    let claims;
-    try {
-      claims = tokens.claims();
     } catch {
-      throw new OidcCallbackInvalidError();
+      return Object.freeze({ status: 'unavailable' });
     }
 
-    if (!claims || typeof claims !== 'object') {
-      throw new OidcCallbackInvalidError();
+    let claims: Record<string, unknown>;
+    try {
+      const raw = tokens.claims();
+      if (!raw || typeof raw !== 'object') {
+        return Object.freeze({ status: 'invalid' });
+      }
+      claims = raw as Record<string, unknown>;
+    } catch {
+      return Object.freeze({ status: 'invalid' });
     }
 
     if (claims.iss !== this.adapterConfig.issuer) {
-      throw new OidcCallbackInvalidError();
+      return Object.freeze({ status: 'invalid' });
     }
 
     if (
@@ -94,7 +74,7 @@ export class OidcProtocolAdapter implements OidcProtocolPort {
       claims.sub.trim() === '' ||
       claims.sub !== claims.sub.trim()
     ) {
-      throw new OidcCallbackInvalidError();
+      return Object.freeze({ status: 'invalid' });
     }
 
     const email =
@@ -104,10 +84,13 @@ export class OidcProtocolAdapter implements OidcProtocolPort {
       typeof claims.name === 'string' && claims.name.trim() !== '' ? claims.name : null;
 
     return Object.freeze({
-      issuer: claims.iss,
-      subject: claims.sub,
-      email,
-      displayName,
+      status: 'verified',
+      claims: Object.freeze({
+        issuer: claims.iss as string,
+        subject: claims.sub,
+        email,
+        displayName,
+      }),
     });
   }
 }

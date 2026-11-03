@@ -1,4 +1,5 @@
 import util from 'node:util';
+import { isValidIsoTimestamp, isValidUuidV7 } from '@affiliate-content-os/domain';
 import { AuthenticationRequiredError } from './errors.js';
 import type { AuthenticatedSessionContext } from './authenticate-session.js';
 import type { WorkspaceSummaryItemDTO, WorkspaceSummaryPort } from './ports.js';
@@ -34,23 +35,6 @@ function isProxySafe(value: unknown): boolean {
   }
 }
 
-function getOwnData(obj: object, prop: string): unknown {
-  const desc = Object.getOwnPropertyDescriptor(obj, prop);
-  if (!desc || desc.get !== undefined || desc.set !== undefined) {
-    return undefined;
-  }
-  return desc.value;
-}
-
-function validateClosedKeys(obj: object, allowed: Set<string>): void {
-  const keys = Reflect.ownKeys(obj);
-  for (const k of keys) {
-    if (typeof k !== 'string' || !allowed.has(k)) {
-      throw new AuthenticationRequiredError();
-    }
-  }
-}
-
 const ALLOWED_CTX_KEYS = new Set(['user', 'session', 'rotatedToken']);
 const ALLOWED_USER_KEYS = new Set([
   'id',
@@ -66,6 +50,8 @@ const ALLOWED_USER_KEYS = new Set([
 const ALLOWED_SESS_KEYS = new Set(['id', 'userId', 'idleExpiresAt', 'absoluteExpiresAt']);
 const ALLOWED_SUMMARIES_KEYS = new Set(['items', 'hasMore']);
 const ALLOWED_ITEM_KEYS = new Set(['id', 'name', 'slug', 'timezone', 'role']);
+const SLUG_REGEX = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+const ROTATED_TOKEN_REGEX = /^[A-Za-z0-9_-]{43}$/;
 
 export async function getCurrentUser(
   context: AuthenticatedSessionContext,
@@ -78,9 +64,44 @@ export async function getCurrentUser(
   if (ctxProto !== Object.prototype && ctxProto !== null) {
     throw new AuthenticationRequiredError();
   }
-  validateClosedKeys(context, ALLOWED_CTX_KEYS);
 
-  const rawUser = getOwnData(context, 'user');
+  const ctxKeys = Reflect.ownKeys(context);
+  if (ctxKeys.length !== ALLOWED_CTX_KEYS.size) {
+    throw new AuthenticationRequiredError();
+  }
+  for (const k of ctxKeys) {
+    if (typeof k !== 'string' || !ALLOWED_CTX_KEYS.has(k)) {
+      throw new AuthenticationRequiredError();
+    }
+  }
+
+  const ctxUserDesc = Object.getOwnPropertyDescriptor(context, 'user');
+  const ctxSessDesc = Object.getOwnPropertyDescriptor(context, 'session');
+  const ctxRotatedDesc = Object.getOwnPropertyDescriptor(context, 'rotatedToken');
+
+  if (
+    !ctxUserDesc ||
+    ctxUserDesc.get !== undefined ||
+    ctxUserDesc.set !== undefined ||
+    !ctxSessDesc ||
+    ctxSessDesc.get !== undefined ||
+    ctxSessDesc.set !== undefined ||
+    !ctxRotatedDesc ||
+    ctxRotatedDesc.get !== undefined ||
+    ctxRotatedDesc.set !== undefined
+  ) {
+    throw new AuthenticationRequiredError();
+  }
+
+  const rotatedToken = ctxRotatedDesc.value;
+  if (
+    rotatedToken !== null &&
+    (typeof rotatedToken !== 'string' || !ROTATED_TOKEN_REGEX.test(rotatedToken))
+  ) {
+    throw new AuthenticationRequiredError();
+  }
+
+  const rawUser = ctxUserDesc.value;
   if (typeof rawUser !== 'object' || rawUser === null || isProxySafe(rawUser)) {
     throw new AuthenticationRequiredError();
   }
@@ -88,16 +109,40 @@ export async function getCurrentUser(
   if (userProto !== Object.prototype && userProto !== null) {
     throw new AuthenticationRequiredError();
   }
-  validateClosedKeys(rawUser, ALLOWED_USER_KEYS);
 
-  const userId = getOwnData(rawUser, 'id');
-  const userEmail = getOwnData(rawUser, 'email');
-  const userDisplayName = getOwnData(rawUser, 'displayName');
-  if (typeof userId !== 'string') {
+  const userKeys = Reflect.ownKeys(rawUser);
+  if (userKeys.length !== ALLOWED_USER_KEYS.size) {
+    throw new AuthenticationRequiredError();
+  }
+  for (const k of userKeys) {
+    if (typeof k !== 'string' || !ALLOWED_USER_KEYS.has(k)) {
+      throw new AuthenticationRequiredError();
+    }
+  }
+
+  const userDescriptors: Record<string, PropertyDescriptor | undefined> = Object.create(null);
+  for (const k of ALLOWED_USER_KEYS) {
+    const d = Object.getOwnPropertyDescriptor(rawUser, k);
+    if (!d || d.get !== undefined || d.set !== undefined) {
+      throw new AuthenticationRequiredError();
+    }
+    userDescriptors[k] = d;
+  }
+
+  const userId = userDescriptors['id']!.value;
+  const userEmail = userDescriptors['email']!.value;
+  const userDisplayName = userDescriptors['displayName']!.value;
+
+  if (
+    typeof userId !== 'string' ||
+    !isValidUuidV7(userId) ||
+    (userEmail !== null && typeof userEmail !== 'string') ||
+    (userDisplayName !== null && typeof userDisplayName !== 'string')
+  ) {
     throw new AuthenticationRequiredError();
   }
 
-  const rawSession = getOwnData(context, 'session');
+  const rawSession = ctxSessDesc.value;
   if (typeof rawSession !== 'object' || rawSession === null || isProxySafe(rawSession)) {
     throw new AuthenticationRequiredError();
   }
@@ -105,11 +150,43 @@ export async function getCurrentUser(
   if (sessProto !== Object.prototype && sessProto !== null) {
     throw new AuthenticationRequiredError();
   }
-  validateClosedKeys(rawSession, ALLOWED_SESS_KEYS);
 
-  const idleExpiresAt = getOwnData(rawSession, 'idleExpiresAt');
-  const absoluteExpiresAt = getOwnData(rawSession, 'absoluteExpiresAt');
-  if (typeof idleExpiresAt !== 'string' || typeof absoluteExpiresAt !== 'string') {
+  const sessKeys = Reflect.ownKeys(rawSession);
+  if (sessKeys.length !== ALLOWED_SESS_KEYS.size) {
+    throw new AuthenticationRequiredError();
+  }
+  for (const k of sessKeys) {
+    if (typeof k !== 'string' || !ALLOWED_SESS_KEYS.has(k)) {
+      throw new AuthenticationRequiredError();
+    }
+  }
+
+  const sessDescriptors: Record<string, PropertyDescriptor | undefined> = Object.create(null);
+  for (const k of ALLOWED_SESS_KEYS) {
+    const d = Object.getOwnPropertyDescriptor(rawSession, k);
+    if (!d || d.get !== undefined || d.set !== undefined) {
+      throw new AuthenticationRequiredError();
+    }
+    sessDescriptors[k] = d;
+  }
+
+  const sessId = sessDescriptors['id']!.value;
+  const sessUserId = sessDescriptors['userId']!.value;
+  const idleExpiresAt = sessDescriptors['idleExpiresAt']!.value;
+  const absoluteExpiresAt = sessDescriptors['absoluteExpiresAt']!.value;
+
+  if (
+    typeof sessId !== 'string' ||
+    !isValidUuidV7(sessId) ||
+    typeof sessUserId !== 'string' ||
+    !isValidUuidV7(sessUserId) ||
+    sessUserId !== userId ||
+    typeof idleExpiresAt !== 'string' ||
+    !isValidIsoTimestamp(idleExpiresAt) ||
+    typeof absoluteExpiresAt !== 'string' ||
+    !isValidIsoTimestamp(absoluteExpiresAt) ||
+    idleExpiresAt > absoluteExpiresAt
+  ) {
     throw new AuthenticationRequiredError();
   }
 
@@ -121,14 +198,39 @@ export async function getCurrentUser(
   if (sumProto !== Object.prototype && sumProto !== null) {
     throw new AuthenticationRequiredError();
   }
-  validateClosedKeys(rawSummaries, ALLOWED_SUMMARIES_KEYS);
 
-  const hasMore = getOwnData(rawSummaries, 'hasMore');
-  const rawItems = getOwnData(rawSummaries, 'items');
-  if (typeof hasMore !== 'boolean' || !Array.isArray(rawItems) || isProxySafe(rawItems)) {
+  const sumKeys = Reflect.ownKeys(rawSummaries);
+  if (sumKeys.length !== ALLOWED_SUMMARIES_KEYS.size) {
     throw new AuthenticationRequiredError();
   }
-  if (Object.getPrototypeOf(rawItems) !== Array.prototype) {
+  for (const k of sumKeys) {
+    if (typeof k !== 'string' || !ALLOWED_SUMMARIES_KEYS.has(k)) {
+      throw new AuthenticationRequiredError();
+    }
+  }
+
+  const itemsDesc = Object.getOwnPropertyDescriptor(rawSummaries, 'items');
+  const hasMoreDesc = Object.getOwnPropertyDescriptor(rawSummaries, 'hasMore');
+  if (
+    !itemsDesc ||
+    itemsDesc.get !== undefined ||
+    itemsDesc.set !== undefined ||
+    !hasMoreDesc ||
+    hasMoreDesc.get !== undefined ||
+    hasMoreDesc.set !== undefined ||
+    typeof hasMoreDesc.value !== 'boolean'
+  ) {
+    throw new AuthenticationRequiredError();
+  }
+
+  const rawItems = itemsDesc.value;
+  if (
+    typeof rawItems !== 'object' ||
+    rawItems === null ||
+    isProxySafe(rawItems) ||
+    !Array.isArray(rawItems) ||
+    Object.getPrototypeOf(rawItems) !== Array.prototype
+  ) {
     throw new AuthenticationRequiredError();
   }
 
@@ -137,17 +239,30 @@ export async function getCurrentUser(
     !lenDesc ||
     lenDesc.get !== undefined ||
     lenDesc.set !== undefined ||
-    typeof lenDesc.value !== 'number'
+    typeof lenDesc.value !== 'number' ||
+    !Number.isSafeInteger(lenDesc.value) ||
+    lenDesc.value < 0 ||
+    lenDesc.value > 100
   ) {
     throw new AuthenticationRequiredError();
   }
+
+  const len = lenDesc.value;
   const itemKeys = Reflect.ownKeys(rawItems);
-  if (itemKeys.length !== lenDesc.value + 1) {
+  if (itemKeys.length !== len + 1) {
+    throw new AuthenticationRequiredError();
+  }
+  for (let i = 0; i < len; i++) {
+    if (itemKeys[i] !== String(i)) {
+      throw new AuthenticationRequiredError();
+    }
+  }
+  if (itemKeys[len] !== 'length') {
     throw new AuthenticationRequiredError();
   }
 
-  const items: WorkspaceSummaryItemDTO[] = [];
-  for (let i = 0; i < lenDesc.value; i++) {
+  const items: WorkspaceSummaryItemDTO[] = new Array(len);
+  for (let i = 0; i < len; i++) {
     const itemDesc = Object.getOwnPropertyDescriptor(rawItems, String(i));
     if (!itemDesc || itemDesc.get !== undefined || itemDesc.set !== undefined) {
       throw new AuthenticationRequiredError();
@@ -160,30 +275,71 @@ export async function getCurrentUser(
     if (itemProto !== Object.prototype && itemProto !== null) {
       throw new AuthenticationRequiredError();
     }
-    validateClosedKeys(item, ALLOWED_ITEM_KEYS);
 
-    const id = getOwnData(item, 'id');
-    const name = getOwnData(item, 'name');
-    const slug = getOwnData(item, 'slug');
-    const timezone = getOwnData(item, 'timezone');
-    const role = getOwnData(item, 'role');
+    const iKeys = Reflect.ownKeys(item);
+    if (iKeys.length !== ALLOWED_ITEM_KEYS.size) {
+      throw new AuthenticationRequiredError();
+    }
+    for (const k of iKeys) {
+      if (typeof k !== 'string' || !ALLOWED_ITEM_KEYS.has(k)) {
+        throw new AuthenticationRequiredError();
+      }
+    }
+
+    const idD = Object.getOwnPropertyDescriptor(item, 'id');
+    const nameD = Object.getOwnPropertyDescriptor(item, 'name');
+    const slugD = Object.getOwnPropertyDescriptor(item, 'slug');
+    const tzD = Object.getOwnPropertyDescriptor(item, 'timezone');
+    const roleD = Object.getOwnPropertyDescriptor(item, 'role');
+
+    if (
+      !idD ||
+      idD.get !== undefined ||
+      idD.set !== undefined ||
+      !nameD ||
+      nameD.get !== undefined ||
+      nameD.set !== undefined ||
+      !slugD ||
+      slugD.get !== undefined ||
+      slugD.set !== undefined ||
+      !tzD ||
+      tzD.get !== undefined ||
+      tzD.set !== undefined ||
+      !roleD ||
+      roleD.get !== undefined ||
+      roleD.set !== undefined
+    ) {
+      throw new AuthenticationRequiredError();
+    }
+
+    const id = idD.value;
+    const name = nameD.value;
+    const slug = slugD.value;
+    const timezone = tzD.value;
+    const role = roleD.value;
+
     if (
       typeof id !== 'string' ||
+      !isValidUuidV7(id) ||
       typeof name !== 'string' ||
+      name.length === 0 ||
       typeof slug !== 'string' ||
+      !SLUG_REGEX.test(slug) ||
       typeof timezone !== 'string' ||
+      timezone.length === 0 ||
       (role !== 'owner' && role !== 'editor' && role !== 'viewer')
     ) {
       throw new AuthenticationRequiredError();
     }
-    items.push(Object.freeze({ id, name, slug, timezone, role }));
+
+    items[i] = Object.freeze({ id, name, slug, timezone, role });
   }
 
   return Object.freeze({
     user: Object.freeze({
       id: userId,
-      email: typeof userEmail === 'string' ? userEmail : null,
-      displayName: typeof userDisplayName === 'string' ? userDisplayName : null,
+      email: userEmail,
+      displayName: userDisplayName,
     }),
     session: Object.freeze({
       idleExpiresAt,
@@ -191,7 +347,7 @@ export async function getCurrentUser(
     }),
     workspaceAccess: Object.freeze({
       items: Object.freeze(items),
-      hasMore,
+      hasMore: hasMoreDesc.value,
     }),
   });
 }

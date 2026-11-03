@@ -19,7 +19,7 @@ describe('packages/application - getCurrentUser', () => {
       version: 1,
     },
     session: {
-      id: 'session-123',
+      id: '0192b012-3456-789a-8bcd-ef0123456720',
       userId: sampleUserId,
       idleExpiresAt: '2026-11-02T12:30:00.000Z',
       absoluteExpiresAt: '2026-11-02T20:00:00.000Z',
@@ -32,7 +32,7 @@ describe('packages/application - getCurrentUser', () => {
       listActiveWorkspaceSummaries: vi.fn().mockResolvedValue({
         items: [
           {
-            id: 'ws-1',
+            id: '0192b012-3456-789a-8bcd-ef0123456730',
             name: 'Workspace Alpha',
             slug: 'workspace-alpha',
             timezone: 'Asia/Ho_Chi_Minh',

@@ -57,6 +57,18 @@ export interface VerifiedOidcClaimsDTO {
   readonly displayName: string | null;
 }
 
+export type OidcExchangeResult =
+  | {
+      readonly status: 'verified';
+      readonly claims: VerifiedOidcClaimsDTO;
+    }
+  | {
+      readonly status: 'invalid';
+    }
+  | {
+      readonly status: 'unavailable';
+    };
+
 export interface AuthCryptoPort {
   generateRandomToken(): string;
   hashToken(token: string): Uint8Array;
@@ -150,7 +162,7 @@ export interface OidcProtocolPort {
     readonly code: string;
     readonly pkceVerifier: string;
     readonly nonce: string;
-  }): Promise<VerifiedOidcClaimsDTO>;
+  }): Promise<OidcExchangeResult>;
 }
 
 export interface WorkspaceSummaryPort {

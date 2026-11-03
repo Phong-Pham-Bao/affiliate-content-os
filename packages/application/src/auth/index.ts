@@ -50,6 +50,7 @@ export type {
   EncryptedSecretsDTO,
   LoginSecretsPayloadDTO,
   LoginTransactionStorePort,
+  OidcExchangeResult,
   OidcProtocolPort,
   SessionSnapshotDTO,
   SessionStorePort,

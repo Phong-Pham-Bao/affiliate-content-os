@@ -71,10 +71,13 @@ describe('packages/application - completeOidcLogin', () => {
       oidc: {
         buildAuthorizationUrl: vi.fn(),
         exchangeCodeAndValidateIdToken: vi.fn().mockResolvedValue({
-          issuer: 'https://auth.example.com',
-          subject: 'sub-12345',
-          email: 'user@example.com',
-          displayName: 'Test User',
+          status: 'verified',
+          claims: {
+            issuer: 'https://auth.example.com',
+            subject: 'sub-12345',
+            email: 'user@example.com',
+            displayName: 'Test User',
+          },
         }),
       },
       identityResolution: {
@@ -208,7 +211,7 @@ describe('packages/application - completeOidcLogin', () => {
 
       expect(result.sessionToken).toBe('session-token-32-random-bytes-base64url-val');
       expect(result.returnTo).toBe('/dashboard');
-      expect(result.absoluteExpiresAt).toEqual(new Date('2026-11-02T20:00:00.000Z'));
+      expect(result.absoluteExpiresAt).toBe('2026-11-02T20:00:00.000Z');
 
       expect(fakes.transactionStore.consumePendingTransaction).toHaveBeenCalledTimes(1);
       expect(fakes.crypto.decryptSecrets).toHaveBeenCalledTimes(1);
@@ -220,10 +223,12 @@ describe('packages/application - completeOidcLogin', () => {
       expect(fakes.sessionStore.createSession).toHaveBeenCalledTimes(1);
     });
 
-    it('translates provider network failure to OidcProviderUnavailableError', async () => {
+    it('translates explicit provider unavailable status to OidcProviderUnavailableError', async () => {
       const fakes = createFakes();
-      (fakes.oidc.exchangeCodeAndValidateIdToken as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
-        new OidcProviderUnavailableError(),
+      (fakes.oidc.exchangeCodeAndValidateIdToken as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+        {
+          status: 'unavailable',
+        },
       );
 
       await expect(

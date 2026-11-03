@@ -130,7 +130,7 @@ describe('packages/application - beginOidcLogin', () => {
 
       expect(result.authorizationUrl).toBe('https://auth.example.com/oauth/authorize?state=1');
       expect(result.transactionCookieValue).toBe('browser-binding-raw-32-chars-base64url');
-      expect(result.expiresAt).toEqual(new Date('2026-11-02T12:10:00.000Z'));
+      expect(result.expiresAt).toBe('2026-11-02T12:10:00.000Z');
 
       expect(fakes.transactionStore.createPendingTransaction).toHaveBeenCalledTimes(1);
       const call = (fakes.transactionStore.createPendingTransaction as ReturnType<typeof vi.fn>)

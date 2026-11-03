@@ -13,6 +13,24 @@ describe('packages/infrastructure/auth/crypto', () => {
   const validKeyVersion = 'v1';
   const sampleTxId = '0192b012-3456-789a-8bcd-ef0123456789';
 
+  describe('CryptoOperationError', () => {
+    it('constructs with fixed message and rejects arguments without leaking them', () => {
+      const err = new CryptoOperationError();
+      expect(err.name).toBe('CryptoOperationError');
+      expect(err.message).toBe('Cryptographic operation failed');
+
+      type HostileCtor = new (...args: unknown[]) => CryptoOperationError;
+      const hostileErr = new (CryptoOperationError as unknown as HostileCtor)(
+        'SENTINEL_DISCLOSURE_TEXT',
+        { cause: 'SENTINEL_CAUSE' },
+      );
+      expect(hostileErr.message).toBe('Cryptographic operation failed');
+      expect((hostileErr as unknown as { cause?: unknown }).cause).toBeUndefined();
+      expect(String(hostileErr)).not.toContain('SENTINEL');
+      expect(JSON.stringify(hostileErr)).not.toContain('SENTINEL');
+    });
+  });
+
   describe('secure random bytes', () => {
     it('generates random bytes of requested length', () => {
       const bytes16 = generateSecureRandomBytes(16);

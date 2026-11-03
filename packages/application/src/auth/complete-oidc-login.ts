@@ -12,10 +12,11 @@ import type {
 import {
   parseCallbackQuery,
   snapshotConsumedTx,
+  snapshotExchangeResult,
   snapshotSecrets,
-  snapshotVerifiedClaims,
   validateTransactionCookie,
 } from './complete-oidc-login-snapshots.js';
+import { snapshotSafeClock } from './safe-clock.js';
 
 export type {
   CompleteOidcLoginCommand,
@@ -30,18 +31,28 @@ export async function completeOidcLogin(
   const parsed = parseCallbackQuery(command.query);
   const cookie = validateTransactionCookie(command.transactionCookie);
 
+  let clock;
+  try {
+    clock = snapshotSafeClock(deps.now);
+  } catch {
+    throw new OidcCallbackInvalidError();
+  }
+
   const stateHash = deps.crypto.hashToken(parsed.state);
   const cookieHash = deps.crypto.hashToken(cookie);
-  const currentInstant = deps.now();
 
   const rawConsumed = await deps.transactionStore.consumePendingTransaction({
     stateHash,
     browserBindingHash: cookieHash,
-    now: currentInstant.toISOString(),
+    now: clock.iso,
   });
 
   const consumedTx = snapshotConsumedTx(rawConsumed);
   if (!consumedTx) {
+    throw new OidcCallbackInvalidError();
+  }
+
+  if (consumedTx.createdAt > clock.iso || clock.iso >= consumedTx.expiresAt) {
     throw new OidcCallbackInvalidError();
   }
 
@@ -58,21 +69,31 @@ export async function completeOidcLogin(
     throw new OidcCallbackInvalidError();
   }
 
-  let claims;
+  let rawExchangeResult: unknown;
   try {
-    const rawClaims = await deps.oidc.exchangeCodeAndValidateIdToken({
+    rawExchangeResult = await deps.oidc.exchangeCodeAndValidateIdToken({
       code: parsed.code!,
       pkceVerifier: secrets.pkceVerifier,
       nonce: secrets.nonce,
     });
-    claims = snapshotVerifiedClaims(rawClaims);
-    if (!claims) throw new OidcCallbackInvalidError();
-  } catch (err) {
-    if (err instanceof OidcProviderUnavailableError) {
-      throw err;
-    }
+  } catch {
     throw new OidcCallbackInvalidError();
   }
+
+  const exchangeResult = snapshotExchangeResult(rawExchangeResult);
+  if (!exchangeResult) {
+    throw new OidcCallbackInvalidError();
+  }
+
+  if (exchangeResult.status === 'invalid') {
+    throw new OidcCallbackInvalidError();
+  }
+
+  if (exchangeResult.status === 'unavailable') {
+    throw new OidcProviderUnavailableError();
+  }
+
+  const claims = exchangeResult.claims;
 
   const plainClaims = Object.create(null);
   plainClaims.identityProvider = claims.issuer;
@@ -91,14 +112,11 @@ export async function completeOidcLogin(
   const sessionToken = deps.crypto.generateRandomToken();
   const sessionTokenHash = deps.crypto.hashToken(sessionToken);
 
-  const nowIso = currentInstant.toISOString();
-  const idleExpiresIso = new Date(
-    currentInstant.getTime() + deps.sessionIdleTtlSeconds * 1000,
+  const nowIso = clock.iso;
+  const idleExpiresIso = new Date(clock.epochMs + deps.sessionIdleTtlSeconds * 1000).toISOString();
+  const absoluteExpiresIso = new Date(
+    clock.epochMs + deps.sessionAbsoluteTtlSeconds * 1000,
   ).toISOString();
-  const absoluteExpiresAt = new Date(
-    currentInstant.getTime() + deps.sessionAbsoluteTtlSeconds * 1000,
-  );
-  const absoluteExpiresIso = absoluteExpiresAt.toISOString();
 
   await deps.sessionStore.createSession({
     id: sessionId,
@@ -114,6 +132,6 @@ export async function completeOidcLogin(
   return {
     sessionToken,
     returnTo: consumedTx.returnTo,
-    absoluteExpiresAt,
+    absoluteExpiresAt: absoluteExpiresIso,
   };
 }

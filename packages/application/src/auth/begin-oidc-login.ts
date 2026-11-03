@@ -1,5 +1,6 @@
 import { AuthPersistenceError, AuthRequestValidationError } from './errors.js';
 import type { AuthCryptoPort, LoginTransactionStorePort, OidcProtocolPort } from './ports.js';
+import { snapshotSafeClock } from './safe-clock.js';
 
 export interface BeginOidcLoginCommand {
   readonly returnTo?: unknown;
@@ -17,7 +18,7 @@ export interface BeginOidcLoginDependencies {
 export interface BeginOidcLoginResult {
   readonly authorizationUrl: string;
   readonly transactionCookieValue: string;
-  readonly expiresAt: Date;
+  readonly expiresAt: string;
 }
 
 export function validateReturnTo(raw: unknown): string {
@@ -132,8 +133,15 @@ export async function beginOidcLogin(
   const nonce = deps.crypto.generateNonce();
   const pkce = deps.crypto.generatePkce();
 
-  const currentInstant = deps.now();
-  const expiresInstant = new Date(currentInstant.getTime() + deps.transactionTtlSeconds * 1000);
+  let clock;
+  try {
+    clock = snapshotSafeClock(deps.now);
+  } catch {
+    throw new AuthPersistenceError('transaction');
+  }
+
+  const expiresMs = clock.epochMs + deps.transactionTtlSeconds * 1000;
+  const expiresIso = new Date(expiresMs).toISOString();
 
   const encryptedSecrets = deps.crypto.encryptSecrets(txId, {
     pkceVerifier: pkce.verifier,
@@ -147,8 +155,8 @@ export async function beginOidcLogin(
       browserBindingHash: browserBinding.hash,
       encryptedSecrets,
       returnTo,
-      createdAt: currentInstant.toISOString(),
-      expiresAt: expiresInstant.toISOString(),
+      createdAt: clock.iso,
+      expiresAt: expiresIso,
     });
   } catch {
     throw new AuthPersistenceError('transaction');
@@ -163,6 +171,6 @@ export async function beginOidcLogin(
   return Object.freeze({
     authorizationUrl,
     transactionCookieValue: browserBinding.raw,
-    expiresAt: expiresInstant,
+    expiresAt: expiresIso,
   });
 }

@@ -1,8 +1,8 @@
 import type { UserSnapshot } from '@affiliate-content-os/domain';
 import type { Database } from '../database/index.js';
 import { DatabaseError } from '../database/errors.js';
-import { mapUserRow } from '../tenancy/mappers.js';
-import { mapSessionRow, isProxySafe } from './mappers.js';
+import { mapUserRow, type RawUserRow } from '../tenancy/mappers.js';
+import { mapSessionRow, type ApplicationSessionRow } from './mappers.js';
 import {
   INSERT_SESSION_SQL,
   FIND_CANDIDATE_SESSIONS_SQL,
@@ -12,6 +12,10 @@ import {
   REVOKE_MATCHING_BY_HASH_SQL,
   FIND_USER_BY_ID_SQL,
 } from './postgres-session-statements.js';
+import {
+  validateDatabaseQueryResult,
+  validateGenuineRowsArray,
+} from './postgres-result-validator.js';
 import type {
   ApplicationSessionInsert,
   PostgresSessionAdapter,
@@ -44,60 +48,42 @@ function createAdapterForRunner(runner: QueryRunner): PostgresSessionAdapter {
     async findCandidateSessions(
       c: { tokenHash: Uint8Array; now: string },
       overrideRunner?: QueryRunner,
-    ) {
+    ): Promise<readonly ApplicationSessionRow[]> {
       const q = overrideRunner ?? runner;
       const params = [Buffer.from(c.tokenHash), c.now];
       const result = await q.query(FIND_CANDIDATE_SESSIONS_SQL, params);
-      const rawRows = result.rows;
-      if (
-        typeof rawRows !== 'object' ||
-        rawRows === null ||
-        isProxySafe(rawRows) ||
-        !Array.isArray(rawRows)
-      ) {
-        throw new DatabaseError('Database result rows must be an array');
+
+      const validated = validateDatabaseQueryResult(result, 'SELECT');
+      const rows = validateGenuineRowsArray(validated.rows, 0, 2);
+      if (validated.rowCount !== rows.length) {
+        throw new DatabaseError('Database query result validation failed');
       }
-      if (Object.getPrototypeOf(rawRows) !== Array.prototype) {
-        throw new DatabaseError('Database result rows must have Array.prototype');
+
+      const mapped: ApplicationSessionRow[] = new Array(rows.length);
+      for (let i = 0; i < rows.length; i++) {
+        mapped[i] = mapSessionRow(rows[i]);
       }
-      return Object.freeze(rawRows.map((r) => mapSessionRow(r)));
+      return Object.freeze(mapped);
     },
 
     async findUserById(userId: string, overrideRunner?: QueryRunner): Promise<UserSnapshot | null> {
       const q = overrideRunner ?? runner;
       const result = await q.query(FIND_USER_BY_ID_SQL, [userId]);
-      const rawRows = result.rows;
-      if (
-        typeof rawRows !== 'object' ||
-        rawRows === null ||
-        isProxySafe(rawRows) ||
-        !Array.isArray(rawRows)
-      ) {
-        throw new DatabaseError('Database result rows must be an array');
+
+      const validated = validateDatabaseQueryResult(result, 'SELECT');
+      const rows = validateGenuineRowsArray(validated.rows, 0, 2);
+      if (validated.rowCount !== rows.length) {
+        throw new DatabaseError('Database query result validation failed');
       }
-      if (Object.getPrototypeOf(rawRows) !== Array.prototype) {
-        throw new DatabaseError('Database result rows must have Array.prototype');
-      }
-      const lenDesc = Object.getOwnPropertyDescriptor(rawRows, 'length');
-      if (
-        !lenDesc ||
-        lenDesc.get !== undefined ||
-        lenDesc.set !== undefined ||
-        typeof lenDesc.value !== 'number'
-      ) {
-        throw new DatabaseError('Invalid result rows length');
-      }
-      if (lenDesc.value === 0) {
+
+      if (rows.length === 0) {
         return null;
       }
-      if (lenDesc.value > 1) {
+      if (rows.length > 1) {
         throw new DatabaseError('Unexpected duplicate user match');
       }
-      const desc0 = Object.getOwnPropertyDescriptor(rawRows, '0');
-      if (!desc0 || desc0.get !== undefined || desc0.set !== undefined) {
-        throw new DatabaseError('Invalid result row item');
-      }
-      return mapUserRow(desc0.value);
+
+      return mapUserRow(rows[0] as RawUserRow);
     },
 
     async rotateSession(
@@ -125,7 +111,9 @@ function createAdapterForRunner(runner: QueryRunner): PostgresSessionAdapter {
         c.currentVersion,
       ];
       const result = await q.query(ROTATE_SESSION_SQL, params);
-      if (result.rowCount !== 1) {
+      const validated = validateDatabaseQueryResult(result, 'UPDATE');
+      validateGenuineRowsArray(validated.rows, 0, 0);
+      if (validated.rowCount !== 1) {
         throw new DatabaseError('Session rotation concurrency conflict');
       }
     },
@@ -142,7 +130,9 @@ function createAdapterForRunner(runner: QueryRunner): PostgresSessionAdapter {
       const q = overrideRunner ?? runner;
       const params = [c.lastSeenAt, c.idleExpiresAt, c.sessionId, c.currentVersion];
       const result = await q.query(TOUCH_SESSION_SQL, params);
-      if (result.rowCount !== 1) {
+      const validated = validateDatabaseQueryResult(result, 'UPDATE');
+      validateGenuineRowsArray(validated.rows, 0, 0);
+      if (validated.rowCount !== 1) {
         throw new DatabaseError('Session touch concurrency conflict');
       }
     },
@@ -159,7 +149,9 @@ function createAdapterForRunner(runner: QueryRunner): PostgresSessionAdapter {
       const q = overrideRunner ?? runner;
       const params = [c.revokedAt, c.reason, c.sessionId, c.currentVersion];
       const result = await q.query(REVOKE_SESSION_SQL, params);
-      if (result.rowCount !== 1) {
+      const validated = validateDatabaseQueryResult(result, 'UPDATE');
+      validateGenuineRowsArray(validated.rows, 0, 0);
+      if (validated.rowCount !== 1) {
         throw new DatabaseError('Session revocation concurrency conflict');
       }
     },

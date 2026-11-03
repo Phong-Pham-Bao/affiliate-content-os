@@ -14,15 +14,16 @@ export interface LoginSecretsPayload {
 
 export class CryptoOperationError extends Error {
   public override readonly name = 'CryptoOperationError';
-  constructor(message = 'Cryptographic operation failed') {
-    super(message);
+  constructor();
+  constructor(..._args: unknown[]) {
+    super('Cryptographic operation failed');
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }
 
 export function generateSecureRandomBytes(byteCount: number): Uint8Array {
   if (!Number.isSafeInteger(byteCount) || byteCount <= 0 || byteCount > 1024) {
-    throw new CryptoOperationError('Invalid random byte count');
+    throw new CryptoOperationError();
   }
   const buf = randomBytes(byteCount);
   return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
@@ -37,14 +38,14 @@ export function fromCanonicalBase64Url(
   expectedByteLength?: number,
 ): Uint8Array {
   if (typeof base64urlStr !== 'string' || base64urlStr.includes('=')) {
-    throw new CryptoOperationError('Invalid base64url string');
+    throw new CryptoOperationError();
   }
   const buf = Buffer.from(base64urlStr, 'base64url');
   if (expectedByteLength !== undefined && buf.length !== expectedByteLength) {
-    throw new CryptoOperationError('Invalid base64url decoded length');
+    throw new CryptoOperationError();
   }
   if (buf.toString('base64url') !== base64urlStr) {
-    throw new CryptoOperationError('Non-canonical base64url encoding');
+    throw new CryptoOperationError();
   }
   return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
 }
@@ -70,7 +71,7 @@ export class LoginTransactionSecretsProtector {
 
   constructor(keyBase64Url: string, keyVersion: string) {
     if (typeof keyVersion !== 'string' || !/^[A-Za-z0-9._-]{1,64}$/.test(keyVersion)) {
-      throw new CryptoOperationError('Invalid key version format');
+      throw new CryptoOperationError();
     }
     const decoded = fromCanonicalBase64Url(keyBase64Url, 32);
     this.keyBytes = Buffer.from(decoded);
@@ -79,7 +80,7 @@ export class LoginTransactionSecretsProtector {
 
   public encrypt(transactionId: string, payload: LoginSecretsPayload): EncryptedLoginSecrets {
     if (typeof transactionId !== 'string' || transactionId.trim() === '') {
-      throw new CryptoOperationError('Invalid transaction ID');
+      throw new CryptoOperationError();
     }
     if (
       typeof payload?.pkceVerifier !== 'string' ||
@@ -87,7 +88,7 @@ export class LoginTransactionSecretsProtector {
       typeof payload?.nonce !== 'string' ||
       payload.nonce.length === 0
     ) {
-      throw new CryptoOperationError('Invalid secrets payload');
+      throw new CryptoOperationError();
     }
 
     try {
@@ -111,16 +112,16 @@ export class LoginTransactionSecretsProtector {
         keyVersion: this.keyVersion,
       };
     } catch {
-      throw new CryptoOperationError('Encryption failed');
+      throw new CryptoOperationError();
     }
   }
 
   public decrypt(transactionId: string, encrypted: EncryptedLoginSecrets): LoginSecretsPayload {
     if (encrypted.keyVersion !== this.keyVersion) {
-      throw new CryptoOperationError('Key version mismatch');
+      throw new CryptoOperationError();
     }
     if (encrypted.iv.length !== 12 || encrypted.authTag.length !== 16) {
-      throw new CryptoOperationError('Invalid IV or auth tag length');
+      throw new CryptoOperationError();
     }
 
     try {
@@ -150,7 +151,7 @@ export class LoginTransactionSecretsProtector {
         typeof parsed.pkceVerifier !== 'string' ||
         typeof parsed.nonce !== 'string'
       ) {
-        throw new CryptoOperationError('Malformed decrypted payload');
+        throw new CryptoOperationError();
       }
 
       return {
@@ -158,7 +159,7 @@ export class LoginTransactionSecretsProtector {
         nonce: parsed.nonce,
       };
     } catch {
-      throw new CryptoOperationError('Decryption failed');
+      throw new CryptoOperationError();
     }
   }
 }

@@ -1,4 +1,3 @@
-import { parseUserId } from '@affiliate-content-os/domain';
 import { AuthenticationRequiredError } from './errors.js';
 import type {
   AuthenticateSessionCommand,
@@ -11,6 +10,7 @@ import {
   safeExtractUser,
   validateSessionCookie,
 } from './authenticate-session-candidate.js';
+import { snapshotSafeClock } from './safe-clock.js';
 
 export type {
   AuthenticateSessionCommand,
@@ -24,9 +24,15 @@ export async function authenticateApplicationSession(
 ): Promise<AuthenticatedSessionContext> {
   const cookie = validateSessionCookie(command.sessionCookie);
   const tokenHash = deps.crypto.hashToken(cookie);
-  const currentInstant = deps.now();
-  const nowMs = currentInstant.getTime();
-  const nowIso = currentInstant.toISOString();
+
+  let clock;
+  try {
+    clock = snapshotSafeClock(deps.now);
+  } catch {
+    throw new AuthenticationRequiredError();
+  }
+  const nowMs = clock.epochMs;
+  const nowIso = clock.iso;
 
   type AuthOutcome =
     | { readonly status: 'unauthenticated' }
@@ -38,8 +44,8 @@ export async function authenticateApplicationSession(
       now: nowIso,
     });
 
-    const s = extractSingleCandidate(rawCandidates);
-    if (!s || s.revokedAt !== null) {
+    const s = extractSingleCandidate(rawCandidates, nowIso);
+    if (!s) {
       return { status: 'unauthenticated' };
     }
 
@@ -65,17 +71,9 @@ export async function authenticateApplicationSession(
       return { status: 'unauthenticated' };
     }
 
-    let parsedUserId;
-    try {
-      parsedUserId = parseUserId(s.userId);
-    } catch {
-      return { status: 'unauthenticated' };
-    }
-
-    const rawUser = await txStore.findUserById(parsedUserId);
-
+    const rawUser = await txStore.findUserById(s.userId);
     const user = safeExtractUser(rawUser);
-    if (!user) {
+    if (!user || user.id !== s.userId) {
       await txStore.revokeSession({
         sessionId: s.id,
         currentVersion: s.version,
@@ -139,16 +137,18 @@ export async function authenticateApplicationSession(
       }
     }
 
+    const sessionObj = Object.freeze({
+      id: s.id,
+      userId: s.userId,
+      idleExpiresAt: effectiveIdleExpiresAt,
+      absoluteExpiresAt: s.absoluteExpiresAt,
+    });
+
     return {
       status: 'authenticated',
       context: Object.freeze({
         user,
-        session: Object.freeze({
-          id: s.id,
-          userId: s.userId,
-          idleExpiresAt: effectiveIdleExpiresAt,
-          absoluteExpiresAt: s.absoluteExpiresAt,
-        }),
+        session: sessionObj,
         rotatedToken,
       }),
     };
