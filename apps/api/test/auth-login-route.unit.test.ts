@@ -60,6 +60,10 @@ describe('GET /auth/login route', { timeout: 15000 }, () => {
       '/path/with\0null',
       'javascript:alert(1)',
       '/' + 'a'.repeat(2049),
+      '/ok#fragment',
+      '/%5cevil',
+      '/%2f%2fevil.example',
+      '/%252f%252fevil.example',
     ];
 
     for (const url of hostileUrls) {
@@ -69,6 +73,31 @@ describe('GET /auth/login route', { timeout: 15000 }, () => {
       });
       expect(response.statusCode).toBe(400);
       expect(response.json().code).toBe('AUTH_REQUEST_INVALID');
+    }
+  });
+
+  it('rejects duplicate and encoded-duplicate returnTo parameters with 400', async () => {
+    const auth = createMockAuthDeps();
+    let txCreated = false;
+    auth.loginTransactionStore.createPendingTransaction = async () => {
+      txCreated = true;
+    };
+    const app = createApp({ auth });
+
+    const duplicateUrls = [
+      '/auth/login?returnTo=/good&returnTo=/bad',
+      '/auth/login?returnTo=/good&%72eturnTo=/bad',
+      '/auth/login?%72eturnTo=/good&%72eturnTo=/bad',
+    ];
+
+    for (const url of duplicateUrls) {
+      const response = await app.inject({
+        method: 'GET',
+        url,
+      });
+      expect(response.statusCode).toBe(400);
+      expect(response.json().code).toBe('AUTH_REQUEST_INVALID');
+      expect(txCreated).toBe(false);
     }
   });
 

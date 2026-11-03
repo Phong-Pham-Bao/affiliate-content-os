@@ -1,3 +1,5 @@
+import type { UserSnapshot } from '@affiliate-content-os/domain';
+
 export interface EncryptedSecretsDTO {
   readonly ciphertext: Uint8Array;
   readonly iv: Uint8Array;
@@ -100,6 +102,8 @@ export interface SessionStorePort {
     readonly tokenHash: Uint8Array;
     readonly now: string;
   }): Promise<readonly SessionSnapshotDTO[]>;
+
+  findUserById?(userId: string): Promise<UserSnapshot | null>;
 
   rotateSession(params: {
     readonly sessionId: string;

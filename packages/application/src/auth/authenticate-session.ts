@@ -1,84 +1,22 @@
-import util from 'node:util';
-import { parseUserId, type UserSnapshot } from '@affiliate-content-os/domain';
-import type { UserDirectoryPort } from '../ports.js';
+import { parseUserId } from '@affiliate-content-os/domain';
 import { AuthenticationRequiredError } from './errors.js';
-import type { AuthCryptoPort, SessionSnapshotDTO, SessionStorePort } from './ports.js';
+import type {
+  AuthenticateSessionCommand,
+  AuthenticateSessionDependencies,
+  AuthenticatedSessionContext,
+} from './authenticate-session-types.js';
+import {
+  bytesEqual,
+  extractSingleCandidate,
+  safeExtractUser,
+  validateSessionCookie,
+} from './authenticate-session-candidate.js';
 
-export interface AuthenticateSessionCommand {
-  readonly sessionCookie: unknown;
-}
-
-export interface AuthenticateSessionDependencies {
-  readonly crypto: AuthCryptoPort;
-  readonly sessionStore: SessionStorePort;
-  readonly userDirectory: UserDirectoryPort;
-  readonly now: () => Date;
-  readonly sessionIdleTtlSeconds: number;
-  readonly sessionRotationSeconds: number;
-  readonly sessionRotationGraceSeconds: number;
-  readonly sessionTouchIntervalSeconds: number;
-}
-
-export interface AuthenticatedSessionContext {
-  readonly user: UserSnapshot;
-  readonly session: {
-    readonly id: string;
-    readonly userId: string;
-    readonly idleExpiresAt: string;
-    readonly absoluteExpiresAt: string;
-  };
-  readonly rotatedToken: string | null;
-}
-
-function isProxySafe(value: unknown): boolean {
-  try {
-    return util.types.isProxy(value);
-  } catch {
-    return true;
-  }
-}
-
-function bytesEqual(a: Uint8Array | null, b: Uint8Array): boolean {
-  if (!a || a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) {
-    if (a[i] !== b[i]) return false;
-  }
-  return true;
-}
-
-function validateSessionCookie(cookie: unknown): string {
-  if (
-    typeof cookie !== 'string' ||
-    cookie.length !== 43 ||
-    cookie.includes('=') ||
-    !/^[A-Za-z0-9_-]{43}$/.test(cookie)
-  ) {
-    throw new AuthenticationRequiredError();
-  }
-  return cookie;
-}
-
-function extractSingleCandidate(candidates: unknown): SessionSnapshotDTO | null {
-  if (typeof candidates !== 'object' || candidates === null || isProxySafe(candidates)) {
-    return null;
-  }
-  if (!Array.isArray(candidates) || Object.getPrototypeOf(candidates) !== Array.prototype) {
-    return null;
-  }
-  const lenDesc = Object.getOwnPropertyDescriptor(candidates, 'length');
-  if (!lenDesc || lenDesc.get !== undefined || lenDesc.set !== undefined || lenDesc.value !== 1) {
-    return null;
-  }
-  const desc0 = Object.getOwnPropertyDescriptor(candidates, '0');
-  if (!desc0 || desc0.get !== undefined || desc0.set !== undefined) {
-    return null;
-  }
-  const s = desc0.value;
-  if (typeof s !== 'object' || s === null || isProxySafe(s)) {
-    return null;
-  }
-  return s as SessionSnapshotDTO;
-}
+export type {
+  AuthenticateSessionCommand,
+  AuthenticateSessionDependencies,
+  AuthenticatedSessionContext,
+} from './authenticate-session-types.js';
 
 export async function authenticateApplicationSession(
   command: AuthenticateSessionCommand,
@@ -135,8 +73,12 @@ export async function authenticateApplicationSession(
       return { status: 'unauthenticated' };
     }
 
-    const user = await deps.userDirectory.findUserById(parsedUserId);
-    if (!user || user.status !== 'active') {
+    const rawUser = store.findUserById
+      ? await store.findUserById(parsedUserId)
+      : await deps.userDirectory?.findUserById(parsedUserId);
+
+    const user = safeExtractUser(rawUser);
+    if (!user) {
       await store.revokeSession({
         sessionId: s.id,
         currentVersion: s.version,
@@ -148,7 +90,6 @@ export async function authenticateApplicationSession(
 
     const isCurrentToken = bytesEqual(s.currentTokenHash, tokenHash);
     const isPreviousToken = bytesEqual(s.previousTokenHash, tokenHash);
-
     if (!isCurrentToken && !isPreviousToken) {
       return { status: 'unauthenticated' };
     }

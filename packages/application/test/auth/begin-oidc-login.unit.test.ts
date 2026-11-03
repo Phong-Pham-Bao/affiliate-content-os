@@ -77,6 +77,15 @@ describe('packages/application - beginOidcLogin', () => {
       expect(() => validateReturnTo('/path\nnewline')).toThrow(AuthRequestValidationError);
     });
 
+    it('rejects fragments, encoded separators, and double encoding', () => {
+      expect(() => validateReturnTo('/ok#fragment')).toThrow(AuthRequestValidationError);
+      expect(() => validateReturnTo('/%5cevil')).toThrow(AuthRequestValidationError);
+      expect(() => validateReturnTo('/%2f%2fevil.example')).toThrow(AuthRequestValidationError);
+      expect(() => validateReturnTo('/%252f%252fevil.example')).toThrow(AuthRequestValidationError);
+      expect(() => validateReturnTo('/%23fragment')).toThrow(AuthRequestValidationError);
+      expect(() => validateReturnTo('/path?foo=%252f')).toThrow(AuthRequestValidationError);
+    });
+
     it('rejects non-string and lengths over 2048', () => {
       expect(() => validateReturnTo(123)).toThrow(AuthRequestValidationError);
       expect(() => validateReturnTo('/' + 'a'.repeat(2048))).toThrow(AuthRequestValidationError);

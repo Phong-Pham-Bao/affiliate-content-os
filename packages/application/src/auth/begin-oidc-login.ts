@@ -27,10 +27,13 @@ export function validateReturnTo(raw: unknown): string {
   if (typeof raw !== 'string') {
     throw new AuthRequestValidationError('returnTo');
   }
-  if (raw.length > 2048) {
+  if (raw.length < 1 || raw.length > 2048) {
     throw new AuthRequestValidationError('returnTo');
   }
-  if (!raw.startsWith('/') || raw.startsWith('//') || raw.includes('\\')) {
+  if (!raw.startsWith('/') || raw.startsWith('//') || raw.startsWith('/\\')) {
+    throw new AuthRequestValidationError('returnTo');
+  }
+  if (raw.includes('#') || raw.includes('\\')) {
     throw new AuthRequestValidationError('returnTo');
   }
   for (let i = 0; i < raw.length; i++) {
@@ -39,6 +42,81 @@ export function validateReturnTo(raw: unknown): string {
       throw new AuthRequestValidationError('returnTo');
     }
   }
+
+  for (let i = 0; i < raw.length; i++) {
+    if (raw[i] === '%') {
+      if (i + 2 >= raw.length) {
+        throw new AuthRequestValidationError('returnTo');
+      }
+      const hex = raw.slice(i + 1, i + 3);
+      if (!/^[0-9a-fA-F]{2}$/.test(hex)) {
+        throw new AuthRequestValidationError('returnTo');
+      }
+      const upper = hex.toUpperCase();
+      if (upper === '25' || upper === '2F' || upper === '5C' || upper === '23') {
+        throw new AuthRequestValidationError('returnTo');
+      }
+      const byteVal = parseInt(hex, 16);
+      if ((byteVal >= 0 && byteVal <= 0x1f) || byteVal === 0x7f) {
+        throw new AuthRequestValidationError('returnTo');
+      }
+    }
+  }
+
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(raw);
+  } catch {
+    throw new AuthRequestValidationError('returnTo');
+  }
+
+  if (
+    decoded.includes('#') ||
+    decoded.includes('\\') ||
+    decoded.startsWith('//') ||
+    decoded.startsWith('/\\')
+  ) {
+    throw new AuthRequestValidationError('returnTo');
+  }
+
+  for (let i = 0; i < decoded.length; i++) {
+    const code = decoded.charCodeAt(i);
+    if ((code >= 0 && code <= 0x1f) || code === 0x7f) {
+      throw new AuthRequestValidationError('returnTo');
+    }
+  }
+
+  const normalized = raw.normalize('NFC');
+  if (
+    normalized.includes('\uFF0F') ||
+    normalized.includes('\uFF3C') ||
+    normalized.includes('\u2044') ||
+    normalized.includes('\u2215') ||
+    normalized.includes('\u29F8') ||
+    normalized.includes('\u29F9')
+  ) {
+    throw new AuthRequestValidationError('returnTo');
+  }
+
+  try {
+    const parsed = new URL(raw, 'http://127.0.0.1');
+    if (parsed.origin !== 'http://127.0.0.1') {
+      throw new AuthRequestValidationError('returnTo');
+    }
+    if (parsed.hash !== '') {
+      throw new AuthRequestValidationError('returnTo');
+    }
+    if (parsed.username !== '' || parsed.password !== '') {
+      throw new AuthRequestValidationError('returnTo');
+    }
+    if (!parsed.pathname.startsWith('/')) {
+      throw new AuthRequestValidationError('returnTo');
+    }
+  } catch (err) {
+    if (err instanceof AuthRequestValidationError) throw err;
+    throw new AuthRequestValidationError('returnTo');
+  }
+
   return raw;
 }
 

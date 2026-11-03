@@ -1,6 +1,9 @@
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { authenticateApplicationSession } from '@affiliate-content-os/application';
+import {
+  authenticateApplicationSession,
+  AuthenticationRequiredError,
+} from '@affiliate-content-os/application';
 import { createDatabase, type Database } from '../../src/database/index.js';
 import { createAuthCryptoAdapter, createPostgresSessionAdapter } from '../../src/auth/index.js';
 import { createPostgresTenancyAdapter } from '../../src/tenancy/index.js';
@@ -217,5 +220,319 @@ describe('Real PostgreSQL Session Concurrency Integration', () => {
     );
     expect(orderB2.session.id).toBe(sessionId);
     expect(orderB2.rotatedToken).toBeNull();
+  });
+
+  it('proves concurrent requests with old-token and new-token succeed in both forced orders and enforces exact before, at, and after grace boundaries', async () => {
+    const crypto = createAuthCryptoAdapter(encryptionKey, keyVersion);
+    const sessionStore = createPostgresSessionAdapter(database);
+    const userDirectory = createPostgresTenancyAdapter(database);
+
+    const userId = '0192b012-3456-789a-8bcd-ef0123456832';
+    const createdAt = new Date('2026-11-02T12:00:00.000Z');
+    await client.query(
+      `INSERT INTO users (id, identity_provider, identity_subject, email, display_name, status, created_at, updated_at, version)
+       VALUES ($1, 'https://test-issuer.example.com', 'user-conc-grace', 'grace@ex.com', 'Grace User', 'active', $2, $2, 1);`,
+      [userId, createdAt],
+    );
+
+    const sessionId = '0192b012-3456-789a-8bcd-ef0123456842';
+    const oldToken = crypto.generateRandomToken();
+    const oldHash = crypto.hashToken(oldToken);
+
+    await sessionStore.createSession({
+      id: sessionId,
+      userId,
+      currentTokenHash: oldHash,
+      createdAt: createdAt.toISOString(),
+      lastSeenAt: createdAt.toISOString(),
+      idleExpiresAt: new Date('2026-11-02T12:30:00.000Z').toISOString(),
+      absoluteExpiresAt: new Date('2026-11-02T20:00:00.000Z').toISOString(),
+      rotatedAt: createdAt.toISOString(),
+    });
+
+    // Rotate at 12:16:00
+    const rotTime = new Date('2026-11-02T12:16:00.000Z');
+    const rotResult = await authenticateApplicationSession(
+      { sessionCookie: oldToken },
+      {
+        crypto,
+        sessionStore,
+        userDirectory,
+        now: () => rotTime,
+        sessionIdleTtlSeconds: 1800,
+        sessionRotationSeconds: 900,
+        sessionRotationGraceSeconds: 30,
+        sessionTouchIntervalSeconds: 300,
+      },
+    );
+    const newToken = rotResult.rotatedToken!;
+    expect(newToken).toBeDefined();
+
+    // Forced concurrent Schedule A: Old token during grace and new token concurrently
+    const schedATime = new Date('2026-11-02T12:16:10.000Z');
+    const [resA_old, resA_new] = await Promise.all([
+      authenticateApplicationSession(
+        { sessionCookie: oldToken },
+        {
+          crypto,
+          sessionStore,
+          userDirectory,
+          now: () => schedATime,
+          sessionIdleTtlSeconds: 1800,
+          sessionRotationSeconds: 900,
+          sessionRotationGraceSeconds: 30,
+          sessionTouchIntervalSeconds: 300,
+        },
+      ),
+      authenticateApplicationSession(
+        { sessionCookie: newToken },
+        {
+          crypto,
+          sessionStore,
+          userDirectory,
+          now: () => schedATime,
+          sessionIdleTtlSeconds: 1800,
+          sessionRotationSeconds: 900,
+          sessionRotationGraceSeconds: 30,
+          sessionTouchIntervalSeconds: 300,
+        },
+      ),
+    ]);
+    expect(resA_old.session.id).toBe(sessionId);
+    expect(resA_new.session.id).toBe(sessionId);
+
+    // Forced concurrent Schedule B: New token and old token during grace concurrently
+    const schedBTime = new Date('2026-11-02T12:16:15.000Z');
+    const [resB_new, resB_old] = await Promise.all([
+      authenticateApplicationSession(
+        { sessionCookie: newToken },
+        {
+          crypto,
+          sessionStore,
+          userDirectory,
+          now: () => schedBTime,
+          sessionIdleTtlSeconds: 1800,
+          sessionRotationSeconds: 900,
+          sessionRotationGraceSeconds: 30,
+          sessionTouchIntervalSeconds: 300,
+        },
+      ),
+      authenticateApplicationSession(
+        { sessionCookie: oldToken },
+        {
+          crypto,
+          sessionStore,
+          userDirectory,
+          now: () => schedBTime,
+          sessionIdleTtlSeconds: 1800,
+          sessionRotationSeconds: 900,
+          sessionRotationGraceSeconds: 30,
+          sessionTouchIntervalSeconds: 300,
+        },
+      ),
+    ]);
+    expect(resB_new.session.id).toBe(sessionId);
+    expect(resB_old.session.id).toBe(sessionId);
+
+    // Exact grace boundary: graceValidUntil is 2026-11-02T12:16:30.000Z
+    // 1. Exactly before grace (12:16:29.999Z): valid
+    const beforeGrace = new Date('2026-11-02T12:16:29.999Z');
+    const authBefore = await authenticateApplicationSession(
+      { sessionCookie: oldToken },
+      {
+        crypto,
+        sessionStore,
+        userDirectory,
+        now: () => beforeGrace,
+        sessionIdleTtlSeconds: 1800,
+        sessionRotationSeconds: 900,
+        sessionRotationGraceSeconds: 30,
+        sessionTouchIntervalSeconds: 300,
+      },
+    );
+    expect(authBefore.session.id).toBe(sessionId);
+
+    // 2. Exactly at grace boundary (12:16:30.000Z): valid (>= $2)
+    const atGrace = new Date('2026-11-02T12:16:30.000Z');
+    const authAt = await authenticateApplicationSession(
+      { sessionCookie: oldToken },
+      {
+        crypto,
+        sessionStore,
+        userDirectory,
+        now: () => atGrace,
+        sessionIdleTtlSeconds: 1800,
+        sessionRotationSeconds: 900,
+        sessionRotationGraceSeconds: 30,
+        sessionTouchIntervalSeconds: 300,
+      },
+    );
+    expect(authAt.session.id).toBe(sessionId);
+
+    // 3. Exactly after grace (12:16:30.001Z): expired -> AuthenticationRequiredError
+    const afterGrace = new Date('2026-11-02T12:16:30.001Z');
+    await expect(
+      authenticateApplicationSession(
+        { sessionCookie: oldToken },
+        {
+          crypto,
+          sessionStore,
+          userDirectory,
+          now: () => afterGrace,
+          sessionIdleTtlSeconds: 1800,
+          sessionRotationSeconds: 900,
+          sessionRotationGraceSeconds: 30,
+          sessionTouchIntervalSeconds: 300,
+        },
+      ),
+    ).rejects.toThrow(AuthenticationRequiredError);
+  });
+
+  it('proves session authentication, rotation, touch, inactive user revocation, and concurrency work with poolMax=1 without starvation', async () => {
+    const singleConnDb = createDatabase({
+      databaseUrl: context.dbUrl,
+      poolMax: 1,
+      connectionTimeoutMs: 5000,
+      idleTimeoutMs: 10000,
+      statementTimeoutMs: 10000,
+      sslMode: 'disable',
+    });
+
+    try {
+      const crypto = createAuthCryptoAdapter(encryptionKey, keyVersion);
+      const sessionStore = createPostgresSessionAdapter(singleConnDb);
+
+      const userId = '0192b012-3456-789a-8bcd-ef0123456833';
+      const createdAt = new Date('2026-11-02T12:00:00.000Z');
+      await client.query(
+        `INSERT INTO users (id, identity_provider, identity_subject, email, display_name, status, created_at, updated_at, version)
+         VALUES ($1, 'https://test-issuer.example.com', 'user-poolmax-1', 'pool1@ex.com', 'Pool1 User', 'active', $2, $2, 1);`,
+        [userId, createdAt],
+      );
+
+      const sessionId = '0192b012-3456-789a-8bcd-ef0123456843';
+      const token = crypto.generateRandomToken();
+      const tokenHash = crypto.hashToken(token);
+
+      await sessionStore.createSession({
+        id: sessionId,
+        userId,
+        currentTokenHash: tokenHash,
+        createdAt: createdAt.toISOString(),
+        lastSeenAt: createdAt.toISOString(),
+        idleExpiresAt: new Date('2026-11-02T12:30:00.000Z').toISOString(),
+        absoluteExpiresAt: new Date('2026-11-02T20:00:00.000Z').toISOString(),
+        rotatedAt: createdAt.toISOString(),
+      });
+
+      // 1. Authenticate with poolMax: 1 (exercises transaction + user lookup on same connection)
+      const auth1 = await authenticateApplicationSession(
+        { sessionCookie: token },
+        {
+          crypto,
+          sessionStore,
+          now: () => new Date('2026-11-02T12:01:00.000Z'),
+          sessionIdleTtlSeconds: 1800,
+          sessionRotationSeconds: 900,
+          sessionRotationGraceSeconds: 30,
+          sessionTouchIntervalSeconds: 300,
+        },
+      );
+      expect(auth1.session.id).toBe(sessionId);
+      expect(auth1.user.id).toBe(userId);
+      expect(auth1.rotatedToken).toBeNull();
+
+      // 2. Touch with poolMax: 1 (> 300s touch interval)
+      const auth2 = await authenticateApplicationSession(
+        { sessionCookie: token },
+        {
+          crypto,
+          sessionStore,
+          now: () => new Date('2026-11-02T12:07:00.000Z'),
+          sessionIdleTtlSeconds: 1800,
+          sessionRotationSeconds: 900,
+          sessionRotationGraceSeconds: 30,
+          sessionTouchIntervalSeconds: 300,
+        },
+      );
+      expect(auth2.session.id).toBe(sessionId);
+      expect(auth2.rotatedToken).toBeNull();
+
+      // 3. Rotate with poolMax: 1 (> 900s rotation interval)
+      const auth3 = await authenticateApplicationSession(
+        { sessionCookie: token },
+        {
+          crypto,
+          sessionStore,
+          now: () => new Date('2026-11-02T12:16:00.000Z'),
+          sessionIdleTtlSeconds: 1800,
+          sessionRotationSeconds: 900,
+          sessionRotationGraceSeconds: 30,
+          sessionTouchIntervalSeconds: 300,
+        },
+      );
+      expect(auth3.session.id).toBe(sessionId);
+      const rotatedToken = auth3.rotatedToken;
+      expect(rotatedToken).not.toBeNull();
+
+      // 4. Concurrent current and previous token auth with poolMax: 1
+      const [concPrev, concCurr] = await Promise.all([
+        authenticateApplicationSession(
+          { sessionCookie: token },
+          {
+            crypto,
+            sessionStore,
+            now: () => new Date('2026-11-02T12:16:10.000Z'),
+            sessionIdleTtlSeconds: 1800,
+            sessionRotationSeconds: 900,
+            sessionRotationGraceSeconds: 30,
+            sessionTouchIntervalSeconds: 300,
+          },
+        ),
+        authenticateApplicationSession(
+          { sessionCookie: rotatedToken! },
+          {
+            crypto,
+            sessionStore,
+            now: () => new Date('2026-11-02T12:16:10.000Z'),
+            sessionIdleTtlSeconds: 1800,
+            sessionRotationSeconds: 900,
+            sessionRotationGraceSeconds: 30,
+            sessionTouchIntervalSeconds: 300,
+          },
+        ),
+      ]);
+      expect(concPrev.session.id).toBe(sessionId);
+      expect(concCurr.session.id).toBe(sessionId);
+
+      // 5. Inactive user revocation with poolMax: 1
+      await client.query(`UPDATE users SET status = 'disabled' WHERE id = $1;`, [userId]);
+      await expect(
+        authenticateApplicationSession(
+          { sessionCookie: rotatedToken! },
+          {
+            crypto,
+            sessionStore,
+            now: () => new Date('2026-11-02T12:16:20.000Z'),
+            sessionIdleTtlSeconds: 1800,
+            sessionRotationSeconds: 900,
+            sessionRotationGraceSeconds: 30,
+            sessionTouchIntervalSeconds: 300,
+          },
+        ),
+      ).rejects.toThrow(AuthenticationRequiredError);
+
+      // Confirm session in DB was revoked with reason 'user_unavailable'
+      const sessRow = await client.query<{
+        revoked_at: Date | null;
+        revocation_reason: string | null;
+      }>(`SELECT revoked_at, revocation_reason FROM application_sessions WHERE id = $1;`, [
+        sessionId,
+      ]);
+      expect(sessRow.rows[0]?.revoked_at).not.toBeNull();
+      expect(sessRow.rows[0]?.revocation_reason).toBe('user_unavailable');
+    } finally {
+      await singleConnDb.close();
+    }
   });
 });

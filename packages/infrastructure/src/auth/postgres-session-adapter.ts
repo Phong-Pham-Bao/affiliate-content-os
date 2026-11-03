@@ -1,6 +1,8 @@
-import type { Database, TransactionExecutor } from '../database/index.js';
+import type { UserSnapshot } from '@affiliate-content-os/domain';
+import type { Database } from '../database/index.js';
 import { DatabaseError } from '../database/errors.js';
-import { mapSessionRow, type ApplicationSessionRow, isProxySafe } from './mappers.js';
+import { mapUserRow } from '../tenancy/mappers.js';
+import { mapSessionRow, isProxySafe } from './mappers.js';
 import {
   INSERT_SESSION_SQL,
   FIND_CANDIDATE_SESSIONS_SQL,
@@ -8,68 +10,19 @@ import {
   TOUCH_SESSION_SQL,
   REVOKE_SESSION_SQL,
   REVOKE_MATCHING_BY_HASH_SQL,
+  FIND_USER_BY_ID_SQL,
 } from './postgres-session-statements.js';
+import type {
+  ApplicationSessionInsert,
+  PostgresSessionAdapter,
+  QueryRunner,
+} from './postgres-session-types.js';
 
-export interface ApplicationSessionInsert {
-  readonly id: string;
-  readonly userId: string;
-  readonly currentTokenHash: Uint8Array;
-  readonly createdAt: string;
-  readonly lastSeenAt: string;
-  readonly idleExpiresAt: string;
-  readonly absoluteExpiresAt: string;
-  readonly rotatedAt: string;
-}
-
-type QueryRunner = Pick<Database | TransactionExecutor, 'query'>;
-
-export interface PostgresSessionAdapter {
-  createSession(session: ApplicationSessionInsert, runner?: QueryRunner): Promise<void>;
-  findCandidateSessions(
-    criteria: { tokenHash: Uint8Array; now: string },
-    runner?: QueryRunner,
-  ): Promise<readonly ApplicationSessionRow[]>;
-  rotateSession(
-    criteria: {
-      sessionId: string;
-      currentVersion: number;
-      newCurrentHash: Uint8Array;
-      oldCurrentHash: Uint8Array;
-      graceValidUntil: string;
-      rotatedAt: string;
-      lastSeenAt: string;
-      idleExpiresAt: string;
-    },
-    runner?: QueryRunner,
-  ): Promise<void>;
-  touchSession(
-    criteria: {
-      sessionId: string;
-      currentVersion: number;
-      lastSeenAt: string;
-      idleExpiresAt: string;
-    },
-    runner?: QueryRunner,
-  ): Promise<void>;
-  revokeSession(
-    criteria: {
-      sessionId: string;
-      currentVersion: number;
-      revokedAt: string;
-      reason: string;
-    },
-    runner?: QueryRunner,
-  ): Promise<void>;
-  revokeMatchingSessionsByTokenHash(
-    criteria: {
-      tokenHash: Uint8Array;
-      revokedAt: string;
-      reason: string;
-    },
-    runner?: QueryRunner,
-  ): Promise<void>;
-  withTransaction<T>(fn: (txStore: PostgresSessionAdapter) => Promise<T>): Promise<T>;
-}
+export type {
+  ApplicationSessionInsert,
+  PostgresSessionAdapter,
+  QueryRunner,
+} from './postgres-session-types.js';
 
 function createAdapterForRunner(runner: QueryRunner): PostgresSessionAdapter {
   return {
@@ -91,7 +44,7 @@ function createAdapterForRunner(runner: QueryRunner): PostgresSessionAdapter {
     async findCandidateSessions(
       c: { tokenHash: Uint8Array; now: string },
       overrideRunner?: QueryRunner,
-    ): Promise<readonly ApplicationSessionRow[]> {
+    ) {
       const q = overrideRunner ?? runner;
       const params = [Buffer.from(c.tokenHash), c.now];
       const result = await q.query(FIND_CANDIDATE_SESSIONS_SQL, params);
@@ -108,6 +61,43 @@ function createAdapterForRunner(runner: QueryRunner): PostgresSessionAdapter {
         throw new DatabaseError('Database result rows must have Array.prototype');
       }
       return Object.freeze(rawRows.map((r) => mapSessionRow(r)));
+    },
+
+    async findUserById(userId: string, overrideRunner?: QueryRunner): Promise<UserSnapshot | null> {
+      const q = overrideRunner ?? runner;
+      const result = await q.query(FIND_USER_BY_ID_SQL, [userId]);
+      const rawRows = result.rows;
+      if (
+        typeof rawRows !== 'object' ||
+        rawRows === null ||
+        isProxySafe(rawRows) ||
+        !Array.isArray(rawRows)
+      ) {
+        throw new DatabaseError('Database result rows must be an array');
+      }
+      if (Object.getPrototypeOf(rawRows) !== Array.prototype) {
+        throw new DatabaseError('Database result rows must have Array.prototype');
+      }
+      const lenDesc = Object.getOwnPropertyDescriptor(rawRows, 'length');
+      if (
+        !lenDesc ||
+        lenDesc.get !== undefined ||
+        lenDesc.set !== undefined ||
+        typeof lenDesc.value !== 'number'
+      ) {
+        throw new DatabaseError('Invalid result rows length');
+      }
+      if (lenDesc.value === 0) {
+        return null;
+      }
+      if (lenDesc.value > 1) {
+        throw new DatabaseError('Unexpected duplicate user match');
+      }
+      const desc0 = Object.getOwnPropertyDescriptor(rawRows, '0');
+      if (!desc0 || desc0.get !== undefined || desc0.set !== undefined) {
+        throw new DatabaseError('Invalid result row item');
+      }
+      return mapUserRow(desc0.value);
     },
 
     async rotateSession(

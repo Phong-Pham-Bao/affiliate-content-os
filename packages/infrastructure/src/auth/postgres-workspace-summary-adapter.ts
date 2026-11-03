@@ -1,6 +1,6 @@
 import type { Database } from '../database/index.js';
 import { DatabaseError } from '../database/errors.js';
-import { mapWorkspaceSummaryRow, type WorkspaceSummaryRow } from './mappers.js';
+import { isProxySafe, mapWorkspaceSummaryRow, type WorkspaceSummaryRow } from './mappers.js';
 
 export interface CurrentUserWorkspaceAccess {
   readonly items: readonly WorkspaceSummaryRow[];
@@ -32,13 +32,40 @@ export function createPostgresWorkspaceSummaryAdapter(
         LIMIT 101;
       `;
       const result = await database.query(sql, [userId]);
-      if (!Array.isArray(result.rows)) {
+      const rawRows = result.rows;
+      if (
+        typeof rawRows !== 'object' ||
+        rawRows === null ||
+        isProxySafe(rawRows) ||
+        !Array.isArray(rawRows)
+      ) {
         throw new DatabaseError('Database result rows must be an array');
       }
+      if (Object.getPrototypeOf(rawRows) !== Array.prototype) {
+        throw new DatabaseError('Database result rows must have Array.prototype');
+      }
 
-      const hasMore = result.rows.length > 100;
-      const rawSlice = hasMore ? result.rows.slice(0, 100) : result.rows;
-      const items = rawSlice.map((r) => mapWorkspaceSummaryRow(r));
+      const lenDesc = Object.getOwnPropertyDescriptor(rawRows, 'length');
+      if (
+        !lenDesc ||
+        lenDesc.get !== undefined ||
+        lenDesc.set !== undefined ||
+        typeof lenDesc.value !== 'number'
+      ) {
+        throw new DatabaseError('Invalid result rows length');
+      }
+
+      const rowCount = lenDesc.value;
+      const hasMore = rowCount > 100;
+      const limit = hasMore ? 100 : rowCount;
+      const items: WorkspaceSummaryRow[] = [];
+      for (let i = 0; i < limit; i++) {
+        const desc = Object.getOwnPropertyDescriptor(rawRows, String(i));
+        if (!desc || desc.get !== undefined || desc.set !== undefined) {
+          throw new DatabaseError('Invalid result row item');
+        }
+        items.push(mapWorkspaceSummaryRow(desc.value));
+      }
 
       return Object.freeze({
         items: Object.freeze(items),

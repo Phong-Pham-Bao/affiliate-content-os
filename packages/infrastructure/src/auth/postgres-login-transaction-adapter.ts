@@ -5,7 +5,11 @@ import type {
 } from '@affiliate-content-os/application';
 import type { Database } from '../database/index.js';
 import { DatabaseError } from '../database/errors.js';
-import { mapConsumedTransactionRow, type ConsumedLoginTransactionRow } from './mappers.js';
+import {
+  mapConsumedTransactionRow,
+  type ConsumedLoginTransactionRow,
+  isProxySafe,
+} from './mappers.js';
 
 export interface OidcLoginTransactionInsert {
   readonly id: string;
@@ -110,16 +114,38 @@ export function createPostgresLoginTransactionAdapter(
       ];
       const result = await database.query(sql, params);
 
-      if (!Array.isArray(result.rows)) {
+      const rawRows = result.rows;
+      if (
+        typeof rawRows !== 'object' ||
+        rawRows === null ||
+        isProxySafe(rawRows) ||
+        !Array.isArray(rawRows)
+      ) {
         throw new DatabaseError('Database result rows must be an array');
       }
-      if (result.rows.length === 0) {
+      if (Object.getPrototypeOf(rawRows) !== Array.prototype) {
+        throw new DatabaseError('Database result rows must have Array.prototype');
+      }
+      const lenDesc = Object.getOwnPropertyDescriptor(rawRows, 'length');
+      if (
+        !lenDesc ||
+        lenDesc.get !== undefined ||
+        lenDesc.set !== undefined ||
+        typeof lenDesc.value !== 'number'
+      ) {
+        throw new DatabaseError('Invalid result rows length');
+      }
+      if (lenDesc.value === 0) {
         return null;
       }
-      if (result.rows.length > 1) {
+      if (lenDesc.value > 1) {
         throw new DatabaseError('Unexpected duplicate login transaction match');
       }
-      return mapConsumedTransactionRow(result.rows[0]);
+      const desc0 = Object.getOwnPropertyDescriptor(rawRows, '0');
+      if (!desc0 || desc0.get !== undefined || desc0.set !== undefined) {
+        throw new DatabaseError('Invalid result row item');
+      }
+      return mapConsumedTransactionRow(desc0.value);
     },
 
     async createPendingTransaction(params: {

@@ -1,5 +1,8 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { getDefaultMigrationsDir } from '../../src/database/index.js';
 import { setupIsolatedTestDatabase, type TestDatabaseContext } from './helpers/setup.js';
 
 describe('Real PostgreSQL Auth Schema and Constraints Integration', () => {
@@ -341,5 +344,150 @@ describe('Real PostgreSQL Auth Schema and Constraints Integration', () => {
         [badSession4, userId, tokenHash, createdAt, excessiveIdle, validAbs],
       ),
     ).rejects.toThrow();
+
+    // Permitted equality boundary 1: created_at = rotated_at = last_seen_at = idle_expires_at < absolute_expires_at
+    const eqSession1 = '0192b012-3456-789a-8bcd-ef0123456726';
+    const eqHash1 = Buffer.alloc(32, 21);
+    await client.query(
+      `INSERT INTO application_sessions (
+        id, user_id, current_token_hash, previous_token_hash, previous_token_valid_until,
+        created_at, last_seen_at, idle_expires_at, absolute_expires_at, rotated_at,
+        revoked_at, revocation_reason, version
+      ) VALUES ($1, $2, $3, NULL, NULL, $4, $4, $4, $5, $4, NULL, NULL, 1);`,
+      [eqSession1, userId, eqHash1, createdAt, validAbs],
+    );
+
+    // Permitted equality boundary 2: idle_expires_at = absolute_expires_at
+    const eqSession2 = '0192b012-3456-789a-8bcd-ef0123456727';
+    const eqHash2 = Buffer.alloc(32, 22);
+    await client.query(
+      `INSERT INTO application_sessions (
+        id, user_id, current_token_hash, previous_token_hash, previous_token_valid_until,
+        created_at, last_seen_at, idle_expires_at, absolute_expires_at, rotated_at,
+        revoked_at, revocation_reason, version
+      ) VALUES ($1, $2, $3, NULL, NULL, $4, $4, $5, $5, $4, NULL, NULL, 1);`,
+      [eqSession2, userId, eqHash2, createdAt, validAbs],
+    );
+
+    // Permitted equality boundary 3: rotated_at = created_at < last_seen_at = idle_expires_at = absolute_expires_at
+    const eqSession3 = '0192b012-3456-789a-8bcd-ef0123456728';
+    const eqHash3 = Buffer.alloc(32, 23);
+    await client.query(
+      `INSERT INTO application_sessions (
+        id, user_id, current_token_hash, previous_token_hash, previous_token_valid_until,
+        created_at, last_seen_at, idle_expires_at, absolute_expires_at, rotated_at,
+        revoked_at, revocation_reason, version
+      ) VALUES ($1, $2, $3, NULL, NULL, $4, $5, $5, $5, $4, NULL, NULL, 1);`,
+      [eqSession3, userId, eqHash3, createdAt, validAbs],
+    );
+  });
+
+  it('proves upgrade from TASK-005 schema (migrations 0001 and 0002) to TASK-006 (migration 0003) preserves all existing data and establishes auth tables', async () => {
+    const upgradeContext = await setupIsolatedTestDatabase({ skipMigrations: true });
+    const upgradeClient = new pg.Client({ connectionString: upgradeContext.dbUrl });
+    await upgradeClient.connect();
+
+    try {
+      const migrationsDir = getDefaultMigrationsDir();
+      const m0001Path = path.join(migrationsDir, '0001_baseline.sql');
+      const m0002Path = path.join(migrationsDir, '0002_identity_tenancy.sql');
+      const m0003Path = path.join(migrationsDir, '0003_application_auth.sql');
+
+      await upgradeClient.query(`
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+          migration_number INTEGER PRIMARY KEY,
+          name TEXT NOT NULL,
+          checksum_sha256 TEXT NOT NULL,
+          applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
+
+      const sql0001 = fs.readFileSync(m0001Path, 'utf8');
+      await upgradeClient.query(sql0001);
+      await upgradeClient.query(
+        `INSERT INTO schema_migrations (migration_number, name, checksum_sha256) VALUES (1, 'baseline', 'dummy');`,
+      );
+
+      const sql0002 = fs.readFileSync(m0002Path, 'utf8');
+      await upgradeClient.query(sql0002);
+      await upgradeClient.query(
+        `INSERT INTO schema_migrations (migration_number, name, checksum_sha256) VALUES (2, 'identity_tenancy', 'dummy');`,
+      );
+
+      const seedUserId = '0192b012-3456-789a-8bcd-ef0123456799';
+      const seedWorkspaceId = '0192b012-3456-789a-8bcd-ef0123456788';
+      const seedMembershipId = '0192b012-3456-789a-8bcd-ef0123456777';
+      const now = new Date('2026-11-02T12:00:00.000Z');
+
+      await upgradeClient.query(
+        `INSERT INTO users (id, identity_provider, identity_subject, email, display_name, status, created_at, updated_at, version)
+         VALUES ($1, 'https://issuer.example.com', 'upgrade-sub', 'up@ex.com', 'Upgrade User', 'active', $2, $2, 1);`,
+        [seedUserId, now],
+      );
+
+      await upgradeClient.query(
+        `INSERT INTO workspaces (id, name, slug, timezone, brand_voice, default_disclosure, ai_enabled, status, created_at, updated_at, version)
+         VALUES ($1, 'Upgrade WS', 'upgrade-ws', 'UTC', NULL, NULL, false, 'active', $2, $2, 1);`,
+        [seedWorkspaceId, now],
+      );
+
+      await upgradeClient.query(
+        `INSERT INTO workspace_memberships (id, workspace_id, user_id, role, status, invited_by_user_id, joined_at, created_at, updated_at, version)
+         VALUES ($1, $2, $3, 'owner', 'active', NULL, $4, $4, $4, 1);`,
+        [seedMembershipId, seedWorkspaceId, seedUserId, now],
+      );
+
+      const sql0003 = fs.readFileSync(m0003Path, 'utf8');
+      await upgradeClient.query(sql0003);
+      await upgradeClient.query(
+        `INSERT INTO schema_migrations (migration_number, name, checksum_sha256) VALUES (3, 'application_auth', 'dummy');`,
+      );
+
+      const userRes = await upgradeClient.query<{ email: string; status: string }>(
+        `SELECT email, status FROM users WHERE id = $1;`,
+        [seedUserId],
+      );
+      expect(userRes.rows[0]?.email).toBe('up@ex.com');
+      expect(userRes.rows[0]?.status).toBe('active');
+
+      const wsRes = await upgradeClient.query<{ slug: string }>(
+        `SELECT slug FROM workspaces WHERE id = $1;`,
+        [seedWorkspaceId],
+      );
+      expect(wsRes.rows[0]?.slug).toBe('upgrade-ws');
+
+      const memRes = await upgradeClient.query<{ role: string }>(
+        `SELECT role FROM workspace_memberships WHERE id = $1;`,
+        [seedMembershipId],
+      );
+      expect(memRes.rows[0]?.role).toBe('owner');
+
+      const sessionId = '0192b012-3456-789a-8bcd-ef0123456766';
+      const tokenHash = Buffer.alloc(32, 42);
+      await upgradeClient.query(
+        `INSERT INTO application_sessions (
+          id, user_id, current_token_hash, previous_token_hash, previous_token_valid_until,
+          created_at, last_seen_at, idle_expires_at, absolute_expires_at, rotated_at,
+          revoked_at, revocation_reason, version
+        ) VALUES ($1, $2, $3, NULL, NULL, $4, $4, $5, $6, $4, NULL, NULL, 1);`,
+        [
+          sessionId,
+          seedUserId,
+          tokenHash,
+          now,
+          new Date('2026-11-02T12:30:00.000Z'),
+          new Date('2026-11-02T20:00:00.000Z'),
+        ],
+      );
+
+      const sessRes = await upgradeClient.query<{ user_id: string }>(
+        `SELECT user_id FROM application_sessions WHERE id = $1;`,
+        [sessionId],
+      );
+      expect(sessRes.rows[0]?.user_id).toBe(seedUserId);
+    } finally {
+      await upgradeClient.end();
+      await upgradeContext.cleanup();
+    }
   });
 });

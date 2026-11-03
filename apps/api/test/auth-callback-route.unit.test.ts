@@ -145,6 +145,41 @@ describe('GET /auth/callback route', { timeout: 15000 }, () => {
     expect(consumeCalled).toBe(false);
   });
 
+  it('rejects malformed percent encoding and causes zero persistence or crypto calls', async () => {
+    const auth = createMockAuthDeps();
+    let consumeCalls = 0;
+    auth.loginTransactionStore.consumePendingTransaction = async () => {
+      consumeCalls++;
+      return null;
+    };
+
+    const app = createApp({ auth });
+
+    const malformedUrls = [
+      '/auth/callback?code=%&state=s',
+      '/auth/callback?code=%2&state=s',
+      '/auth/callback?code=%2g&state=s',
+      '/auth/callback?code=valid&%63ode=valid2&state=s',
+      '/auth/callback?code=valid&state=s?secondary',
+      '/auth/callback?code=valid&state=%C3',
+      '/auth/callback?code=valid&state=s&unknown=1',
+    ];
+
+    for (const url of malformedUrls) {
+      const response = await app.inject({
+        method: 'GET',
+        url,
+        cookies: {
+          [COOKIE_TRANSACTION]: 'binding-raw-value-32-chars-long-12345678901',
+        },
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.json().code).toBe('OIDC_CALLBACK_INVALID');
+    }
+    expect(consumeCalls).toBe(0);
+  });
+
   it('enforces rate limit of 20 requests per 60 seconds per IP', async () => {
     const auth = createMockAuthDeps();
     const app = createApp({ auth });

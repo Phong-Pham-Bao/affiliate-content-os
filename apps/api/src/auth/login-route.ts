@@ -34,14 +34,79 @@ export function createLoginRoute(deps: AuthDependencies): FastifyPluginAsync {
           throw new AuthConfigurationUnavailableError();
         }
 
-        const rawUrl = new URL(request.raw?.url ?? request.url, 'http://127.0.0.1');
-        for (const key of rawUrl.searchParams.keys()) {
-          if (key !== 'returnTo') {
+        const rawUrlStr = request.raw?.url ?? request.url ?? '';
+        let rawReturnTo: string | undefined;
+
+        const qIdx = rawUrlStr.indexOf('?');
+        if (qIdx !== -1) {
+          const rawQuery = rawUrlStr.slice(qIdx + 1);
+          if (rawQuery.includes('?')) {
             throw new AuthRequestValidationError('returnTo');
+          }
+          if (rawQuery.startsWith('&') || rawQuery.endsWith('&') || rawQuery.includes('&&')) {
+            throw new AuthRequestValidationError('returnTo');
+          }
+
+          const pairs = rawQuery.split('&');
+          let returnToCount = 0;
+          const seenKeys = new Set<string>();
+
+          for (const pair of pairs) {
+            const eqIdx = pair.indexOf('=');
+            const rawKey = eqIdx === -1 ? pair : pair.slice(0, eqIdx);
+            const rawVal = eqIdx === -1 ? '' : pair.slice(eqIdx + 1);
+
+            for (let i = 0; i < rawKey.length; i++) {
+              if (rawKey[i] === '%') {
+                if (
+                  i + 2 >= rawKey.length ||
+                  !/^[0-9a-fA-F]{2}$/.test(rawKey.slice(i + 1, i + 3))
+                ) {
+                  throw new AuthRequestValidationError('returnTo');
+                }
+              }
+            }
+
+            let decodedKey: string;
+            try {
+              decodedKey = decodeURIComponent(rawKey);
+            } catch {
+              throw new AuthRequestValidationError('returnTo');
+            }
+
+            if (decodedKey !== 'returnTo') {
+              throw new AuthRequestValidationError('returnTo');
+            }
+
+            if (seenKeys.has(decodedKey) || seenKeys.has(rawKey)) {
+              throw new AuthRequestValidationError('returnTo');
+            }
+            seenKeys.add(decodedKey);
+            seenKeys.add(rawKey);
+
+            returnToCount++;
+            if (returnToCount > 1) {
+              throw new AuthRequestValidationError('returnTo');
+            }
+
+            let decodedVal: string;
+            try {
+              decodedVal = decodeURIComponent(rawVal);
+            } catch {
+              throw new AuthRequestValidationError('returnTo');
+            }
+            rawReturnTo = decodedVal;
           }
         }
 
-        const rawReturnTo = rawUrl.searchParams.get('returnTo');
+        if (typeof request.query === 'object' && request.query !== null) {
+          for (const [k, v] of Object.entries(request.query)) {
+            if (k !== 'returnTo' || Array.isArray(v) || typeof v !== 'string') {
+              throw new AuthRequestValidationError('returnTo');
+            }
+          }
+        }
+
         const returnTo = validateReturnTo(rawReturnTo ?? '/');
 
         const result = await beginOidcLogin(

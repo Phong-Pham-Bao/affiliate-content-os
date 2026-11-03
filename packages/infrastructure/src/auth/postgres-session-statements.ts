@@ -58,3 +58,10 @@ export const REVOKE_MATCHING_BY_HASH_SQL = `
       version = version + 1
   WHERE current_token_hash = $3 OR previous_token_hash = $3;
 `;
+
+export const FIND_USER_BY_ID_SQL = `
+  SELECT id, identity_provider, identity_subject, email, display_name, status, created_at, updated_at, version
+  FROM users
+  WHERE id = $1
+  LIMIT 2;
+`;

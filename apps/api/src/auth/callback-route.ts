@@ -14,6 +14,98 @@ import { clearTransactionCookie, setSessionCookie } from './cookies.js';
 import { callbackRouteSchema } from './schemas.js';
 import type { AuthDependencies } from './types.js';
 
+function parseAndValidateRawCallback(rawUrlStr: string): Record<string, string> {
+  if (typeof rawUrlStr !== 'string' || rawUrlStr.includes('#')) {
+    throw new OidcCallbackInvalidError();
+  }
+
+  const qIdx = rawUrlStr.indexOf('?');
+  if (qIdx === -1) {
+    throw new OidcCallbackInvalidError();
+  }
+
+  const rawQuery = rawUrlStr.slice(qIdx + 1);
+  if (rawQuery.includes('?')) {
+    throw new OidcCallbackInvalidError();
+  }
+  if (rawQuery.startsWith('&') || rawQuery.endsWith('&') || rawQuery.includes('&&')) {
+    throw new OidcCallbackInvalidError();
+  }
+
+  for (let i = 0; i < rawQuery.length; i++) {
+    if (rawQuery[i] === '%') {
+      if (i + 2 >= rawQuery.length) {
+        throw new OidcCallbackInvalidError();
+      }
+      const hex = rawQuery.slice(i + 1, i + 3);
+      if (!/^[0-9a-fA-F]{2}$/.test(hex)) {
+        throw new OidcCallbackInvalidError();
+      }
+    }
+  }
+
+  const pairs = rawQuery.split('&');
+  if (pairs.length === 0) {
+    throw new OidcCallbackInvalidError();
+  }
+
+  const seenDecodedKeys = new Set<string>();
+  const seenRawKeys = new Set<string>();
+  const parsedRecord: Record<string, string> = Object.create(null);
+
+  for (const pair of pairs) {
+    const eqIdx = pair.indexOf('=');
+    const rawKey = eqIdx === -1 ? pair : pair.slice(0, eqIdx);
+    const rawVal = eqIdx === -1 ? '' : pair.slice(eqIdx + 1);
+
+    let decodedKey: string;
+    let decodedVal: string;
+    try {
+      decodedKey = decodeURIComponent(rawKey);
+      decodedVal = decodeURIComponent(rawVal);
+    } catch {
+      throw new OidcCallbackInvalidError();
+    }
+
+    if (
+      decodedKey !== 'code' &&
+      decodedKey !== 'state' &&
+      decodedKey !== 'error' &&
+      decodedKey !== 'error_description' &&
+      decodedKey !== 'error_uri'
+    ) {
+      throw new OidcCallbackInvalidError();
+    }
+
+    if (seenRawKeys.has(rawKey) || seenDecodedKeys.has(decodedKey)) {
+      throw new OidcCallbackInvalidError();
+    }
+    seenRawKeys.add(rawKey);
+    seenDecodedKeys.add(decodedKey);
+
+    for (let i = 0; i < decodedKey.length; i++) {
+      const code = decodedKey.charCodeAt(i);
+      if ((code >= 0 && code <= 0x1f) || code === 0x7f) {
+        throw new OidcCallbackInvalidError();
+      }
+    }
+    for (let i = 0; i < decodedVal.length; i++) {
+      const code = decodedVal.charCodeAt(i);
+      if (code === 0) {
+        throw new OidcCallbackInvalidError();
+      }
+    }
+
+    parsedRecord[decodedKey] = decodedVal;
+  }
+
+  if (!parsedRecord['state'] || (!parsedRecord['code'] && !parsedRecord['error'])) {
+    throw new OidcCallbackInvalidError();
+  }
+
+  return parsedRecord;
+}
+
 export function createCallbackRoute(deps: AuthDependencies): FastifyPluginAsync {
   return async (fastify) => {
     fastify.get(
@@ -26,25 +118,18 @@ export function createCallbackRoute(deps: AuthDependencies): FastifyPluginAsync 
             timeWindow: RATE_LIMIT_CALLBACK_WINDOW_MS,
           },
         },
+        onRequest: async (_request, reply) => {
+          clearTransactionCookie(reply, deps.config);
+        },
         preValidation: async (request) => {
-          const rawUrl = new URL(request.raw?.url ?? request.url, 'http://127.0.0.1');
-          const queryEntries = [...rawUrl.searchParams.entries()];
-          const seenKeys = new Set<string>();
-          for (const [key] of queryEntries) {
-            if (seenKeys.has(key)) {
-              throw new OidcCallbackInvalidError();
-            }
-            seenKeys.add(key);
-            if (
-              key !== 'code' &&
-              key !== 'state' &&
-              key !== 'error' &&
-              key !== 'error_description' &&
-              key !== 'error_uri'
-            ) {
-              throw new OidcCallbackInvalidError();
+          if (typeof request.query === 'object' && request.query !== null) {
+            for (const [, v] of Object.entries(request.query)) {
+              if (Array.isArray(v) || typeof v !== 'string') {
+                throw new OidcCallbackInvalidError();
+              }
             }
           }
+          parseAndValidateRawCallback(request.raw?.url ?? request.url ?? '');
         },
       },
       async (request, reply) => {
@@ -60,22 +145,9 @@ export function createCallbackRoute(deps: AuthDependencies): FastifyPluginAsync 
           throw new AuthConfigurationUnavailableError();
         }
 
+        const rawQuery = parseAndValidateRawCallback(request.raw?.url ?? request.url ?? '');
         const transactionCookie = request.cookies[COOKIE_TRANSACTION];
         clearTransactionCookie(reply, deps.config);
-
-        // Extract raw URL search parameters to preserve unknown/duplicate keys before Fastify strips them
-        const rawUrl = new URL(request.raw?.url ?? request.url, 'http://127.0.0.1');
-        const queryEntries = [...rawUrl.searchParams.entries()];
-
-        const seenKeys = new Set<string>();
-        const rawQuery: Record<string, string> = Object.create(null);
-        for (const [key, value] of queryEntries) {
-          if (seenKeys.has(key)) {
-            throw new OidcCallbackInvalidError();
-          }
-          seenKeys.add(key);
-          rawQuery[key] = value;
-        }
 
         const result = await completeOidcLogin(
           {
