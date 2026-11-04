@@ -59,16 +59,50 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - name: Set up Trivy
-        uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
-        with:
-          version: v0.76.1
+      - name: Install checksum-pinned Trivy
+        run: |
+          set -euo pipefail
+
+          if [ "$(uname -s)" != "Linux" ] || [ "$(uname -m)" != "x86_64" ]; then
+            echo "Unsupported platform: $(uname -s) $(uname -m). Only Linux x86_64 is supported." >&2
+            exit 1
+          fi
+
+          TRIVY_VERSION="0.76.1"
+          EXPECTED_SHA256="c7cbe3137fb8a48a17574bede3dd6beb16742d1e9772929940fc90082c39d9c0"
+          ARCHIVE_NAME="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          DOWNLOAD_URL="https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/${ARCHIVE_NAME}"
+
+          STAGING_DIR="$(mktemp -d "${RUNNER_TEMP}/trivy-staging.XXXXXX")"
+          trap 'rm -rf "${STAGING_DIR}"' EXIT
+
+          ARCHIVE_PATH="${STAGING_DIR}/${ARCHIVE_NAME}"
+
+          curl --fail --show-error --location \
+            --proto '=https' --proto-redir '=https' \
+            --tlsv1.2 \
+            --retry 3 --retry-delay 2 --retry-connrefused \
+            --output "${ARCHIVE_PATH}" \
+            "${DOWNLOAD_URL}"
+
+          echo "${EXPECTED_SHA256}  ${ARCHIVE_PATH}" | sha256sum --check --strict
+
+          INSTALL_DIR="${RUNNER_TEMP}/trivy-bin"
+          mkdir -p "${INSTALL_DIR}"
+
+          tar -xzf "${ARCHIVE_PATH}" -C "${STAGING_DIR}" trivy
+          install -m 0755 "${STAGING_DIR}/trivy" "${INSTALL_DIR}/trivy"
+
+          echo "${INSTALL_DIR}" >> "${GITHUB_PATH}"
 
       - name: Verify Trivy version
         run: |
           TRIVY_VERSION=$(trivy --version | head -n 1)
           echo "Detected $TRIVY_VERSION"
-          echo "$TRIVY_VERSION" | grep -q '0.76.1'
+          if [ "$TRIVY_VERSION" != "Version: 0.76.1" ]; then
+            echo "Unexpected Trivy version: $TRIVY_VERSION" >&2
+            exit 1
+          fi
 
       - name: Verify security exception policy
         run: node scripts/verify-trivy-exception.mjs
