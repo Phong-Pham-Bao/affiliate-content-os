@@ -44,7 +44,7 @@ export async function authenticateApplicationSession(
       now: nowIso,
     });
 
-    const s = extractSingleCandidate(rawCandidates, nowIso);
+    const s = extractSingleCandidate(rawCandidates);
     if (!s) {
       return { status: 'unauthenticated' };
     }

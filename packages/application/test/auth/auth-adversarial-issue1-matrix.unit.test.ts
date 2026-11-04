@@ -159,4 +159,63 @@ describe('Issue 1: Hostile Proxies, Byte Snapshots, and Closed Keys Matrix (Appl
     const withUserSymbol = { ...validUser, [Symbol('userSym')]: 123 };
     expect(safeExtractUser(withUserSymbol)).toBeNull();
   });
+
+  it('enforces exact timestamp ordering chain and proves reproduction values become false', () => {
+    const base = {
+      id: '0192b012-3456-789a-8bcd-ef0123456720',
+      userId: '0192b012-3456-789a-8bcd-ef0123456710',
+      currentTokenHash: new Uint8Array(32).fill(1),
+      previousTokenHash: null,
+      previousTokenValidUntil: null,
+      createdAt: '2026-11-02T11:00:00.000Z',
+      rotatedAt: '2026-11-02T11:50:00.000Z',
+      lastSeenAt: '2026-11-02T11:58:00.000Z',
+      idleExpiresAt: '2026-11-02T12:28:00.000Z',
+      absoluteExpiresAt: '2026-11-02T19:00:00.000Z',
+      revokedAt: null,
+      revocationReason: null,
+      version: 1,
+    };
+
+    const r1 = extractSingleCandidate([
+      {
+        ...base,
+        rotatedAt: '2026-11-02T11:59:00.000Z',
+        lastSeenAt: '2026-11-02T11:58:00.000Z',
+      },
+    ]);
+    const r2 = extractSingleCandidate([
+      {
+        ...base,
+        lastSeenAt: '2026-11-02T12:30:00.000Z',
+        idleExpiresAt: '2026-11-02T12:28:00.000Z',
+      },
+    ]);
+    const r3 = extractSingleCandidate(
+      [
+        {
+          ...base,
+          idleExpiresAt: '2026-11-02T20:00:00.000Z',
+          absoluteExpiresAt: '2026-11-02T19:00:00.000Z',
+        },
+      ],
+      '2026-11-02T19:01:00.000Z',
+    );
+
+    expect(r1).toBeNull();
+    expect(r2).toBeNull();
+    expect(r3).toBeNull();
+
+    const reproduction = {
+      rotatedAfterLastSeen: r1 !== null,
+      lastSeenAfterIdle: r2 !== null,
+      idleAfterAbsoluteWhenExpired: r3 !== null,
+    };
+
+    expect(reproduction).toEqual({
+      rotatedAfterLastSeen: false,
+      lastSeenAfterIdle: false,
+      idleAfterAbsoluteWhenExpired: false,
+    });
+  });
 });

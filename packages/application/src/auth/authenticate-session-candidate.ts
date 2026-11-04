@@ -47,7 +47,7 @@ const ALLOWED_REVOCATION_REASONS = new Set([
 
 export function extractSingleCandidate(
   candidates: unknown,
-  nowIso?: string,
+  _nowIso?: string,
 ): SessionSnapshotDTO | null {
   if (typeof candidates !== 'object' || candidates === null || isProxySafe(candidates)) {
     return null;
@@ -175,25 +175,17 @@ export function extractSingleCandidate(
     return null;
   }
 
-  // Timestamp ordering invariants from spec Section 3.2:
-  // createdAt <= lastSeenAt
-  // createdAt <= rotatedAt
-  // createdAt <= idleExpiresAt
-  // createdAt <= absoluteExpiresAt
+  // Timestamp ordering invariants:
+  // createdAt <= rotatedAt <= lastSeenAt <= idleExpiresAt <= absoluteExpiresAt
+  // createdAt < absoluteExpiresAt
   if (
-    createdAt > lastSeenAt ||
     createdAt > rotatedAt ||
-    createdAt > idleExpiresAt ||
-    createdAt > absoluteExpiresAt
+    rotatedAt > lastSeenAt ||
+    lastSeenAt > idleExpiresAt ||
+    idleExpiresAt > absoluteExpiresAt ||
+    createdAt >= absoluteExpiresAt
   ) {
     return null;
-  }
-
-  // idleExpiresAt <= absoluteExpiresAt (if not already past absolute expiry)
-  if (idleExpiresAt > absoluteExpiresAt) {
-    if (!nowIso || nowIso < absoluteExpiresAt) {
-      return null;
-    }
   }
 
   // When previous-token fields present: rotatedAt <= previousTokenValidUntil <= absoluteExpiresAt

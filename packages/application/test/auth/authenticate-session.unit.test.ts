@@ -13,17 +13,31 @@ describe('packages/application - authenticateApplicationSession', () => {
   function createActiveSessionSnapshot(
     overrides?: Partial<SessionSnapshotDTO>,
   ): SessionSnapshotDTO {
+    const createdAt = overrides?.createdAt ?? '2026-11-02T11:00:00.000Z';
+    const rotatedAt = overrides?.rotatedAt ?? '2026-11-02T11:50:00.000Z';
+    const defaultLastSeen = '2026-11-02T11:58:00.000Z';
+    const lastSeenAt =
+      overrides?.lastSeenAt ?? (defaultLastSeen < rotatedAt ? rotatedAt : defaultLastSeen);
+    const absoluteExpiresAt = overrides?.absoluteExpiresAt ?? '2026-11-02T19:00:00.000Z';
+    const defaultIdle = '2026-11-02T12:28:00.000Z';
+    let idleExpiresAt =
+      overrides?.idleExpiresAt ??
+      (defaultIdle > absoluteExpiresAt ? absoluteExpiresAt : defaultIdle);
+    if (!overrides?.idleExpiresAt && idleExpiresAt < lastSeenAt) {
+      idleExpiresAt = lastSeenAt > absoluteExpiresAt ? absoluteExpiresAt : lastSeenAt;
+    }
+
     return {
       id: sampleSessionId,
       userId: sampleUserId,
       currentTokenHash: cookieHash,
       previousTokenHash: null,
       previousTokenValidUntil: null,
-      createdAt: '2026-11-02T11:00:00.000Z',
-      lastSeenAt: '2026-11-02T11:58:00.000Z',
-      idleExpiresAt: '2026-11-02T12:28:00.000Z',
-      absoluteExpiresAt: '2026-11-02T19:00:00.000Z',
-      rotatedAt: '2026-11-02T11:50:00.000Z',
+      createdAt,
+      lastSeenAt,
+      idleExpiresAt,
+      absoluteExpiresAt,
+      rotatedAt,
       revokedAt: null,
       revocationReason: null,
       version: 1,
@@ -235,5 +249,459 @@ describe('packages/application - authenticateApplicationSession', () => {
 
     expect(ctx.rotatedToken).toBeNull();
     expect(fakes.sessionStore.rotateSession).not.toHaveBeenCalled();
+  });
+
+  describe('Session timestamp invariant enforcement regression suite', () => {
+    function assertZeroSecurityCalls(fakes: ReturnType<typeof createFakes>) {
+      expect(fakes.sessionStore.findUserById).not.toHaveBeenCalled();
+      expect(fakes.crypto.generateRandomToken).not.toHaveBeenCalled();
+      expect(fakes.sessionStore.rotateSession).not.toHaveBeenCalled();
+      expect(fakes.sessionStore.touchSession).not.toHaveBeenCalled();
+      expect(fakes.sessionStore.revokeSession).not.toHaveBeenCalled();
+    }
+
+    it('rejects candidate with rotatedAt before createdAt with zero security calls', async () => {
+      const fakes = createFakes(
+        createActiveSessionSnapshot({
+          createdAt: '2026-11-02T11:00:00.000Z',
+          rotatedAt: '2026-11-02T10:59:59.000Z',
+        }),
+      );
+
+      await expect(
+        authenticateApplicationSession(
+          { sessionCookie: validCookie },
+          {
+            ...fakes,
+            now: () => sampleNow,
+            sessionIdleTtlSeconds: 1800,
+            sessionRotationSeconds: 900,
+            sessionRotationGraceSeconds: 30,
+            sessionTouchIntervalSeconds: 300,
+          },
+        ),
+      ).rejects.toThrow(AuthenticationRequiredError);
+
+      assertZeroSecurityCalls(fakes);
+    });
+
+    it('rejects candidate with rotatedAt after lastSeenAt with zero security calls', async () => {
+      const fakes = createFakes(
+        createActiveSessionSnapshot({
+          rotatedAt: '2026-11-02T11:59:00.000Z',
+          lastSeenAt: '2026-11-02T11:58:00.000Z',
+        }),
+      );
+
+      await expect(
+        authenticateApplicationSession(
+          { sessionCookie: validCookie },
+          {
+            ...fakes,
+            now: () => sampleNow,
+            sessionIdleTtlSeconds: 1800,
+            sessionRotationSeconds: 900,
+            sessionRotationGraceSeconds: 30,
+            sessionTouchIntervalSeconds: 300,
+          },
+        ),
+      ).rejects.toThrow(AuthenticationRequiredError);
+
+      assertZeroSecurityCalls(fakes);
+    });
+
+    it('rejects candidate with lastSeenAt after idleExpiresAt with zero security calls', async () => {
+      const fakes = createFakes(
+        createActiveSessionSnapshot({
+          lastSeenAt: '2026-11-02T12:30:00.000Z',
+          idleExpiresAt: '2026-11-02T12:28:00.000Z',
+        }),
+      );
+
+      await expect(
+        authenticateApplicationSession(
+          { sessionCookie: validCookie },
+          {
+            ...fakes,
+            now: () => sampleNow,
+            sessionIdleTtlSeconds: 1800,
+            sessionRotationSeconds: 900,
+            sessionRotationGraceSeconds: 30,
+            sessionTouchIntervalSeconds: 300,
+          },
+        ),
+      ).rejects.toThrow(AuthenticationRequiredError);
+
+      assertZeroSecurityCalls(fakes);
+    });
+
+    it('rejects candidate with idleExpiresAt after absoluteExpiresAt while now is before absolute expiry with zero security calls', async () => {
+      const fakes = createFakes(
+        createActiveSessionSnapshot({
+          idleExpiresAt: '2026-11-02T20:00:00.000Z',
+          absoluteExpiresAt: '2026-11-02T19:00:00.000Z',
+        }),
+      );
+
+      await expect(
+        authenticateApplicationSession(
+          { sessionCookie: validCookie },
+          {
+            ...fakes,
+            now: () => new Date('2026-11-02T18:00:00.000Z'),
+            sessionIdleTtlSeconds: 1800,
+            sessionRotationSeconds: 900,
+            sessionRotationGraceSeconds: 30,
+            sessionTouchIntervalSeconds: 300,
+          },
+        ),
+      ).rejects.toThrow(AuthenticationRequiredError);
+
+      assertZeroSecurityCalls(fakes);
+    });
+
+    it('rejects candidate with idleExpiresAt after absoluteExpiresAt while now is exactly at absolute expiry with zero security calls', async () => {
+      const fakes = createFakes(
+        createActiveSessionSnapshot({
+          idleExpiresAt: '2026-11-02T20:00:00.000Z',
+          absoluteExpiresAt: '2026-11-02T19:00:00.000Z',
+        }),
+      );
+
+      await expect(
+        authenticateApplicationSession(
+          { sessionCookie: validCookie },
+          {
+            ...fakes,
+            now: () => new Date('2026-11-02T19:00:00.000Z'),
+            sessionIdleTtlSeconds: 1800,
+            sessionRotationSeconds: 900,
+            sessionRotationGraceSeconds: 30,
+            sessionTouchIntervalSeconds: 300,
+          },
+        ),
+      ).rejects.toThrow(AuthenticationRequiredError);
+
+      assertZeroSecurityCalls(fakes);
+    });
+
+    it('rejects candidate with idleExpiresAt after absoluteExpiresAt while now is after absolute expiry with zero security calls', async () => {
+      const fakes = createFakes(
+        createActiveSessionSnapshot({
+          idleExpiresAt: '2026-11-02T20:00:00.000Z',
+          absoluteExpiresAt: '2026-11-02T19:00:00.000Z',
+        }),
+      );
+
+      await expect(
+        authenticateApplicationSession(
+          { sessionCookie: validCookie },
+          {
+            ...fakes,
+            now: () => new Date('2026-11-02T19:01:00.000Z'),
+            sessionIdleTtlSeconds: 1800,
+            sessionRotationSeconds: 900,
+            sessionRotationGraceSeconds: 30,
+            sessionTouchIntervalSeconds: 300,
+          },
+        ),
+      ).rejects.toThrow(AuthenticationRequiredError);
+
+      assertZeroSecurityCalls(fakes);
+    });
+
+    it('rejects candidate with createdAt equal to absoluteExpiresAt with zero security calls', async () => {
+      const ts = '2026-11-02T11:00:00.000Z';
+      const fakes = createFakes(
+        createActiveSessionSnapshot({
+          createdAt: ts,
+          rotatedAt: ts,
+          lastSeenAt: ts,
+          idleExpiresAt: ts,
+          absoluteExpiresAt: ts,
+        }),
+      );
+
+      await expect(
+        authenticateApplicationSession(
+          { sessionCookie: validCookie },
+          {
+            ...fakes,
+            now: () => sampleNow,
+            sessionIdleTtlSeconds: 1800,
+            sessionRotationSeconds: 900,
+            sessionRotationGraceSeconds: 30,
+            sessionTouchIntervalSeconds: 300,
+          },
+        ),
+      ).rejects.toThrow(AuthenticationRequiredError);
+
+      assertZeroSecurityCalls(fakes);
+    });
+
+    it('rejects candidate with createdAt after absoluteExpiresAt with zero security calls', async () => {
+      const fakes = createFakes(
+        createActiveSessionSnapshot({
+          createdAt: '2026-11-02T19:01:00.000Z',
+          absoluteExpiresAt: '2026-11-02T19:00:00.000Z',
+        }),
+      );
+
+      await expect(
+        authenticateApplicationSession(
+          { sessionCookie: validCookie },
+          {
+            ...fakes,
+            now: () => sampleNow,
+            sessionIdleTtlSeconds: 1800,
+            sessionRotationSeconds: 900,
+            sessionRotationGraceSeconds: 30,
+            sessionTouchIntervalSeconds: 300,
+          },
+        ),
+      ).rejects.toThrow(AuthenticationRequiredError);
+
+      assertZeroSecurityCalls(fakes);
+    });
+
+    it('rejects candidate with previousTokenValidUntil before rotatedAt with zero security calls', async () => {
+      const fakes = createFakes(
+        createActiveSessionSnapshot({
+          previousTokenHash: new Uint8Array(32).fill(2),
+          rotatedAt: '2026-11-02T11:50:00.000Z',
+          previousTokenValidUntil: '2026-11-02T11:49:59.000Z',
+        }),
+      );
+
+      await expect(
+        authenticateApplicationSession(
+          { sessionCookie: validCookie },
+          {
+            ...fakes,
+            now: () => sampleNow,
+            sessionIdleTtlSeconds: 1800,
+            sessionRotationSeconds: 900,
+            sessionRotationGraceSeconds: 30,
+            sessionTouchIntervalSeconds: 300,
+          },
+        ),
+      ).rejects.toThrow(AuthenticationRequiredError);
+
+      assertZeroSecurityCalls(fakes);
+    });
+
+    it('rejects candidate with previousTokenValidUntil after absoluteExpiresAt with zero security calls', async () => {
+      const fakes = createFakes(
+        createActiveSessionSnapshot({
+          previousTokenHash: new Uint8Array(32).fill(2),
+          absoluteExpiresAt: '2026-11-02T19:00:00.000Z',
+          previousTokenValidUntil: '2026-11-02T19:00:01.000Z',
+        }),
+      );
+
+      await expect(
+        authenticateApplicationSession(
+          { sessionCookie: validCookie },
+          {
+            ...fakes,
+            now: () => sampleNow,
+            sessionIdleTtlSeconds: 1800,
+            sessionRotationSeconds: 900,
+            sessionRotationGraceSeconds: 30,
+            sessionTouchIntervalSeconds: 300,
+          },
+        ),
+      ).rejects.toThrow(AuthenticationRequiredError);
+
+      assertZeroSecurityCalls(fakes);
+    });
+
+    it('accepts permitted equality boundary: createdAt === rotatedAt', async () => {
+      const fakes = createFakes(
+        createActiveSessionSnapshot({
+          createdAt: '2026-11-02T11:00:00.000Z',
+          rotatedAt: '2026-11-02T11:00:00.000Z',
+          lastSeenAt: '2026-11-02T11:58:00.000Z',
+          idleExpiresAt: '2026-11-02T12:28:00.000Z',
+          absoluteExpiresAt: '2026-11-02T19:00:00.000Z',
+        }),
+      );
+
+      const ctx = await authenticateApplicationSession(
+        { sessionCookie: validCookie },
+        {
+          ...fakes,
+          now: () => sampleNow,
+          sessionIdleTtlSeconds: 1800,
+          sessionRotationSeconds: 900,
+          sessionRotationGraceSeconds: 30,
+          sessionTouchIntervalSeconds: 300,
+        },
+      );
+
+      expect(ctx.user.id).toBe(sampleUserId);
+      expect(fakes.sessionStore.findUserById).toHaveBeenCalledTimes(1);
+    });
+
+    it('accepts permitted equality boundary: rotatedAt === lastSeenAt', async () => {
+      const fakes = createFakes(
+        createActiveSessionSnapshot({
+          createdAt: '2026-11-02T11:00:00.000Z',
+          rotatedAt: '2026-11-02T11:58:00.000Z',
+          lastSeenAt: '2026-11-02T11:58:00.000Z',
+          idleExpiresAt: '2026-11-02T12:28:00.000Z',
+          absoluteExpiresAt: '2026-11-02T19:00:00.000Z',
+        }),
+      );
+
+      const ctx = await authenticateApplicationSession(
+        { sessionCookie: validCookie },
+        {
+          ...fakes,
+          now: () => sampleNow,
+          sessionIdleTtlSeconds: 1800,
+          sessionRotationSeconds: 900,
+          sessionRotationGraceSeconds: 30,
+          sessionTouchIntervalSeconds: 300,
+        },
+      );
+
+      expect(ctx.user.id).toBe(sampleUserId);
+      expect(fakes.sessionStore.findUserById).toHaveBeenCalledTimes(1);
+    });
+
+    it('accepts permitted equality boundary: lastSeenAt === idleExpiresAt', async () => {
+      const fakes = createFakes(
+        createActiveSessionSnapshot({
+          createdAt: '2026-11-02T11:00:00.000Z',
+          rotatedAt: '2026-11-02T11:50:00.000Z',
+          lastSeenAt: '2026-11-02T12:28:00.000Z',
+          idleExpiresAt: '2026-11-02T12:28:00.000Z',
+          absoluteExpiresAt: '2026-11-02T19:00:00.000Z',
+        }),
+      );
+
+      const ctx = await authenticateApplicationSession(
+        { sessionCookie: validCookie },
+        {
+          ...fakes,
+          now: () => sampleNow,
+          sessionIdleTtlSeconds: 1800,
+          sessionRotationSeconds: 900,
+          sessionRotationGraceSeconds: 30,
+          sessionTouchIntervalSeconds: 300,
+        },
+      );
+
+      expect(ctx.user.id).toBe(sampleUserId);
+      expect(fakes.sessionStore.findUserById).toHaveBeenCalledTimes(1);
+    });
+
+    it('accepts permitted equality boundary: idleExpiresAt === absoluteExpiresAt', async () => {
+      const fakes = createFakes(
+        createActiveSessionSnapshot({
+          createdAt: '2026-11-02T11:00:00.000Z',
+          rotatedAt: '2026-11-02T11:50:00.000Z',
+          lastSeenAt: '2026-11-02T11:58:00.000Z',
+          idleExpiresAt: '2026-11-02T19:00:00.000Z',
+          absoluteExpiresAt: '2026-11-02T19:00:00.000Z',
+        }),
+      );
+
+      const ctx = await authenticateApplicationSession(
+        { sessionCookie: validCookie },
+        {
+          ...fakes,
+          now: () => sampleNow,
+          sessionIdleTtlSeconds: 1800,
+          sessionRotationSeconds: 900,
+          sessionRotationGraceSeconds: 30,
+          sessionTouchIntervalSeconds: 300,
+        },
+      );
+
+      expect(ctx.user.id).toBe(sampleUserId);
+      expect(fakes.sessionStore.findUserById).toHaveBeenCalledTimes(1);
+    });
+
+    it('accepts permitted equality boundary: previousTokenValidUntil === rotatedAt', async () => {
+      const fakes = createFakes(
+        createActiveSessionSnapshot({
+          currentTokenHash: new Uint8Array(32).fill(99),
+          previousTokenHash: cookieHash,
+          rotatedAt: '2026-11-02T12:00:10.000Z',
+          lastSeenAt: '2026-11-02T12:00:10.000Z',
+          previousTokenValidUntil: '2026-11-02T12:00:10.000Z',
+        }),
+      );
+
+      const ctx = await authenticateApplicationSession(
+        { sessionCookie: validCookie },
+        {
+          ...fakes,
+          now: () => sampleNow,
+          sessionIdleTtlSeconds: 1800,
+          sessionRotationSeconds: 900,
+          sessionRotationGraceSeconds: 30,
+          sessionTouchIntervalSeconds: 300,
+        },
+      );
+
+      expect(ctx.user.id).toBe(sampleUserId);
+      expect(fakes.sessionStore.findUserById).toHaveBeenCalledTimes(1);
+    });
+
+    it('accepts permitted equality boundary: previousTokenValidUntil === absoluteExpiresAt', async () => {
+      const fakes = createFakes(
+        createActiveSessionSnapshot({
+          currentTokenHash: new Uint8Array(32).fill(99),
+          previousTokenHash: cookieHash,
+          absoluteExpiresAt: '2026-11-02T19:00:00.000Z',
+          previousTokenValidUntil: '2026-11-02T19:00:00.000Z',
+        }),
+      );
+
+      const ctx = await authenticateApplicationSession(
+        { sessionCookie: validCookie },
+        {
+          ...fakes,
+          now: () => sampleNow,
+          sessionIdleTtlSeconds: 1800,
+          sessionRotationSeconds: 900,
+          sessionRotationGraceSeconds: 30,
+          sessionTouchIntervalSeconds: 300,
+        },
+      );
+
+      expect(ctx.user.id).toBe(sampleUserId);
+      expect(fakes.sessionStore.findUserById).toHaveBeenCalledTimes(1);
+    });
+
+    it('accepts a valid strictly increasing timestamp chain', async () => {
+      const fakes = createFakes(
+        createActiveSessionSnapshot({
+          createdAt: '2026-11-02T11:00:00.000Z',
+          rotatedAt: '2026-11-02T11:30:00.000Z',
+          lastSeenAt: '2026-11-02T11:50:00.000Z',
+          idleExpiresAt: '2026-11-02T12:30:00.000Z',
+          absoluteExpiresAt: '2026-11-02T19:00:00.000Z',
+        }),
+      );
+
+      const ctx = await authenticateApplicationSession(
+        { sessionCookie: validCookie },
+        {
+          ...fakes,
+          now: () => sampleNow,
+          sessionIdleTtlSeconds: 1800,
+          sessionRotationSeconds: 900,
+          sessionRotationGraceSeconds: 30,
+          sessionTouchIntervalSeconds: 300,
+        },
+      );
+
+      expect(ctx.user.id).toBe(sampleUserId);
+      expect(fakes.sessionStore.findUserById).toHaveBeenCalledTimes(1);
+    });
   });
 });
