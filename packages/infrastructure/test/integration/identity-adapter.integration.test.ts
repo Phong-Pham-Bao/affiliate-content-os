@@ -326,7 +326,7 @@ describe('Real PostgreSQL Identity Adapter & Concurrency Integration Suite', () 
     await database.close();
   });
 
-  it('proves relation set remains strictly unchanged (schema_migrations, users, workspaces, workspace_memberships)', async () => {
+  it('proves relation set contains exact expected relations after migration', async () => {
     const res = await client.query<{ table_name: string }>(
       `SELECT table_name
        FROM information_schema.tables
@@ -335,6 +335,13 @@ describe('Real PostgreSQL Identity Adapter & Concurrency Integration Suite', () 
     );
 
     const tables = res.rows.map((r) => r.table_name);
-    expect(tables).toEqual(['schema_migrations', 'users', 'workspace_memberships', 'workspaces']);
+    expect(tables).toEqual([
+      'application_sessions',
+      'oidc_login_transactions',
+      'schema_migrations',
+      'users',
+      'workspace_memberships',
+      'workspaces',
+    ]);
   });
 });

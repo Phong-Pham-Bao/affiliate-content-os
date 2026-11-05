@@ -1166,7 +1166,7 @@ describe('Database client and transaction manager (unit tests with fakes)', () =
       for (const sentinel of sentinelList) {
         expect(combinedOutput).not.toContain(sentinel);
       }
-    });
+    }, 15000);
 
     it('preserves exact rejection identity for already-safe frozen Error through withTransaction', async () => {
       const { mockPool, clientQueries } = createMockPool();

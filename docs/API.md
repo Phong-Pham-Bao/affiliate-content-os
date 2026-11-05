@@ -95,15 +95,86 @@ Status mapping:
 
 ## 4. Authentication and current user
 
-Application authentication endpoints are supplied by the selected OIDC/session implementation under `/auth/*`; they are not a custom password API.
+Application authentication endpoints are supplied by provider-neutral managed OIDC authorization-code flow and opaque server-side PostgreSQL sessions under `/auth/*` and `/api/v1/*`. They are not a custom password API.
+
+### `GET /auth/login`
+
+Begins managed OIDC authorization-code flow.
+- Query: optional `returnTo` (validated relative application path starting with `/`, max 2048 chars, defaults to `/`). Rejects unknown query keys.
+- Rate limit: 10 requests per 60 seconds per `request.ip`.
+- Success: `302 Found` with `Location` header pointing to provider authorization URL.
+- Cookies: sets `acos_oidc_transaction` with 32-byte secure random browser-binding secret (`HttpOnly`, `SameSite=Lax`, `Path=/`, `Max-Age=600`, `Secure` in production).
+- Security headers: `Cache-Control: no-store`, `Pragma: no-cache`, `Referrer-Policy: no-referrer`.
+- Error codes: `400 AUTH_REQUEST_INVALID`, `503 AUTH_NOT_CONFIGURED`.
+
+### `GET /auth/callback`
+
+Completes managed OIDC authorization-code flow.
+- Query: authorization code and state (`code`, `state`) or provider error response (`error`, `error_description`, `error_uri`).
+- Rate limit: 20 requests per 60 seconds per `request.ip`.
+- Cookie handling: clears `acos_oidc_transaction` cookie on all outcomes (`Max-Age=0`).
+- Success: `303 See Other` redirect to `new URL(returnTo, APP_BASE_URL)`. Sets `acos_session` cookie (`HttpOnly`, `SameSite=Lax`, `Path=/`, `Max-Age` equal to remaining absolute session lifetime, `Secure` in production).
+- Security headers: `Cache-Control: no-store`, `Pragma: no-cache`, `Referrer-Policy: no-referrer`.
+- Error codes: `400 OIDC_CALLBACK_INVALID`, `401 AUTHENTICATION_REQUIRED`, `503 OIDC_PROVIDER_UNAVAILABLE`, `503 AUTH_NOT_CONFIGURED`.
 
 ### `GET /api/v1/me`
 
-Returns application user identity, session metadata, and accessible workspace summaries. Does not return social accounts or tokens.
+Returns application user identity, active session timestamps, and accessible workspace summaries. Requires valid application session cookie.
+- Cookie: `acos_session` (opaque unpadded base64url 32-byte random token).
+- Rate limit: default rate limit.
+- Success: `200 OK` JSON:
+```json
+{
+  "user": {
+    "id": "019...",
+    "email": "user@example.com",
+    "displayName": "Example User"
+  },
+  "session": {
+    "idleExpiresAt": "2026-11-02T12:30:00.000Z",
+    "absoluteExpiresAt": "2026-11-02T20:00:00.000Z"
+  },
+  "workspaceAccess": {
+    "items": [
+      {
+        "id": "019...",
+        "name": "Example Workspace",
+        "slug": "example-workspace",
+        "timezone": "Asia/Ho_Chi_Minh",
+        "role": "owner"
+      }
+    ],
+    "hasMore": false
+  }
+}
+```
+- Token rotation: when session rotation interval is reached, issues replacement token and sets updated `acos_session` cookie. Old token remains valid during short grace window (30s).
+- Security headers: `Cache-Control: no-store`, `Pragma: no-cache`, `Referrer-Policy: no-referrer`.
+- Error codes: `401 AUTHENTICATION_REQUIRED` (and clears `acos_session` cookie), `503 AUTH_NOT_CONFIGURED`.
 
 ### `POST /api/v1/logout`
 
-Invalidates the application session. `204 No Content` on completion.
+Revokes the active application session in PostgreSQL, scrubs token hashes, and clears the session cookie.
+- Headers: `Origin` validated against `APP_BASE_URL` origin or redirect URI origin. Rejects `Origin: null` and mismatches with `403 AUTH_ORIGIN_INVALID`.
+- Body/query: accepts no body and no query parameters (`400 AUTH_REQUEST_INVALID` if present).
+- Rate limit: 30 requests per 60 seconds per `request.ip`.
+- Success: `204 No Content` with empty body.
+- Cookie handling: clears `acos_session` cookie (`Max-Age=0`). Idempotent: returns 204 even if cookie is missing or already revoked.
+- Security headers: `Cache-Control: no-store`, `Pragma: no-cache`, `Referrer-Policy: no-referrer`.
+- Error codes: `400 AUTH_REQUEST_INVALID`, `403 AUTH_ORIGIN_INVALID`, `503 AUTH_NOT_CONFIGURED`.
+
+### Authentication Problem Details Codes
+
+| Code | Status | Title | Description |
+| --- | --- | --- | --- |
+| `AUTH_NOT_CONFIGURED` | 503 | Service Unavailable | Authentication is disabled or discovery failed at startup |
+| `AUTH_REQUEST_INVALID` | 400 | Bad Request | Malformed returnTo, unexpected query, or payload in logout |
+| `OIDC_CALLBACK_INVALID` | 400 | Bad Request | Missing/replayed transaction, wrong browser, or provider denial |
+| `OIDC_PROVIDER_UNAVAILABLE` | 503 | Service Unavailable | Provider token endpoint or JWKS network failure |
+| `AUTHENTICATION_REQUIRED` | 401 | Unauthorized | Missing, invalid, expired, or revoked session cookie, or disabled user |
+| `AUTH_ORIGIN_INVALID` | 403 | Forbidden | Untrusted, null, or mismatched request origin on logout |
+| `RATE_LIMIT_EXCEEDED` | 429 | Too Many Requests | Rate limit exceeded; includes `retryAfterSeconds` |
+| `INTERNAL_ERROR` | 500 | Internal Server Error | Unexpected error; safe message without disclosure |
 
 ## 5. Workspaces and memberships
 

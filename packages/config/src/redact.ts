@@ -1,6 +1,8 @@
 import type {
   AppConfig,
+  AuthConfig,
   DatabaseConfig,
+  RedactedAuthConfigMetadata,
   RedactedConfigMetadata,
   RedactedDatabaseMetadata,
 } from './types.js';
@@ -47,6 +49,32 @@ export function getRedactedDatabaseMetadata(config: DatabaseConfig): RedactedDat
     statementTimeoutMs: config.statementTimeoutMs,
     sslMode: config.sslMode,
     hasSslCaFile: Boolean(config.sslCaFile),
+  };
+
+  return Object.freeze(result);
+}
+
+/**
+ * Returns redacted authentication configuration metadata for startup diagnostics.
+ * Never exposes issuer, client ID, client secret, redirect URI, encryption key,
+ * decoded bytes, cookies, or derived hashes.
+ */
+export function getRedactedAuthConfigMetadata(config: AuthConfig): RedactedAuthConfigMetadata {
+  const result: RedactedAuthConfigMetadata = {
+    enabled: config.enabled,
+    hasIssuer: Boolean(config.issuer),
+    hasClientId: Boolean(config.clientId),
+    hasClientSecret: Boolean(config.clientSecret),
+    hasRedirectUri: Boolean(config.redirectUri),
+    hasTransactionEncryptionKey: Boolean(config.transactionEncryptionKeyBase64Url),
+    transactionKeyVersion: config.transactionKeyVersion,
+    transactionTtlSeconds: config.transactionTtlSeconds,
+    sessionIdleTtlSeconds: config.sessionIdleTtlSeconds,
+    sessionAbsoluteTtlSeconds: config.sessionAbsoluteTtlSeconds,
+    sessionRotationSeconds: config.sessionRotationSeconds,
+    sessionRotationGraceSeconds: config.sessionRotationGraceSeconds,
+    sessionTouchIntervalSeconds: config.sessionTouchIntervalSeconds,
+    cookieSecure: config.cookieSecure,
   };
 
   return Object.freeze(result);

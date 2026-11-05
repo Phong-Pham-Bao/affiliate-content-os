@@ -29,6 +29,10 @@ export function generateUuidV7(timestampMs: number = Date.now()): string {
 }
 
 export class DefaultIdGenerator implements IdGeneratorPort {
+  public generateId(): string {
+    return generateUuidV7();
+  }
+
   public generateWorkspaceId(): WorkspaceId {
     return parseWorkspaceId(generateUuidV7());
   }

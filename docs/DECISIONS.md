@@ -55,7 +55,7 @@ Decision states: `proposed`, `accepted`, `superseded`, `rejected`.
 - Status: accepted
 - Decision: Use a managed OIDC identity provider with authorization-code flow and secure server sessions. Keep application sign-in separate from social-platform OAuth.
 - Rationale: Password storage and account recovery are not product differentiators. Separation prevents a connected social account from becoming an application identity by accident.
-- Consequences: The specific vendor remains a deployment decision. User identity is issuer + subject, not email.
+- Consequences: The specific vendor remains a deployment decision. User identity is issuer + subject, not email. TASK-006 implements this as a provider-neutral, standards-compliant OIDC adapter (`openid-client@6.8.8`) and opaque PostgreSQL server sessions (`application_sessions`), maintaining strict separation from social connections. The concrete OIDC vendor, sign-in methods, production KMS, and distributed rate limiting remain open decisions.
 - Rejected: building passwords/authentication in-house; using Threads/TikTok connection as application login in MVP.
 
 ## ADR-006: Workspace tenancy and fixed roles

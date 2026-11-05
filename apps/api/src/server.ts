@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import type { AppConfig } from '@affiliate-content-os/config';
 import type { Database } from '@affiliate-content-os/infrastructure/database';
 import { createApp } from './app.js';
+import type { AuthDependencies } from './auth/index.js';
 import {
   raceWithDeadline,
   type ClearTimerFn,
@@ -19,6 +20,8 @@ export interface ApiServerHandle {
 export interface StartServerOptions {
   readonly config: AppConfig;
   readonly database: Database;
+  readonly auth?:
+    AuthDependencies | ((signal: AbortSignal) => Promise<AuthDependencies>) | undefined;
   readonly app?: FastifyInstance | undefined;
   readonly installSignalHandlers?: boolean | undefined;
   readonly shutdownTimeoutMs?: number | undefined;
@@ -40,7 +43,9 @@ export async function startApiServer(options: StartServerOptions): Promise<ApiSe
     clearTimer: options.clearTimer,
   };
 
-  const app = options.app ?? createApp({ config });
+  let app =
+    options.app ??
+    (typeof options.auth !== 'function' ? createApp({ config, auth: options.auth }) : undefined);
 
   type ServerState = 'starting' | 'running' | 'closing' | 'closed';
   let state: ServerState = 'starting';
@@ -151,12 +156,14 @@ export async function startApiServer(options: StartServerOptions): Promise<ApiSe
       }
 
       // 3. Close Fastify listener if started
-      await raceWithDeadline(
-        app.close(),
-        getRemainingMs(),
-        `API server graceful shutdown timed out after ${timeoutMs}ms while closing HTTP listener`,
-        timerOptions,
-      );
+      if (app) {
+        await raceWithDeadline(
+          app.close(),
+          getRemainingMs(),
+          `API server graceful shutdown timed out after ${timeoutMs}ms while closing HTTP listener`,
+          timerOptions,
+        );
+      }
 
       // 4. Close Database pool within the remaining total budget
       await raceWithDeadline(
@@ -199,8 +206,18 @@ export async function startApiServer(options: StartServerOptions): Promise<ApiSe
     );
   });
 
-  // Phase 1: Probe Database connection before listening
   try {
+    // Phase 0: Resolve auth dependencies if factory was provided
+    if (typeof options.auth === 'function') {
+      if (startupAbortController.signal.aborted) {
+        throw new Error('API server startup aborted before auth discovery');
+      }
+      const authPromise = options.auth(startupAbortController.signal);
+      const authDeps = await Promise.race([authPromise, startupAbortPromise]);
+      app = createApp({ config, auth: authDeps });
+    }
+
+    // Phase 1: Probe Database connection before listening
     if (startupAbortController.signal.aborted) {
       throw new Error('API server startup aborted before database probe');
     }
@@ -213,7 +230,7 @@ export async function startApiServer(options: StartServerOptions): Promise<ApiSe
     if (startupAbortController.signal.aborted) {
       throw new Error('API server startup aborted before listener bound');
     }
-    listenerPromise = listener(app, config, startupAbortController.signal).finally(() => {
+    listenerPromise = listener(app!, config, startupAbortController.signal).finally(() => {
       listenerSettled = true;
     });
     await Promise.race([listenerPromise, startupAbortPromise]);
@@ -251,7 +268,7 @@ export async function startApiServer(options: StartServerOptions): Promise<ApiSe
   }
 
   return {
-    app,
+    app: app!,
     config,
     database,
     close,

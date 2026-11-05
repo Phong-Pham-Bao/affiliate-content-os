@@ -77,6 +77,15 @@ Production components are private by default. Only the web/API ingress and regis
 
 Each module owns its tables and repositories. Cross-module reads use application query services rather than importing another module's repository. Database foreign keys may enforce integrity across modules; they do not authorize direct write coupling.
 
+### Application Authentication and Managed OIDC Architecture
+
+- **Separation of Concerns**: Application user authentication is completely decoupled from social OAuth connections (Threads/TikTok). Social platform credentials never authenticate application users, map to user IDs, or reach the browser.
+- **OIDC Protocol Adapter**: Standards-based authorization-code flow with PKCE S256, state, nonce, and same-browser transaction binding (`acos_oidc_transaction` cookie). Provider-neutral; uses confidential client authentication (`client_secret_basic`). Discovery metadata is fetched at API startup with exact issuer match enforcement.
+- **One-Time Login Transactions**: Stored in `oidc_login_transactions` with AES-256-GCM encrypted PKCE verifier and nonce. Atomically consumed and scrubbed via locking CTE before token exchange, preventing callback replay attacks.
+- **Identity Resolution**: Extracts verified ID-token claims (`iss`, `sub`, optional verified `email`, `displayName`) and resolves or provisions application users via `resolveVerifiedIdentity` (TASK-005 boundary). Identity is strictly `(identity_provider, identity_subject)`; email is informational metadata only.
+- **Opaque Server-Side Sessions**: Stored in `application_sessions`. Browser receives a 32-byte secure random unpadded base64url token in `acos_session` (`HttpOnly`, `SameSite=Lax`, `Path=/`, `Secure` in production). PostgreSQL stores only SHA-256 hashes; plaintext tokens never persist.
+- **Session Lifecycle**: Enforces idle expiry (default 30 min) capped by absolute expiry (default 8 hours), rotation on interval (default 15 min) with previous-token grace (default 30s) to handle concurrent requests safely, bounded touch (default 5 min), and immediate hash scrubbing on revocation or logout.
+
 ## 5. Frontend architecture
 
 ### Structure

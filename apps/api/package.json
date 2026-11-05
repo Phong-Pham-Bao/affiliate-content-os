@@ -11,8 +11,11 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "@affiliate-content-os/application": "workspace:*",
     "@affiliate-content-os/config": "workspace:*",
     "@affiliate-content-os/infrastructure": "workspace:*",
+    "@fastify/cookie": "11.1.5",
+    "@fastify/rate-limit": "11.2.1",
     "fastify": "^5.2.0"
   },
   "devDependencies": {
