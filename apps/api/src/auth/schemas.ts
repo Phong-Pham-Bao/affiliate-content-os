@@ -59,8 +59,9 @@ export const callbackRouteSchema = {
       error: { type: 'string', maxLength: 256 },
       error_description: { type: 'string', maxLength: 1024 },
       error_uri: { type: 'string', maxLength: 1024 },
+      iss: { type: 'string', maxLength: 2048 },
     },
-    additionalProperties: false,
+    additionalProperties: true,
   },
   response: {
     303: {

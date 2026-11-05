@@ -67,6 +67,9 @@ export type OidcExchangeResult =
     }
   | {
       readonly status: 'unavailable';
+    }
+  | {
+      readonly status: 'configuration_unavailable';
     };
 
 export interface AuthCryptoPort {
@@ -162,6 +165,7 @@ export interface OidcProtocolPort {
     readonly code: string;
     readonly pkceVerifier: string;
     readonly nonce: string;
+    readonly iss?: string | undefined;
   }): Promise<OidcExchangeResult>;
 }
 

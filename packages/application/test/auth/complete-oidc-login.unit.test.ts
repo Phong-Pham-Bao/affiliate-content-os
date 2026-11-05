@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { parseMembershipId, parseUserId, parseWorkspaceId } from '@affiliate-content-os/domain';
 import { completeOidcLogin } from '../../src/auth/complete-oidc-login.js';
 import {
+  AuthConfigurationUnavailableError,
   AuthenticationRequiredError,
   OidcCallbackInvalidError,
   OidcProviderUnavailableError,
@@ -246,6 +247,33 @@ describe('packages/application - completeOidcLogin', () => {
           },
         ),
       ).rejects.toThrow(OidcProviderUnavailableError);
+
+      expect(fakes.sessionStore.createSession).not.toHaveBeenCalled();
+    });
+
+    it('translates explicit configuration unavailable status to AuthConfigurationUnavailableError', async () => {
+      const fakes = createFakes();
+      (fakes.oidc.exchangeCodeAndValidateIdToken as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+        {
+          status: 'configuration_unavailable',
+        },
+      );
+
+      await expect(
+        completeOidcLogin(
+          {
+            query: { code: 'auth-code-123', state: 'sample-state' },
+            transactionCookie: validCookie,
+          },
+          {
+            ...fakes,
+            generateId: () => sampleSessionId,
+            now: () => sampleNow,
+            sessionIdleTtlSeconds: 1800,
+            sessionAbsoluteTtlSeconds: 28800,
+          },
+        ),
+      ).rejects.toThrow(AuthConfigurationUnavailableError);
 
       expect(fakes.sessionStore.createSession).not.toHaveBeenCalled();
     });

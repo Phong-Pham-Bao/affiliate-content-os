@@ -1,9 +1,11 @@
 import * as client from 'openid-client';
+import type { OidcExchangeResult, OidcProtocolPort } from '@affiliate-content-os/application';
 import {
-  OidcProviderUnavailableError,
-  type OidcExchangeResult,
-  type OidcProtocolPort,
-} from '@affiliate-content-os/application';
+  classifyGrantError,
+  defaultDiagnosticLogger,
+  mapDiagnosticOutcome,
+  type DiagnosticLogger,
+} from './oidc-grant-diagnostic.js';
 
 export interface OidcAdapterConfig {
   readonly issuer: string;
@@ -13,11 +15,28 @@ export interface OidcAdapterConfig {
   readonly allowInsecureRequests?: boolean;
 }
 
+export interface OidcAdapterOptions {
+  readonly grantFn?: typeof client.authorizationCodeGrant | undefined;
+  readonly diagnosticLogger?: DiagnosticLogger | undefined;
+}
+
 export class OidcProtocolAdapter implements OidcProtocolPort {
+  private readonly grantFn: typeof client.authorizationCodeGrant;
+  private readonly diagnosticLogger: DiagnosticLogger;
+
   constructor(
     private readonly config: client.Configuration,
     private readonly adapterConfig: OidcAdapterConfig,
-  ) {}
+    grantFnOrOptions?: typeof client.authorizationCodeGrant | OidcAdapterOptions,
+  ) {
+    if (typeof grantFnOrOptions === 'function') {
+      this.grantFn = grantFnOrOptions;
+      this.diagnosticLogger = defaultDiagnosticLogger;
+    } else {
+      this.grantFn = grantFnOrOptions?.grantFn ?? client.authorizationCodeGrant;
+      this.diagnosticLogger = grantFnOrOptions?.diagnosticLogger ?? defaultDiagnosticLogger;
+    }
+  }
 
   public buildAuthorizationUrl(params: {
     readonly state: string;
@@ -39,33 +58,51 @@ export class OidcProtocolAdapter implements OidcProtocolPort {
     readonly code: string;
     readonly pkceVerifier: string;
     readonly nonce: string;
+    readonly iss?: string | undefined;
   }): Promise<OidcExchangeResult> {
     const callbackUrl = new URL(this.adapterConfig.redirectUri);
     callbackUrl.searchParams.set('code', params.code);
+    if (typeof params.iss === 'string') {
+      callbackUrl.searchParams.set('iss', params.iss);
+    }
 
     let tokens: client.TokenEndpointResponse & client.TokenEndpointResponseHelpers;
     try {
-      tokens = await client.authorizationCodeGrant(this.config, callbackUrl, {
+      tokens = await this.grantFn(this.config, callbackUrl, {
         pkceCodeVerifier: params.pkceVerifier,
         expectedNonce: params.nonce,
         expectedState: client.skipStateCheck,
       });
-    } catch {
-      return Object.freeze({ status: 'unavailable' });
+    } catch (err: unknown) {
+      const entry = classifyGrantError(err);
+      this.diagnosticLogger(entry);
+      const outcome = mapDiagnosticOutcome(entry.category);
+      return Object.freeze({ status: outcome });
     }
 
     let claims: Record<string, unknown>;
     try {
       const raw = tokens.claims();
       if (!raw || typeof raw !== 'object') {
+        this.diagnosticLogger(Object.freeze({ category: 'protocol_token_claim_invalid' }));
         return Object.freeze({ status: 'invalid' });
       }
       claims = raw as Record<string, unknown>;
     } catch {
+      this.diagnosticLogger(Object.freeze({ category: 'protocol_token_claim_invalid' }));
       return Object.freeze({ status: 'invalid' });
     }
 
-    if (claims.iss !== this.adapterConfig.issuer) {
+    const isGoogleIssuer =
+      this.adapterConfig.issuer === 'https://accounts.google.com' ||
+      this.adapterConfig.issuer === 'accounts.google.com';
+    const isIssuerMatch =
+      claims.iss === this.adapterConfig.issuer ||
+      (isGoogleIssuer &&
+        (claims.iss === 'https://accounts.google.com' || claims.iss === 'accounts.google.com'));
+
+    if (!isIssuerMatch) {
+      this.diagnosticLogger(Object.freeze({ category: 'protocol_issuer_invalid' }));
       return Object.freeze({ status: 'invalid' });
     }
 
@@ -74,6 +111,7 @@ export class OidcProtocolAdapter implements OidcProtocolPort {
       claims.sub.trim() === '' ||
       claims.sub !== claims.sub.trim()
     ) {
+      this.diagnosticLogger(Object.freeze({ category: 'protocol_token_claim_invalid' }));
       return Object.freeze({ status: 'invalid' });
     }
 
@@ -86,82 +124,11 @@ export class OidcProtocolAdapter implements OidcProtocolPort {
     return Object.freeze({
       status: 'verified',
       claims: Object.freeze({
-        issuer: claims.iss as string,
+        issuer: isGoogleIssuer ? this.adapterConfig.issuer : (claims.iss as string),
         subject: claims.sub,
         email,
         displayName,
       }),
     });
   }
-}
-
-export async function discoverOidcAdapter(
-  adapterConfig: OidcAdapterConfig,
-  options?: { signal?: AbortSignal },
-): Promise<OidcProtocolAdapter> {
-  const signal = options?.signal;
-  if (signal?.aborted) {
-    throw new OidcProviderUnavailableError();
-  }
-
-  let configuration: client.Configuration;
-  try {
-    const issuerUrl = new URL(adapterConfig.issuer);
-    const execute = adapterConfig.allowInsecureRequests ? [client.allowInsecureRequests] : [];
-
-    const discoveryOptions: client.DiscoveryRequestOptions = {
-      execute,
-      timeout: 5,
-    };
-
-    if (signal) {
-      discoveryOptions[client.customFetch] = (url, init) => {
-        const reqInit: RequestInit = {
-          method: init.method,
-          headers: init.headers,
-          redirect: init.redirect,
-          signal,
-        };
-        if (init.body !== undefined) {
-          reqInit.body = init.body;
-        }
-        return fetch(url, reqInit);
-      };
-    }
-
-    const discoveryPromise = client.discovery(
-      issuerUrl,
-      adapterConfig.clientId,
-      adapterConfig.clientSecret,
-      client.ClientSecretBasic(),
-      discoveryOptions,
-    );
-
-    if (signal) {
-      const abortPromise = new Promise<never>((_, reject) => {
-        signal.addEventListener('abort', () => reject(new OidcProviderUnavailableError()), {
-          once: true,
-        });
-      });
-      configuration = await Promise.race([discoveryPromise, abortPromise]);
-    } else {
-      configuration = await discoveryPromise;
-    }
-  } catch {
-    throw new OidcProviderUnavailableError();
-  }
-
-  // Require discovery issuer to match configured issuer exactly
-  const serverIssuer = configuration.serverMetadata().issuer;
-  if (serverIssuer !== adapterConfig.issuer) {
-    throw new OidcProviderUnavailableError();
-  }
-
-  // Require authorization, token, and jwks endpoints
-  const metadata = configuration.serverMetadata();
-  if (!metadata.authorization_endpoint || !metadata.token_endpoint || !metadata.jwks_uri) {
-    throw new OidcProviderUnavailableError();
-  }
-
-  return new OidcProtocolAdapter(configuration, adapterConfig);
 }

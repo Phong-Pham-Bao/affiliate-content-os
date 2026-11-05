@@ -254,6 +254,11 @@ export function snapshotExchangeResult(res: unknown): OidcExchangeResult | null 
     return Object.freeze({ status: 'unavailable' as const });
   }
 
+  if (statusDesc.value === 'configuration_unavailable') {
+    if (keys.length !== 1 || keys[0] !== 'status') return null;
+    return Object.freeze({ status: 'configuration_unavailable' as const });
+  }
+
   if (statusDesc.value === 'verified') {
     if (keys.length !== 2) return null;
     if (!keys.includes('status') || !keys.includes('claims')) return null;

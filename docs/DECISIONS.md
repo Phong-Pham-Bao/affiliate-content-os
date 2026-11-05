@@ -55,7 +55,7 @@ Decision states: `proposed`, `accepted`, `superseded`, `rejected`.
 - Status: accepted
 - Decision: Use a managed OIDC identity provider with authorization-code flow and secure server sessions. Keep application sign-in separate from social-platform OAuth.
 - Rationale: Password storage and account recovery are not product differentiators. Separation prevents a connected social account from becoming an application identity by accident.
-- Consequences: The specific vendor remains a deployment decision. User identity is issuer + subject, not email. TASK-006 implements this as a provider-neutral, standards-compliant OIDC adapter (`openid-client@6.8.8`) and opaque PostgreSQL server sessions (`application_sessions`), maintaining strict separation from social connections. The concrete OIDC vendor, sign-in methods, production KMS, and distributed rate limiting remain open decisions.
+- Consequences: On 2026-11-05, the Product Owner selected Google OIDC as the managed identity provider for application authentication. The canonical configured issuer is `https://accounts.google.com`. The OIDC adapter accepts and canonicalizes the documented legacy Google ID-token issuer `accounts.google.com` to `https://accounts.google.com` for identity resolution and persistence. User identity is strictly `(identity_provider, identity_subject)` and email remains non-authoritative metadata. Application user authentication remains strictly decoupled from social-platform OAuth connections (Threads/TikTok). Production KMS and distributed rate limiting remain deployment decisions.
 - Rejected: building passwords/authentication in-house; using Threads/TikTok connection as application login in MVP.
 
 ## ADR-006: Workspace tenancy and fixed roles
@@ -121,7 +121,7 @@ Decision states: `proposed`, `accepted`, `superseded`, `rejected`.
 - Status: accepted
 - Decision: Route all model calls through a vendor-neutral AI Gateway. Use explicit context packages, versioned prompt/output schemas, evidence references, deterministic validation, budgets, and recorded provenance.
 - Rationale: AI output is non-deterministic and may hallucinate or follow hostile source text. The system needs testable contracts and vendor flexibility.
-- Consequences: Invalid output fails visibly or receives one bounded repair. Model/prompt changes require evaluations. AI cannot approve or publish.
+- Consequences: On 2026-11-05, the Product Owner selected Gemini API as the Sprint 2 AI provider while preserving the vendor-neutral AI Gateway boundary. Exact Gemini model, region/data terms, retention, and workspace budget remain open. Invalid output fails visibly or receives one bounded repair. Model/prompt changes require evaluations. AI cannot approve or publish.
 - Rejected: provider SDKs in domain modules, storing opaque prose without provenance, autonomous learning that mutates content.
 
 ## ADR-014: User-provided media only in MVP
@@ -201,14 +201,13 @@ Decision states: `proposed`, `accepted`, `superseded`, `rejected`.
 These are intentionally unresolved because no Product Owner or deployment constraints were supplied:
 
 1. Cloud/region, managed PostgreSQL, Redis-compatible queue, object storage, KMS, and observability vendors.
-2. Managed OIDC vendor and supported sign-in methods.
-3. AI provider/model choices, regional processing, zero-retention terms, and workspace cost limits.
-4. Exact data retention periods, recovery objectives, privacy jurisdictions, and terms/privacy copy.
-5. Affiliate categories/markets initially allowed and required disclosure policy by jurisdiction.
-6. Whether editor self-approval remains acceptable after beta.
-7. TikTok app review/audit status and whether draft upload is permitted/desirable for initial users.
-8. Threads app review status, exact approved permissions, and currently available insights.
-9. Hosting domains and same-origin topology.
-10. Beta scale targets and SLO/error-budget numbers.
+2. Gemini provider is selected as the AI provider on 2026-11-05, while its exact model, region/data terms, retention, and workspace budget remain unresolved.
+3. Exact data retention periods, recovery objectives, privacy jurisdictions, and terms/privacy copy.
+4. Affiliate categories/markets initially allowed and required disclosure policy by jurisdiction.
+5. Whether editor self-approval remains acceptable after beta.
+6. TikTok app review/audit status and whether draft upload is permitted/desirable for initial users.
+7. Threads app review status, exact approved permissions, and currently available insights.
+8. Hosting domains and same-origin topology.
+9. Beta scale targets and SLO/error-budget numbers.
 
 None of these should be silently guessed in implementation. Tasks that depend on one must either resolve it explicitly or use a documented local/test abstraction that does not constrain the production choice.

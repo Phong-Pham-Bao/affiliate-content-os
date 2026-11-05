@@ -5,6 +5,7 @@ import {
   completeOidcLogin,
   validateReturnTo,
 } from '@affiliate-content-os/application';
+import { parseAndValidateRawCallback } from './callback-url-parser.js';
 import {
   COOKIE_TRANSACTION,
   RATE_LIMIT_CALLBACK_MAX,
@@ -13,118 +14,6 @@ import {
 import { clearTransactionCookie, setSessionCookie } from './cookies.js';
 import { callbackRouteSchema } from './schemas.js';
 import type { AuthDependencies } from './types.js';
-
-function parseAndValidateRawCallback(rawUrlStr: string): Record<string, string> {
-  if (typeof rawUrlStr !== 'string' || rawUrlStr.includes('#')) {
-    throw new OidcCallbackInvalidError();
-  }
-
-  const qIdx = rawUrlStr.indexOf('?');
-  if (qIdx === -1) {
-    throw new OidcCallbackInvalidError();
-  }
-
-  const rawQuery = rawUrlStr.slice(qIdx + 1);
-  if (
-    rawQuery.includes('?') ||
-    rawQuery.startsWith('&') ||
-    rawQuery.endsWith('&') ||
-    rawQuery.includes('&&') ||
-    rawQuery.includes(';')
-  ) {
-    throw new OidcCallbackInvalidError();
-  }
-
-  for (let i = 0; i < rawQuery.length; i++) {
-    if (rawQuery[i] === '%') {
-      if (i + 2 >= rawQuery.length) {
-        throw new OidcCallbackInvalidError();
-      }
-      const hex = rawQuery.slice(i + 1, i + 3);
-      if (!/^[0-9a-fA-F]{2}$/.test(hex)) {
-        throw new OidcCallbackInvalidError();
-      }
-    }
-  }
-
-  const pairs = rawQuery.split('&');
-  if (pairs.length === 0) {
-    throw new OidcCallbackInvalidError();
-  }
-
-  const seenDecodedKeys = new Set<string>();
-  const seenRawKeys = new Set<string>();
-  const parsedRecord: Record<string, string> = Object.create(null);
-
-  for (const pair of pairs) {
-    const eqIdx = pair.indexOf('=');
-    const rawKey = eqIdx === -1 ? pair : pair.slice(0, eqIdx);
-    const rawVal = eqIdx === -1 ? '' : pair.slice(eqIdx + 1);
-
-    let decodedKey: string;
-    let decodedVal: string;
-    try {
-      decodedKey = decodeURIComponent(rawKey);
-      decodedVal = decodeURIComponent(rawVal);
-    } catch {
-      throw new OidcCallbackInvalidError();
-    }
-
-    if (
-      decodedKey !== 'code' &&
-      decodedKey !== 'state' &&
-      decodedKey !== 'error' &&
-      decodedKey !== 'error_description' &&
-      decodedKey !== 'error_uri'
-    ) {
-      throw new OidcCallbackInvalidError();
-    }
-
-    if (seenRawKeys.has(rawKey) || seenDecodedKeys.has(decodedKey)) {
-      throw new OidcCallbackInvalidError();
-    }
-    seenRawKeys.add(rawKey);
-    seenDecodedKeys.add(decodedKey);
-
-    for (let i = 0; i < decodedKey.length; i++) {
-      const c = decodedKey.charCodeAt(i);
-      if ((c >= 0 && c <= 0x1f) || c === 0x7f) {
-        throw new OidcCallbackInvalidError();
-      }
-    }
-    for (let i = 0; i < decodedVal.length; i++) {
-      const c = decodedVal.charCodeAt(i);
-      if ((c >= 0 && c <= 0x1f) || c === 0x7f) {
-        throw new OidcCallbackInvalidError();
-      }
-    }
-
-    parsedRecord[decodedKey] = decodedVal;
-  }
-
-  const hasCode = Object.prototype.hasOwnProperty.call(parsedRecord, 'code');
-  const hasError = Object.prototype.hasOwnProperty.call(parsedRecord, 'error');
-  if ((hasCode && hasError) || (!hasCode && !hasError)) {
-    throw new OidcCallbackInvalidError();
-  }
-  if (!parsedRecord['state'] || parsedRecord['state'].length === 0) {
-    throw new OidcCallbackInvalidError();
-  }
-  if (hasCode) {
-    if (
-      Object.prototype.hasOwnProperty.call(parsedRecord, 'error_description') ||
-      Object.prototype.hasOwnProperty.call(parsedRecord, 'error_uri') ||
-      !parsedRecord['code'] ||
-      parsedRecord['code'].length === 0
-    ) {
-      throw new OidcCallbackInvalidError();
-    }
-  } else if (!parsedRecord['error'] || parsedRecord['error'].length === 0) {
-    throw new OidcCallbackInvalidError();
-  }
-
-  return parsedRecord;
-}
 
 export function createCallbackRoute(deps: AuthDependencies): FastifyPluginAsync {
   return async (fastify) => {

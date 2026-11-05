@@ -110,7 +110,8 @@ Begins managed OIDC authorization-code flow.
 ### `GET /auth/callback`
 
 Completes managed OIDC authorization-code flow.
-- Query: authorization code and state (`code`, `state`) or provider error response (`error`, `error_description`, `error_uri`).
+- Query: authorization code and state (`code`, `state`), optional RFC 9207 authorization server issuer identifier (`iss`), or provider error response (`error`, `error_description`, `error_uri`, optional `iss`). In accordance with RFC 6749 Section 4.1.2, unrecognized provider query parameters (such as Google's `scope`, `authuser`, `prompt`, `hd`) are bounded, safely ignored, and dropped before domain execution. Bounded size constraints (<= 16384 bytes total query, <= 32 parameter pairs), character constraints (rejecting control characters, malformed percent-encoding, prototype keys), and duplicate key rejection apply across all parameters.
+- Security and Validation Guarantees: No weakening of state, nonce, or PKCE validation. Replay prevention requires single-use transactional consumption before token exchange; state hash and browser-binding cookie hash are verified in PostgreSQL; PKCE verifier and nonce decrypted from ciphertext are verified against code challenge and ID token claims; issuer parameter is validated against the authorization server configuration per RFC 9207.
 - Rate limit: 20 requests per 60 seconds per `request.ip`.
 - Cookie handling: clears `acos_oidc_transaction` cookie on all outcomes (`Max-Age=0`).
 - Success: `303 See Other` redirect to `new URL(returnTo, APP_BASE_URL)`. Sets `acos_session` cookie (`HttpOnly`, `SameSite=Lax`, `Path=/`, `Max-Age` equal to remaining absolute session lifetime, `Secure` in production).

@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { OidcProviderUnavailableError } from '@affiliate-content-os/application';
-import { discoverOidcAdapter } from '../../src/auth/oidc-adapter.js';
+import { discoverOidcAdapter } from '../../src/auth/oidc-adapter-discovery.js';
 import { createTestOidcIssuer, type TestOidcIssuer } from '../helpers/test-oidc-issuer.js';
 
 describe('packages/infrastructure - OIDC Protocol Adapter', () => {

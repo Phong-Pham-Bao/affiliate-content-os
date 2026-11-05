@@ -23,6 +23,7 @@ function hasControlChars(str: string): boolean {
 export function parseCallbackQuery(query: unknown): {
   readonly code?: string | undefined;
   readonly state: string;
+  readonly iss?: string | undefined;
   readonly isDenial: boolean;
 } {
   if (typeof query !== 'object' || query === null || isProxySafe(query)) {
@@ -57,10 +58,26 @@ export function parseCallbackQuery(query: unknown): {
   }
   const state = stateDesc.value;
 
+  const issDesc = Object.getOwnPropertyDescriptor(query, 'iss');
+  let iss: string | undefined;
+  if (issDesc !== undefined) {
+    if (
+      issDesc.get !== undefined ||
+      issDesc.set !== undefined ||
+      typeof issDesc.value !== 'string' ||
+      issDesc.value.length === 0 ||
+      issDesc.value.length > 2048 ||
+      hasControlChars(issDesc.value)
+    ) {
+      throw new OidcCallbackInvalidError();
+    }
+    iss = issDesc.value;
+  }
+
   if (hasCode) {
-    if (keys.length !== 2) throw new OidcCallbackInvalidError();
+    if (keys.length < 2 || keys.length > 3) throw new OidcCallbackInvalidError();
     for (const k of keys) {
-      if (k !== 'code' && k !== 'state') throw new OidcCallbackInvalidError();
+      if (k !== 'code' && k !== 'state' && k !== 'iss') throw new OidcCallbackInvalidError();
     }
     if (
       codeDesc.get !== undefined ||
@@ -72,10 +89,15 @@ export function parseCallbackQuery(query: unknown): {
     ) {
       throw new OidcCallbackInvalidError();
     }
-    return { code: codeDesc.value, state, isDenial: false };
+    return Object.freeze({
+      code: codeDesc.value,
+      state,
+      ...(iss !== undefined ? { iss } : {}),
+      isDenial: false,
+    });
   }
 
-  const allowedDenialKeys = new Set(['error', 'state', 'error_description', 'error_uri']);
+  const allowedDenialKeys = new Set(['error', 'state', 'error_description', 'error_uri', 'iss']);
   for (const k of keys) {
     if (typeof k !== 'string' || !allowedDenialKeys.has(k)) {
       throw new OidcCallbackInvalidError();
@@ -107,7 +129,11 @@ export function parseCallbackQuery(query: unknown): {
     }
   }
 
-  return { state, isDenial: true };
+  return Object.freeze({
+    state,
+    ...(iss !== undefined ? { iss } : {}),
+    isDenial: true,
+  });
 }
 
 export function validateTransactionCookie(cookie: unknown): string {

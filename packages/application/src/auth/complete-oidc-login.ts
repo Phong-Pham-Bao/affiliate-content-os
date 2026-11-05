@@ -1,5 +1,6 @@
 import { resolveVerifiedIdentity } from '../resolve-verified-identity.js';
 import {
+  AuthConfigurationUnavailableError,
   AuthenticationRequiredError,
   OidcCallbackInvalidError,
   OidcProviderUnavailableError,
@@ -71,11 +72,18 @@ export async function completeOidcLogin(
 
   let rawExchangeResult: unknown;
   try {
-    rawExchangeResult = await deps.oidc.exchangeCodeAndValidateIdToken({
+    const exchangeParams: {
+      readonly code: string;
+      readonly pkceVerifier: string;
+      readonly nonce: string;
+      readonly iss?: string | undefined;
+    } = {
       code: parsed.code!,
       pkceVerifier: secrets.pkceVerifier,
       nonce: secrets.nonce,
-    });
+      ...(parsed.iss !== undefined ? { iss: parsed.iss } : {}),
+    };
+    rawExchangeResult = await deps.oidc.exchangeCodeAndValidateIdToken(exchangeParams);
   } catch {
     throw new OidcCallbackInvalidError();
   }
@@ -91,6 +99,10 @@ export async function completeOidcLogin(
 
   if (exchangeResult.status === 'unavailable') {
     throw new OidcProviderUnavailableError();
+  }
+
+  if (exchangeResult.status === 'configuration_unavailable') {
+    throw new AuthConfigurationUnavailableError();
   }
 
   const claims = exchangeResult.claims;

@@ -15,6 +15,7 @@ export interface TestOidcIssuer {
   readonly close: () => Promise<void>;
   setTokenClaims(claims: Partial<jose.JWTPayload>): void;
   setFailNextTokenRequest(fail: boolean): void;
+  setIssParameterSupported(supported: boolean): void;
   issueCode(params: {
     readonly redirectUri: string;
     readonly codeChallenge: string;
@@ -41,6 +42,7 @@ export async function createTestOidcIssuer(
   const counts = { discovery: 0, jwks: 0, token: 0, authorize: 0 };
   let customClaims: Partial<jose.JWTPayload> = {};
   let failNextToken = false;
+  let issParameterSupported = false;
   const issuedCodes = new Map<string, IssuedCodeRecord>();
 
   const server = http.createServer(async (req, res) => {
@@ -59,6 +61,10 @@ export async function createTestOidcIssuer(
           response_types_supported: ['code'],
           subject_types_supported: ['public'],
           id_token_signing_alg_values_supported: ['RS256'],
+          token_endpoint_auth_methods_supported: ['client_secret_post', 'client_secret_basic'],
+          ...(issParameterSupported
+            ? { authorization_response_iss_parameter_supported: true }
+            : {}),
         }),
       );
       return;
@@ -112,31 +118,32 @@ export async function createTestOidcIssuer(
         return;
       }
 
-      // 1. Strict Basic client authentication check (mandatory)
-      const authHeader = req.headers['authorization'];
-      if (!authHeader || !authHeader.startsWith('Basic ')) {
-        res.writeHead(401, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'invalid_client' }));
-        return;
-      }
-
-      const decoded = Buffer.from(authHeader.slice(6), 'base64').toString('utf8');
-      const [rawId, rawSecret] = decoded.split(':');
-      const parsedId = decodeURIComponent((rawId ?? '').replace(/\+/g, ' '));
-      const parsedSecret = decodeURIComponent((rawSecret ?? '').replace(/\+/g, ' '));
-      if (parsedId !== clientId || parsedSecret !== clientSecret) {
-        res.writeHead(401, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'invalid_client' }));
-        return;
-      }
-
-      // Read body
       const chunks: Buffer[] = [];
       for await (const chunk of req) {
         chunks.push(chunk as Buffer);
       }
       const bodyStr = Buffer.concat(chunks).toString('utf8');
       const params = new URLSearchParams(bodyStr);
+
+      // 1. Strict confidential-client authentication check.
+      const authHeader = req.headers['authorization'];
+      let authenticated: boolean;
+      if (authHeader?.startsWith('Basic ')) {
+        const decoded = Buffer.from(authHeader.slice(6), 'base64').toString('utf8');
+        const [rawId, rawSecret] = decoded.split(':');
+        const parsedId = decodeURIComponent((rawId ?? '').replace(/\+/g, ' '));
+        const parsedSecret = decodeURIComponent((rawSecret ?? '').replace(/\+/g, ' '));
+        authenticated = parsedId === clientId && parsedSecret === clientSecret;
+      } else {
+        authenticated =
+          params.get('client_id') === clientId && params.get('client_secret') === clientSecret;
+      }
+
+      if (!authenticated) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'invalid_client' }));
+        return;
+      }
 
       // 2. Validate grant_type
       const grantType = params.get('grant_type');
@@ -239,6 +246,9 @@ export async function createTestOidcIssuer(
     },
     setFailNextTokenRequest(fail: boolean): void {
       failNextToken = fail;
+    },
+    setIssParameterSupported(supported: boolean): void {
+      issParameterSupported = supported;
     },
     issueCode(params: {
       readonly redirectUri: string;

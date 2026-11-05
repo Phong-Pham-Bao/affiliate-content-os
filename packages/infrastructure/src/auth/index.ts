@@ -40,7 +40,21 @@ export {
 export { createAuthCryptoAdapter, InfrastructureAuthCryptoAdapter } from './crypto-adapter.js';
 
 export {
-  discoverOidcAdapter,
   OidcProtocolAdapter,
   type OidcAdapterConfig,
+  type OidcAdapterOptions,
 } from './oidc-adapter.js';
+
+export { discoverOidcAdapter } from './oidc-adapter-discovery.js';
+
+export {
+  classifyGrantError,
+  classifyClientError,
+  classifyResponseBodyError,
+  defaultDiagnosticLogger,
+  mapDiagnosticOutcome,
+  type DiagnosticLogger,
+  type OidcDiagnosticCategory,
+  type OidcDiagnosticOutcome,
+  type SafeDiagnosticEntry,
+} from './oidc-grant-diagnostic.js';
