@@ -9,6 +9,12 @@ export type WorkspaceId = string & { readonly [WorkspaceIdBrand]: typeof Workspa
 declare const MembershipIdBrand: unique symbol;
 export type MembershipId = string & { readonly [MembershipIdBrand]: typeof MembershipIdBrand };
 
+declare const AuditEventIdBrand: unique symbol;
+export type AuditEventId = string & { readonly [AuditEventIdBrand]: typeof AuditEventIdBrand };
+
+declare const CorrelationIdBrand: unique symbol;
+export type CorrelationId = string & { readonly [CorrelationIdBrand]: typeof CorrelationIdBrand };
+
 const UUID_V7_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 export function isValidUuidV7(value: unknown): value is string {
@@ -38,4 +44,20 @@ export function parseWorkspaceId(value: unknown): WorkspaceId {
 
 export function parseMembershipId(value: unknown): MembershipId {
   return assertCanonicalUuidV7(value, 'membership') as MembershipId;
+}
+
+export function isAuditEventId(value: unknown): value is AuditEventId {
+  return isValidUuidV7(value);
+}
+
+export function isCorrelationId(value: unknown): value is CorrelationId {
+  return isValidUuidV7(value);
+}
+
+export function parseAuditEventId(value: unknown): AuditEventId {
+  return assertCanonicalUuidV7(value, 'audit event') as AuditEventId;
+}
+
+export function parseCorrelationId(value: unknown): CorrelationId {
+  return assertCanonicalUuidV7(value, 'correlation') as CorrelationId;
 }

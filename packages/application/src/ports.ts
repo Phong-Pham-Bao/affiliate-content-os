@@ -5,6 +5,8 @@ import type {
   WorkspaceId,
   WorkspaceMembershipSnapshot,
   WorkspaceSnapshot,
+  AuditEventId,
+  AuditEventSnapshot,
 } from '@affiliate-content-os/domain';
 
 export interface UserDirectoryPort {
@@ -54,6 +56,13 @@ export interface WorkspaceAuthorizationPort {
 
 export interface ClockPort {
   now(): Date;
+}
+
+export interface AuditIdGeneratorPort {
+  generateAuditEventId(): AuditEventId;
+}
+export interface AuditEventAppendPort {
+  appendAuditEvent(event: AuditEventSnapshot): Promise<void>;
 }
 
 export interface IdGeneratorPort {

@@ -10,6 +10,8 @@ export {
   type CreateWorkspaceDependencies,
 } from './create-workspace.js';
 export {
+  AuditEventDependencyError,
+  AuditEventInputError,
   ApplicationError,
   IdentityClaimsValidationError,
   IdentityPersistenceError,
@@ -26,6 +28,8 @@ export {
 } from './errors.js';
 export { DefaultIdGenerator, generateUuidV7 } from './id-generator.js';
 export type {
+  AuditEventAppendPort,
+  AuditIdGeneratorPort,
   ClockPort,
   CreateWorkspaceResult,
   CreateWorkspaceWithOwnerParams,
@@ -36,6 +40,7 @@ export type {
   WorkspaceAuthorizationPort,
   WorkspacePersistencePort,
 } from './ports.js';
+export * from './audit/index.js';
 export {
   resolveVerifiedIdentity,
   type ResolveVerifiedIdentityCommand,

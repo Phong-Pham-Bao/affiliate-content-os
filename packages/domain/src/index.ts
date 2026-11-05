@@ -1,4 +1,15 @@
 export {
+  AUDIT_ACTOR_TYPES,
+  AUDIT_RESULTS,
+  isAuditActorType,
+  isAuditResult,
+  type AuditActorType,
+  type AuditEventSnapshot,
+  type AuditResult,
+  type AuditScalarChange,
+  type AuditScalarValue,
+} from './audit.js';
+export {
   canWorkspaceRole,
   isWorkspaceCapability,
   WORKSPACE_CAPABILITIES,
@@ -21,10 +32,16 @@ export {
 } from './identity.js';
 export {
   isValidUuidV7,
+  isAuditEventId,
+  isCorrelationId,
+  parseAuditEventId,
+  parseCorrelationId,
   parseMembershipId,
   parseUserId,
   parseWorkspaceId,
   type MembershipId,
+  type AuditEventId,
+  type CorrelationId,
   type UserId,
   type WorkspaceId,
 } from './ids.js';
