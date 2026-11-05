@@ -45,6 +45,13 @@ export interface WorkspacePersistencePort {
   }): Promise<WorkspaceMembershipSnapshot | null>;
 }
 
+export interface WorkspaceAuthorizationPort {
+  findMembership(params: {
+    readonly workspaceId: WorkspaceId;
+    readonly userId: UserId;
+  }): Promise<WorkspaceMembershipSnapshot | null>;
+}
+
 export interface ClockPort {
   now(): Date;
 }

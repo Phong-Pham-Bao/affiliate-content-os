@@ -8,7 +8,12 @@ import {
   type WorkspaceMembershipSnapshot,
   type WorkspaceSnapshot,
 } from '@affiliate-content-os/domain';
-import { SlugConflictError } from '@affiliate-content-os/application';
+import {
+  authorizeWorkspaceAction,
+  SlugConflictError,
+  WorkspaceAccessDeniedError,
+  WorkspaceAuthorizationPersistenceError,
+} from '@affiliate-content-os/application';
 import { DatabaseError } from '../../src/database/errors.js';
 import { createDatabase } from '../../src/database/index.js';
 import { createPostgresTenancyAdapter } from '../../src/tenancy/index.js';
@@ -374,6 +379,151 @@ describe('Real PostgreSQL Tenancy Adapter & Isolation Matrix Integration', () =>
 
     const memC_ws1 = await adapter.findMembership({ workspaceId: ws1, userId: userC });
     expect(memC_ws1).toBeNull();
+
+    await database.close();
+  });
+
+  it('proves workspace authorization boundary with PostgresTenancyAdapter against real PostgreSQL', async () => {
+    const database = createDatabase({
+      databaseUrl: context.dbUrl,
+      poolMax: 5,
+      connectionTimeoutMs: 5000,
+      idleTimeoutMs: 10000,
+      statementTimeoutMs: 10000,
+      sslMode: 'disable',
+    });
+    const adapter = createPostgresTenancyAdapter(database);
+
+    const userOwner = parseUserId('0192b012-3456-789a-8bcd-ef0123456851');
+    const userEditor = parseUserId('0192b012-3456-789a-8bcd-ef0123456852');
+    const userViewer = parseUserId('0192b012-3456-789a-8bcd-ef0123456853');
+    const userSuspended = parseUserId('0192b012-3456-789a-8bcd-ef0123456854');
+    const userRemoved = parseUserId('0192b012-3456-789a-8bcd-ef0123456855');
+    const userUnrelated = parseUserId('0192b012-3456-789a-8bcd-ef0123456856');
+
+    const wsAlpha = parseWorkspaceId('0192b012-3456-789a-8bcd-ef0123456861');
+    const wsBeta = parseWorkspaceId('0192b012-3456-789a-8bcd-ef0123456862');
+
+    // Seed users
+    await client.query(
+      `INSERT INTO users (id, identity_provider, identity_subject, email, display_name, status, created_at, updated_at, version) VALUES
+       ($1, 'idp.example.com', 'user-owner', 'owner@example.com', 'Owner', 'active', $7, $7, 1),
+       ($2, 'idp.example.com', 'user-editor', 'editor@example.com', 'Editor', 'active', $7, $7, 1),
+       ($3, 'idp.example.com', 'user-viewer', 'viewer@example.com', 'Viewer', 'active', $7, $7, 1),
+       ($4, 'idp.example.com', 'user-suspended', 'suspended@example.com', 'Suspended', 'active', $7, $7, 1),
+       ($5, 'idp.example.com', 'user-removed', 'removed@example.com', 'Removed', 'active', $7, $7, 1),
+       ($6, 'idp.example.com', 'user-unrelated', 'unrelated@example.com', 'Unrelated', 'active', $7, $7, 1);`,
+      [userOwner, userEditor, userViewer, userSuspended, userRemoved, userUnrelated, nowIso],
+    );
+
+    // Seed workspaces
+    await client.query(
+      `INSERT INTO workspaces (id, name, slug, timezone, brand_voice, default_disclosure, ai_enabled, status, created_at, updated_at, version) VALUES
+       ($1, 'Workspace Alpha', 'ws-alpha-auth', 'UTC', null, null, false, 'active', $3, $3, 1),
+       ($2, 'Workspace Beta', 'ws-beta-auth', 'UTC', null, null, false, 'active', $3, $3, 1);`,
+      [wsAlpha, wsBeta, nowIso],
+    );
+
+    // Seed memberships in wsAlpha
+    await client.query(
+      `INSERT INTO workspace_memberships (id, workspace_id, user_id, role, status, invited_by_user_id, joined_at, created_at, updated_at, version) VALUES
+       ('0192b012-3456-789a-8bcd-ef0123456871', $1, $2, 'owner', 'active', null, $7, $7, $7, 1),
+       ('0192b012-3456-789a-8bcd-ef0123456872', $1, $3, 'editor', 'active', null, $7, $7, $7, 1),
+       ('0192b012-3456-789a-8bcd-ef0123456873', $1, $4, 'viewer', 'active', null, $7, $7, $7, 1),
+       ('0192b012-3456-789a-8bcd-ef0123456874', $1, $5, 'editor', 'suspended', null, $7, $7, $7, 1),
+       ('0192b012-3456-789a-8bcd-ef0123456875', $1, $6, 'viewer', 'removed', null, $7, $7, $7, 1);`,
+      [wsAlpha, userOwner, userEditor, userViewer, userSuspended, userRemoved, nowIso],
+    );
+
+    // 1. Role mapping without coercion and capability authorization
+    // Owner can perform workspace.manage
+    const ownerAuth = await authorizeWorkspaceAction(
+      { workspaceId: wsAlpha, userId: userOwner, capability: 'workspace.manage' },
+      { authorization: adapter },
+    );
+    expect(ownerAuth.role).toBe('owner');
+    expect(ownerAuth.capability).toBe('workspace.manage');
+
+    // Editor can perform content.manage but cannot perform workspace.manage
+    const editorAuth = await authorizeWorkspaceAction(
+      { workspaceId: wsAlpha, userId: userEditor, capability: 'content.manage' },
+      { authorization: adapter },
+    );
+    expect(editorAuth.role).toBe('editor');
+    expect(editorAuth.capability).toBe('content.manage');
+
+    await expect(
+      authorizeWorkspaceAction(
+        { workspaceId: wsAlpha, userId: userEditor, capability: 'workspace.manage' },
+        { authorization: adapter },
+      ),
+    ).rejects.toThrow(WorkspaceAccessDeniedError);
+
+    // Viewer can perform catalog.read but cannot perform catalog.manage
+    const viewerAuth = await authorizeWorkspaceAction(
+      { workspaceId: wsAlpha, userId: userViewer, capability: 'catalog.read' },
+      { authorization: adapter },
+    );
+    expect(viewerAuth.role).toBe('viewer');
+    expect(viewerAuth.capability).toBe('catalog.read');
+
+    await expect(
+      authorizeWorkspaceAction(
+        { workspaceId: wsAlpha, userId: userViewer, capability: 'catalog.manage' },
+        { authorization: adapter },
+      ),
+    ).rejects.toThrow(WorkspaceAccessDeniedError);
+
+    // 2. Cross-tenant isolation: userOwner in wsAlpha cannot authorize in wsBeta
+    await expect(
+      authorizeWorkspaceAction(
+        { workspaceId: wsBeta, userId: userOwner, capability: 'workspace.read' },
+        { authorization: adapter },
+      ),
+    ).rejects.toThrow(WorkspaceAccessDeniedError);
+
+    // 3. Cross-user isolation: userUnrelated cannot use userOwner's membership in wsAlpha
+    await expect(
+      authorizeWorkspaceAction(
+        { workspaceId: wsAlpha, userId: userUnrelated, capability: 'workspace.read' },
+        { authorization: adapter },
+      ),
+    ).rejects.toThrow(WorkspaceAccessDeniedError);
+
+    // 4. Suspended / removed membership is not returned as active authorization
+    await expect(
+      authorizeWorkspaceAction(
+        { workspaceId: wsAlpha, userId: userSuspended, capability: 'workspace.read' },
+        { authorization: adapter },
+      ),
+    ).rejects.toThrow(WorkspaceAccessDeniedError);
+
+    await expect(
+      authorizeWorkspaceAction(
+        { workspaceId: wsAlpha, userId: userRemoved, capability: 'workspace.read' },
+        { authorization: adapter },
+      ),
+    ).rejects.toThrow(WorkspaceAccessDeniedError);
+
+    // 5. Unknown/malformed database rows fail safely through existing mapper guarantees
+    // A non-UUIDv7 UUID (e.g. UUIDv4) is accepted by PostgreSQL UUID type, but rejected by UUIDv7 mapper guarantees
+    const malformedMemId = '00000000-0000-4000-8000-000000000000';
+    await client.query(
+      `INSERT INTO workspace_memberships (id, workspace_id, user_id, role, status, invited_by_user_id, joined_at, created_at, updated_at, version) VALUES
+       ($1, $2, $3, 'editor', 'active', null, $4, $4, $4, 1);`,
+      [malformedMemId, wsBeta, userOwner, nowIso],
+    );
+
+    await expect(
+      adapter.findMembership({ workspaceId: wsBeta, userId: userOwner }),
+    ).rejects.toThrow();
+
+    await expect(
+      authorizeWorkspaceAction(
+        { workspaceId: wsBeta, userId: userOwner, capability: 'workspace.read' },
+        { authorization: adapter },
+      ),
+    ).rejects.toThrow(WorkspaceAuthorizationPersistenceError);
 
     await database.close();
   });

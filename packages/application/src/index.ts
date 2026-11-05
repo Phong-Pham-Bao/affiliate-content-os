@@ -1,3 +1,8 @@
+export {
+  authorizeWorkspaceAction,
+  type AuthorizeWorkspaceActionInput,
+  type WorkspaceAuthorizationContext,
+} from './authorize-workspace-action.js';
 export { SystemClock } from './clock.js';
 export {
   createWorkspace,
@@ -14,6 +19,9 @@ export {
   SlugConflictError,
   UserNotFoundError,
   ValidationError,
+  WorkspaceAccessDeniedError,
+  WorkspaceAuthorizationInputError,
+  WorkspaceAuthorizationPersistenceError,
   type IdentityClaimField,
 } from './errors.js';
 export { DefaultIdGenerator, generateUuidV7 } from './id-generator.js';
@@ -25,6 +33,7 @@ export type {
   IdentityLookupKey,
   UserDirectoryPort,
   UserIdentityDirectoryPort,
+  WorkspaceAuthorizationPort,
   WorkspacePersistencePort,
 } from './ports.js';
 export {

@@ -1,4 +1,10 @@
 export {
+  canWorkspaceRole,
+  isWorkspaceCapability,
+  WORKSPACE_CAPABILITIES,
+  type WorkspaceCapability,
+} from './authorization.js';
+export {
   dateToIsoTimestamp,
   isValidIsoTimestamp,
   parseIsoTimestamp,
