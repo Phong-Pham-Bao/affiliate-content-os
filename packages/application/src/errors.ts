@@ -92,3 +92,34 @@ export class IdentityProvisioningRaceError extends ApplicationError {
     this.name = 'IdentityProvisioningRaceError';
   }
 }
+
+export class WorkspaceAuthorizationInputError extends ApplicationError {
+  public override readonly name = 'WorkspaceAuthorizationInputError';
+  public readonly code = 'WORKSPACE_AUTHORIZATION_INPUT_INVALID' as const;
+
+  constructor() {
+    super('Invalid workspace authorization input');
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export class WorkspaceAccessDeniedError extends ApplicationError {
+  public override readonly name = 'WorkspaceAccessDeniedError';
+  public readonly code = 'WORKSPACE_ACCESS_DENIED' as const;
+
+  constructor() {
+    super('Workspace access denied');
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export class WorkspaceAuthorizationPersistenceError extends ApplicationError {
+  public override readonly name = 'WorkspaceAuthorizationPersistenceError';
+  public readonly code = 'WORKSPACE_AUTHORIZATION_PERSISTENCE_INVALID' as const;
+  public readonly operation = 'membership_lookup' as const;
+
+  constructor() {
+    super('Workspace authorization persistence error');
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
