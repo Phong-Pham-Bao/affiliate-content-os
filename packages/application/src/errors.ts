@@ -123,3 +123,21 @@ export class WorkspaceAuthorizationPersistenceError extends ApplicationError {
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }
+
+export class AuditEventInputError extends ApplicationError {
+  public override readonly name = 'AuditEventInputError';
+  public readonly code = 'AUDIT_EVENT_INPUT_INVALID' as const;
+  constructor() {
+    super('Invalid audit event input');
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export class AuditEventDependencyError extends ApplicationError {
+  public override readonly name = 'AuditEventDependencyError';
+  public readonly code = 'AUDIT_EVENT_DEPENDENCY_INVALID' as const;
+  constructor() {
+    super('Audit event dependency error');
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}

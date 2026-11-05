@@ -3,6 +3,8 @@ import {
   parseMembershipId,
   parseUserId,
   parseWorkspaceId,
+  parseAuditEventId,
+  type AuditEventId,
   type MembershipId,
   type UserId,
   type WorkspaceId,
@@ -31,6 +33,10 @@ export function generateUuidV7(timestampMs: number = Date.now()): string {
 export class DefaultIdGenerator implements IdGeneratorPort {
   public generateId(): string {
     return generateUuidV7();
+  }
+
+  public generateAuditEventId(): AuditEventId {
+    return parseAuditEventId(generateUuidV7());
   }
 
   public generateWorkspaceId(): WorkspaceId {

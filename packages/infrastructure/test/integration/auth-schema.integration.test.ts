@@ -35,6 +35,7 @@ describe('Real PostgreSQL Auth Schema and Constraints Integration', () => {
     const tableNames = res.rows.map((r) => r.table_name);
     expect(tableNames).toEqual([
       'application_sessions',
+      'audit_events',
       'oidc_login_transactions',
       'schema_migrations',
       'users',
