@@ -130,14 +130,35 @@ export async function getCurrentUser(
   }
 
   const userId = userDescriptors['id']!.value;
+  const identityProvider = userDescriptors['identityProvider']!.value;
+  const identitySubject = userDescriptors['identitySubject']!.value;
   const userEmail = userDescriptors['email']!.value;
   const userDisplayName = userDescriptors['displayName']!.value;
+  const userStatus = userDescriptors['status']!.value;
+  const userCreatedAt = userDescriptors['createdAt']!.value;
+  const userUpdatedAt = userDescriptors['updatedAt']!.value;
+  const userVersion = userDescriptors['version']!.value;
 
   if (
     typeof userId !== 'string' ||
     !isValidUuidV7(userId) ||
+    typeof identityProvider !== 'string' ||
+    identityProvider.length === 0 ||
+    identityProvider.trim() !== identityProvider ||
+    typeof identitySubject !== 'string' ||
+    identitySubject.length === 0 ||
+    identitySubject.trim() !== identitySubject ||
     (userEmail !== null && typeof userEmail !== 'string') ||
-    (userDisplayName !== null && typeof userDisplayName !== 'string')
+    (userDisplayName !== null && typeof userDisplayName !== 'string') ||
+    userStatus !== 'active' ||
+    typeof userCreatedAt !== 'string' ||
+    !isValidIsoTimestamp(userCreatedAt) ||
+    typeof userUpdatedAt !== 'string' ||
+    !isValidIsoTimestamp(userUpdatedAt) ||
+    userCreatedAt > userUpdatedAt ||
+    typeof userVersion !== 'number' ||
+    !Number.isSafeInteger(userVersion) ||
+    userVersion < 1
   ) {
     throw new AuthenticationRequiredError();
   }

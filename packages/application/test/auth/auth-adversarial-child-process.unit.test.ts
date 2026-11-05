@@ -179,4 +179,57 @@ describe('Child-process non-disclosure: hostile OIDC rejection and malformed DTO
     expect(stdout).not.toContain('MALFORMED_DATE_SENTINEL_VAL_123');
     expect(stderr).not.toContain('MALFORMED_DATE_SENTINEL_VAL_123');
   }, 15000);
+
+  it('proves malformed current-user context sentinels never leak to child process stdout or stderr', async () => {
+    const script = `
+      import { getCurrentUser } from './packages/application/src/auth/get-current-user.ts';
+      import { AuthenticationRequiredError } from './packages/application/src/auth/errors.ts';
+
+      let workspaceCalls = 0;
+      const workspaceSummary = {
+        listActiveWorkspaceSummaries: async () => {
+          workspaceCalls++;
+          return { items: [], hasMore: false };
+        },
+      };
+
+      const malformedContext = {
+        user: {
+          id: '0192b012-3456-789a-8bcd-ef0123456710',
+          identityProvider: 42,
+          identitySubject: { sentinel: 'USER_SENTINEL_VAL_123' },
+          email: 'user@example.com',
+          displayName: 'Example User',
+          status: 'disabled',
+          createdAt: 'invalid',
+          updatedAt: 'invalid',
+          version: 0,
+        },
+        session: {
+          id: '0192b012-3456-789a-8bcd-ef0123456720',
+          userId: '0192b012-3456-789a-8bcd-ef0123456710',
+          idleExpiresAt: '2026-11-02T12:30:00.000Z',
+          absoluteExpiresAt: '2026-11-02T20:00:00.000Z',
+        },
+        rotatedToken: null,
+      };
+
+      try {
+        await getCurrentUser(malformedContext, { workspaceSummary });
+        process.exit(1);
+      } catch (e) {
+        if (e instanceof AuthenticationRequiredError && workspaceCalls === 0) {
+          console.log('SAFE_AUTH_REQUIRED_CAUGHT');
+          process.exit(0);
+        }
+        process.exit(2);
+      }
+    `;
+
+    const { stdout, stderr, code } = await runNodeChild(script);
+    expect(code).toBe(0);
+    expect(stdout).toContain('SAFE_AUTH_REQUIRED_CAUGHT');
+    expect(stdout).not.toContain('USER_SENTINEL_VAL_123');
+    expect(stderr).not.toContain('USER_SENTINEL_VAL_123');
+  }, 15000);
 });

@@ -176,26 +176,76 @@ describe('Auth Adversarial Hostile Proxies and Traps', () => {
       hasMore: false,
     };
 
+    const listSpy = vi.fn().mockResolvedValue(hostileSummaries);
     const context = {
       user: {
         id: '0192b012-3456-789a-8bcd-ef0123456710',
+        identityProvider: 'https://auth.example.com',
+        identitySubject: 'sub-1',
         email: 'u@ex.com',
         displayName: 'User',
+        status: 'active',
+        createdAt: '2026-11-02T10:00:00.000Z',
+        updatedAt: '2026-11-02T10:00:00.000Z',
+        version: 1,
       },
       session: {
+        id: '0192b012-3456-789a-8bcd-ef0123456720',
+        userId: '0192b012-3456-789a-8bcd-ef0123456710',
         idleExpiresAt: '2026-11-02T12:30:00.000Z',
         absoluteExpiresAt: '2026-11-02T20:00:00.000Z',
       },
+      rotatedToken: null,
     };
 
     await expect(
       getCurrentUser(context as unknown as Parameters<typeof getCurrentUser>[0], {
         workspaceSummary: {
-          listActiveWorkspaceSummaries: vi.fn().mockResolvedValue(hostileSummaries),
+          listActiveWorkspaceSummaries: listSpy,
         },
       }),
     ).rejects.toThrow(AuthenticationRequiredError);
 
     expect(getterCalls).toBe(0);
+    expect(listSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects hostile user properties in getCurrentUser with zero getter calls and zero workspace calls', async () => {
+    let getterCalls = 0;
+    const listSpy = vi.fn();
+    const hostileUser = {
+      id: '0192b012-3456-789a-8bcd-ef0123456710',
+      identityProvider: 'https://auth.example.com',
+      identitySubject: 'sub-1',
+      email: 'u@ex.com',
+      displayName: 'User',
+      get status(): string {
+        getterCalls++;
+        throw new Error('STATUS_GETTER_SENTINEL');
+      },
+      createdAt: '2026-11-02T10:00:00.000Z',
+      updatedAt: '2026-11-02T10:00:00.000Z',
+      version: 1,
+    };
+
+    const context = {
+      user: hostileUser,
+      session: {
+        id: '0192b012-3456-789a-8bcd-ef0123456720',
+        userId: '0192b012-3456-789a-8bcd-ef0123456710',
+        idleExpiresAt: '2026-11-02T12:30:00.000Z',
+        absoluteExpiresAt: '2026-11-02T20:00:00.000Z',
+      },
+      rotatedToken: null,
+    };
+
+    await expect(
+      getCurrentUser(context as unknown as Parameters<typeof getCurrentUser>[0], {
+        workspaceSummary: { listActiveWorkspaceSummaries: listSpy },
+      }),
+    ).rejects.toThrow(AuthenticationRequiredError);
+
+    expect(getterCalls).toBe(0);
+    expect(listSpy).toHaveBeenCalledTimes(0);
   });
 });
