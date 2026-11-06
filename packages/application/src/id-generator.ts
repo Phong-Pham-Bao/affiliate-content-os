@@ -4,7 +4,9 @@ import {
   parseUserId,
   parseWorkspaceId,
   parseAuditEventId,
+  parseIdempotencyKeyId,
   type AuditEventId,
+  type IdempotencyKeyId,
   type MembershipId,
   type UserId,
   type WorkspaceId,
@@ -37,6 +39,10 @@ export class DefaultIdGenerator implements IdGeneratorPort {
 
   public generateAuditEventId(): AuditEventId {
     return parseAuditEventId(generateUuidV7());
+  }
+
+  public generateIdempotencyKeyId(): IdempotencyKeyId {
+    return parseIdempotencyKeyId(generateUuidV7());
   }
 
   public generateWorkspaceId(): WorkspaceId {

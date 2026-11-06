@@ -154,5 +154,11 @@ describe('GET /api/v1/me route', { timeout: 15000 }, () => {
       ],
       hasMore: false,
     });
+
+    // Regression check: preserve exact existing GET /api/v1/me contract
+    expect(body.user).not.toHaveProperty('status');
+    expect(body.session).not.toHaveProperty('id');
+    expect(body.workspaceAccess).not.toHaveProperty('workspaces');
+    expect(body.workspaceAccess).not.toHaveProperty('workspaceId');
   });
 });

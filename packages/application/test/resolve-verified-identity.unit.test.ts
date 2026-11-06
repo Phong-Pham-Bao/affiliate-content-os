@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  parseAuditEventId,
+  parseIdempotencyKeyId,
   parseIsoTimestamp,
   parseUserId,
   type ApplicationPrincipal,
@@ -26,9 +28,14 @@ function createMockClock(isoString = '2026-11-01T00:00:00.000Z'): ClockPort {
 
 function createMockIdGenerator(userId = '018f6c38-7654-7123-8abc-def012345678'): IdGeneratorPort {
   return {
+    generateId: vi.fn(() => '018f6c38-7654-7123-8abc-def012345679'),
     generateWorkspaceId: vi.fn(),
     generateMembershipId: vi.fn(),
     generateUserId: vi.fn(() => parseUserId(userId)),
+    generateAuditEventId: vi.fn(() => parseAuditEventId('018f6c38-7654-7123-8abc-def01234567a')),
+    generateIdempotencyKeyId: vi.fn(() =>
+      parseIdempotencyKeyId('018f6c38-7654-7123-8abc-def01234567b'),
+    ),
   };
 }
 

@@ -7,6 +7,8 @@ import type {
   WorkspaceSnapshot,
   AuditEventId,
   AuditEventSnapshot,
+  IdempotencyKeyId,
+  IdempotencyRecordSnapshot,
 } from '@affiliate-content-os/domain';
 
 export interface UserDirectoryPort {
@@ -26,11 +28,25 @@ export interface UserIdentityDirectoryPort {
 export interface CreateWorkspaceWithOwnerParams {
   readonly workspace: WorkspaceSnapshot;
   readonly membership: WorkspaceMembershipSnapshot;
+  readonly idempotencyRecord: IdempotencyRecordSnapshot;
+  readonly auditEvent: AuditEventSnapshot;
 }
 
 export interface CreateWorkspaceResult {
   readonly workspace: WorkspaceSnapshot;
   readonly membership: WorkspaceMembershipSnapshot;
+  readonly idempotencyRecord: IdempotencyRecordSnapshot;
+  readonly auditEvent: AuditEventSnapshot | null;
+  readonly cached?: boolean | undefined;
+}
+
+export interface IdempotencyStorePort {
+  findIdempotencyRecord(params: {
+    readonly principalId: UserId;
+    readonly routeKey: string;
+    readonly keyHash: Uint8Array;
+    readonly workspaceId?: WorkspaceId | undefined;
+  }): Promise<IdempotencyRecordSnapshot | null>;
 }
 
 export interface WorkspacePersistencePort {
@@ -70,4 +86,6 @@ export interface IdGeneratorPort {
   generateWorkspaceId(): WorkspaceId;
   generateMembershipId(): MembershipId;
   generateUserId(): UserId;
+  generateAuditEventId?(): AuditEventId;
+  generateIdempotencyKeyId?(): IdempotencyKeyId;
 }

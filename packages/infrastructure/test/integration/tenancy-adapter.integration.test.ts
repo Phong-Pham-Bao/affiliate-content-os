@@ -1,18 +1,24 @@
+import crypto from 'node:crypto';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  parseAuditEventId,
+  parseIdempotencyKeyId,
   parseIsoTimestamp,
   parseMembershipId,
   parseUserId,
   parseWorkspaceId,
+  type IsoTimestamp,
   type WorkspaceMembershipSnapshot,
   type WorkspaceSnapshot,
 } from '@affiliate-content-os/domain';
 import {
   authorizeWorkspaceAction,
+  generateUuidV7,
   SlugConflictError,
   WorkspaceAccessDeniedError,
   WorkspaceAuthorizationPersistenceError,
+  type CreateWorkspaceWithOwnerParams,
 } from '@affiliate-content-os/application';
 import { DatabaseError } from '../../src/database/errors.js';
 import { createDatabase } from '../../src/database/index.js';
@@ -24,6 +30,55 @@ describe('Real PostgreSQL Tenancy Adapter & Isolation Matrix Integration', () =>
   let client: pg.Client;
   const nowIso = '2026-10-25T12:00:00.000Z';
   const now = parseIsoTimestamp(nowIso);
+
+  function makeTestParams(
+    ws: WorkspaceSnapshot,
+    mem: WorkspaceMembershipSnapshot,
+    keySuffix = '1',
+  ): CreateWorkspaceWithOwnerParams {
+    const keyHash = crypto.createHash('sha256').update(`key-${ws.id}-${keySuffix}`).digest();
+    const requestHash = crypto.createHash('sha256').update(`req-${ws.id}-${keySuffix}`).digest();
+    const auditId = parseAuditEventId(generateUuidV7());
+    const idempotencyId = parseIdempotencyKeyId(generateUuidV7());
+    const expiresAt = new Date(
+      new Date(ws.createdAt).getTime() + 86400000,
+    ).toISOString() as IsoTimestamp;
+    return {
+      workspace: ws,
+      membership: mem,
+      idempotencyRecord: {
+        id: idempotencyId,
+        workspaceId: ws.id,
+        principalId: mem.userId,
+        routeKey: 'POST /api/v1/workspaces',
+        keyHash: new Uint8Array(keyHash),
+        requestHash: new Uint8Array(requestHash),
+        statusCode: 201,
+        responseJson: { id: ws.id, name: ws.name },
+        resourceType: 'workspace',
+        resourceId: ws.id,
+        expiresAt,
+        createdAt: ws.createdAt,
+      },
+      auditEvent: {
+        id: auditId,
+        workspaceId: ws.id,
+        actorType: 'user',
+        actorUserId: mem.userId,
+        action: 'workspace.created',
+        resourceType: 'workspace',
+        resourceId: ws.id,
+        result: 'succeeded',
+        reasonCode: null,
+        changes: { name: { before: null, after: ws.name } },
+        ipHash: null,
+        userAgentSummary: 'TestAgent/1.0',
+        correlationId: null,
+        occurredAt: ws.createdAt,
+        createdAt: ws.createdAt,
+      },
+    };
+  }
 
   beforeAll(async () => {
     context = await setupIsolatedTestDatabase();
@@ -90,7 +145,7 @@ describe('Real PostgreSQL Tenancy Adapter & Isolation Matrix Integration', () =>
     });
 
     // 1. Successful atomic creation
-    const created = await adapter.createWorkspaceWithOwner({ workspace, membership });
+    const created = await adapter.createWorkspaceWithOwner(makeTestParams(workspace, membership));
     expect(created.workspace.id).toBe(wsId);
     expect(created.membership.id).toBe(memId);
 
@@ -107,16 +162,16 @@ describe('Real PostgreSQL Tenancy Adapter & Isolation Matrix Integration', () =>
     const failMemId = parseMembershipId('0192b012-3456-789a-8bcd-ef0123456805');
     const nonExistentUserId = parseUserId('0192b012-3456-789a-8bcd-ef0123456899');
 
+    const failWs = { ...workspace, id: failWsId, slug: 'failing-ws' };
+    const failMem = {
+      ...membership,
+      id: failMemId,
+      workspaceId: failWsId,
+      userId: nonExistentUserId,
+    };
+
     await expect(
-      adapter.createWorkspaceWithOwner({
-        workspace: { ...workspace, id: failWsId, slug: 'failing-ws' },
-        membership: {
-          ...membership,
-          id: failMemId,
-          workspaceId: failWsId,
-          userId: nonExistentUserId,
-        },
-      }),
+      adapter.createWorkspaceWithOwner(makeTestParams(failWs, failMem, 'fail')),
     ).rejects.toThrow();
 
     // Verify workspace was rolled back and does NOT exist
@@ -200,8 +255,8 @@ describe('Real PostgreSQL Tenancy Adapter & Isolation Matrix Integration', () =>
     };
 
     const results = await Promise.allSettled([
-      adapter.createWorkspaceWithOwner({ workspace: ws1, membership: mem1 }),
-      adapter.createWorkspaceWithOwner({ workspace: ws2, membership: mem2 }),
+      adapter.createWorkspaceWithOwner(makeTestParams(ws1, mem1, 'ws1')),
+      adapter.createWorkspaceWithOwner(makeTestParams(ws2, mem2, 'ws2')),
     ]);
 
     const fulfilled = results.filter((r) => r.status === 'fulfilled');
@@ -277,7 +332,7 @@ describe('Real PostgreSQL Tenancy Adapter & Isolation Matrix Integration', () =>
     };
 
     const error = await adapter
-      .createWorkspaceWithOwner({ workspace: newWs, membership: dupMem })
+      .createWorkspaceWithOwner(makeTestParams(newWs, dupMem, 'dup'))
       .catch((e) => e);
 
     expect(error).toBeInstanceOf(DatabaseError);

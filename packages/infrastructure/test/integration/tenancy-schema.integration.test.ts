@@ -33,6 +33,7 @@ describe('Real PostgreSQL Tenancy Schema and Constraints Integration', () => {
     expect(tableNames).toEqual([
       'application_sessions',
       'audit_events',
+      'idempotency_keys',
       'oidc_login_transactions',
       'schema_migrations',
       'users',

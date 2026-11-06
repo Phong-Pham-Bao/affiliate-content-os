@@ -6,6 +6,8 @@ import {
   type WorkspaceSnapshot,
 } from '@affiliate-content-os/domain';
 import {
+  IdempotencyConflictError,
+  IdempotencyKeyReusedError,
   SlugConflictError,
   type CreateWorkspaceWithOwnerParams,
   type CreateWorkspaceResult,
@@ -16,6 +18,7 @@ import {
 } from '@affiliate-content-os/application';
 import type { Database } from '../database/types.js';
 import { DatabaseError, sanitizeDatabaseError } from '../database/errors.js';
+import { executeCreateWorkspaceTransaction } from './create-workspace-transaction.js';
 import {
   mapMembershipRow,
   mapUserRow,
@@ -96,57 +99,15 @@ export class PostgresTenancyAdapter
     params: CreateWorkspaceWithOwnerParams,
   ): Promise<CreateWorkspaceResult> {
     try {
-      return await this.database.withTransaction(async (tx) => {
-        const wsResult = await tx.query<{ readonly id: string }>(
-          `INSERT INTO workspaces (
-            id, name, slug, timezone, brand_voice, default_disclosure, ai_enabled, status, created_at, updated_at, version
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-          ON CONFLICT (slug) DO NOTHING
-          RETURNING id`,
-          [
-            params.workspace.id,
-            params.workspace.name,
-            params.workspace.slug,
-            params.workspace.timezone,
-            params.workspace.brandVoice,
-            params.workspace.defaultDisclosure,
-            params.workspace.aiEnabled,
-            params.workspace.status,
-            params.workspace.createdAt,
-            params.workspace.updatedAt,
-            params.workspace.version,
-          ],
-        );
-
-        if (wsResult.rowCount === 0) {
-          throw new SlugConflictError(params.workspace.slug);
-        }
-
-        await tx.query(
-          `INSERT INTO workspace_memberships (
-            id, workspace_id, user_id, role, status, invited_by_user_id, joined_at, created_at, updated_at, version
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-          [
-            params.membership.id,
-            params.membership.workspaceId,
-            params.membership.userId,
-            params.membership.role,
-            params.membership.status,
-            params.membership.invitedByUserId,
-            params.membership.joinedAt,
-            params.membership.createdAt,
-            params.membership.updatedAt,
-            params.membership.version,
-          ],
-        );
-
-        return {
-          workspace: params.workspace,
-          membership: params.membership,
-        };
-      });
+      return await this.database.withTransaction((tx) =>
+        executeCreateWorkspaceTransaction(tx, params),
+      );
     } catch (err) {
-      if (err instanceof SlugConflictError) {
+      if (
+        err instanceof SlugConflictError ||
+        err instanceof IdempotencyConflictError ||
+        err instanceof IdempotencyKeyReusedError
+      ) {
         throw err;
       }
       throw sanitizeDatabaseError(err);

@@ -1,44 +1,25 @@
-import util from 'node:util';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import {
   AuthConfigurationUnavailableError,
   AuthPersistenceError,
   AuthRequestValidationError,
   AuthenticationRequiredError,
+  IdempotencyConflictError,
+  IdempotencyKeyReusedError,
   OidcCallbackInvalidError,
   OidcProviderUnavailableError,
+  SlugConflictError,
+  ValidationError,
+  WorkspaceAccessDeniedError,
 } from '@affiliate-content-os/application';
 import { AuthOriginInvalidError } from './origin.js';
 import { type ProblemDetails, type ProblemSpec, PROBLEM_SPECS } from './problem-details-specs.js';
+import { hasProxyInPrototype } from './proxy-detector.js';
 
 export type { ProblemDetails, ProblemSpec } from './problem-details-specs.js';
 export { PROBLEM_SPECS } from './problem-details-specs.js';
 
-function isProxySafe(value: unknown): boolean {
-  try {
-    return util.types.isProxy(value);
-  } catch {
-    return true;
-  }
-}
-
-function hasProxyInPrototype(obj: object): boolean {
-  if (isProxySafe(obj)) return true;
-  let current: object | null = obj;
-  let depth = 0;
-  while (current !== null && depth < 10) {
-    if (isProxySafe(current)) return true;
-    try {
-      current = Object.getPrototypeOf(current);
-    } catch {
-      return true;
-    }
-    depth++;
-  }
-  return false;
-}
-
-export function resolveProblemSpec(error: unknown): ProblemSpec {
+export function resolveProblemSpec(error: unknown, request?: FastifyRequest): ProblemSpec {
   if (typeof error !== 'object' || error === null) {
     return PROBLEM_SPECS['INTERNAL_ERROR']!;
   }
@@ -62,6 +43,21 @@ export function resolveProblemSpec(error: unknown): ProblemSpec {
     }
     if (error instanceof AuthenticationRequiredError) {
       return PROBLEM_SPECS['AUTHENTICATION_REQUIRED']!;
+    }
+    if (error instanceof SlugConflictError) {
+      return PROBLEM_SPECS['SLUG_CONFLICT']!;
+    }
+    if (error instanceof IdempotencyKeyReusedError) {
+      return PROBLEM_SPECS['IDEMPOTENCY_KEY_REUSED']!;
+    }
+    if (error instanceof IdempotencyConflictError) {
+      return PROBLEM_SPECS['IDEMPOTENCY_CONFLICT']!;
+    }
+    if (error instanceof WorkspaceAccessDeniedError) {
+      return PROBLEM_SPECS['WORKSPACE_NOT_FOUND']!;
+    }
+    if (error instanceof ValidationError) {
+      return PROBLEM_SPECS['VALIDATION_ERROR']!;
     }
     if (error instanceof AuthOriginInvalidError) {
       return PROBLEM_SPECS['AUTH_ORIGIN_INVALID']!;
@@ -97,7 +93,10 @@ export function resolveProblemSpec(error: unknown): ProblemSpec {
       return PROBLEM_SPECS['RATE_LIMIT_EXCEEDED']!;
     }
     if (maybeStatus === 400 || maybeCode === 'FST_ERR_VALIDATION') {
-      return PROBLEM_SPECS['AUTH_REQUEST_INVALID']!;
+      const url = request?.raw?.url ?? request?.url ?? '';
+      const isAuth =
+        url === '' || url.startsWith('/auth/') || url === '/api/v1/logout' || url === '/api/v1/me';
+      return isAuth ? PROBLEM_SPECS['AUTH_REQUEST_INVALID']! : PROBLEM_SPECS['VALIDATION_ERROR']!;
     }
   } catch {
     return PROBLEM_SPECS['INTERNAL_ERROR']!;
@@ -106,17 +105,25 @@ export function resolveProblemSpec(error: unknown): ProblemSpec {
   return PROBLEM_SPECS['INTERNAL_ERROR']!;
 }
 
-export function buildProblemDetails(
-  request: FastifyRequest,
-  spec: ProblemSpec,
-  retryAfterSeconds?: number,
-): ProblemDetails {
+function extractRequestMeta(request: FastifyRequest): {
+  instance: string;
+  requestId: string;
+} {
   const instance = (request.raw?.url ?? request.url ?? '/').split('?')[0] || '/';
   const rawId = request.headers['x-request-id'];
   const requestId =
     typeof rawId === 'string' && /^[a-zA-Z0-9_-]{1,64}$/.test(rawId)
       ? rawId
       : String(request.id ?? 'unknown');
+  return { instance, requestId };
+}
+
+export function buildProblemDetails(
+  request: FastifyRequest,
+  spec: ProblemSpec,
+  retryAfterSeconds?: number,
+): ProblemDetails {
+  const { instance, requestId } = extractRequestMeta(request);
 
   const result: ProblemDetails = {
     type: spec.type,
@@ -137,7 +144,7 @@ export function sendProblemResponse(
   request: FastifyRequest,
   error: unknown,
 ): void {
-  const spec = resolveProblemSpec(error);
+  const spec = resolveProblemSpec(error, request);
   let retryAfterSeconds: number | undefined;
 
   if (spec.status === 429) {
@@ -153,12 +160,7 @@ export function sendProblemResponse(
     }
   }
 
-  const instance = (request.raw?.url ?? request.url ?? '/').split('?')[0] || '/';
-  const rawId = request.headers['x-request-id'];
-  const requestId =
-    typeof rawId === 'string' && /^[a-zA-Z0-9_-]{1,64}$/.test(rawId)
-      ? rawId
-      : String(request.id ?? 'unknown');
+  const { instance, requestId } = extractRequestMeta(request);
 
   if (spec.status === 500) {
     console.error(

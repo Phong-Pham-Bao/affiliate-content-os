@@ -6,4 +6,5 @@ export * from './origin.js';
 export * from './problem-details.js';
 export * from './routes.js';
 export * from './schemas.js';
+export * from './session-auth.js';
 export * from './types.js';

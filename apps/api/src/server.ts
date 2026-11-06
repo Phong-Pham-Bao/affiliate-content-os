@@ -3,6 +3,7 @@ import type { AppConfig } from '@affiliate-content-os/config';
 import type { Database } from '@affiliate-content-os/infrastructure/database';
 import { createApp } from './app.js';
 import type { AuthDependencies } from './auth/index.js';
+import type { WorkspaceRouteDependencies } from './workspaces/index.js';
 import {
   raceWithDeadline,
   type ClearTimerFn,
@@ -22,6 +23,10 @@ export interface StartServerOptions {
   readonly database: Database;
   readonly auth?:
     AuthDependencies | ((signal: AbortSignal) => Promise<AuthDependencies>) | undefined;
+  readonly workspaces?:
+    | WorkspaceRouteDependencies
+    | ((signal: AbortSignal) => Promise<WorkspaceRouteDependencies>)
+    | undefined;
   readonly app?: FastifyInstance | undefined;
   readonly installSignalHandlers?: boolean | undefined;
   readonly shutdownTimeoutMs?: number | undefined;
@@ -45,7 +50,9 @@ export async function startApiServer(options: StartServerOptions): Promise<ApiSe
 
   let app =
     options.app ??
-    (typeof options.auth !== 'function' ? createApp({ config, auth: options.auth }) : undefined);
+    (typeof options.auth !== 'function' && typeof options.workspaces !== 'function'
+      ? createApp({ config, auth: options.auth, workspaces: options.workspaces })
+      : undefined);
 
   type ServerState = 'starting' | 'running' | 'closing' | 'closed';
   let state: ServerState = 'starting';
@@ -207,14 +214,23 @@ export async function startApiServer(options: StartServerOptions): Promise<ApiSe
   });
 
   try {
-    // Phase 0: Resolve auth dependencies if factory was provided
-    if (typeof options.auth === 'function') {
+    // Phase 0: Resolve auth and workspace dependencies if factories were provided
+    if (typeof options.auth === 'function' || typeof options.workspaces === 'function') {
       if (startupAbortController.signal.aborted) {
-        throw new Error('API server startup aborted before auth discovery');
+        throw new Error('API server startup aborted before dependency resolution');
       }
-      const authPromise = options.auth(startupAbortController.signal);
-      const authDeps = await Promise.race([authPromise, startupAbortPromise]);
-      app = createApp({ config, auth: authDeps });
+      let authDeps = typeof options.auth !== 'function' ? options.auth : undefined;
+      let workspaceDeps = typeof options.workspaces !== 'function' ? options.workspaces : undefined;
+
+      if (typeof options.auth === 'function') {
+        const authPromise = options.auth(startupAbortController.signal);
+        authDeps = await Promise.race([authPromise, startupAbortPromise]);
+      }
+      if (typeof options.workspaces === 'function') {
+        const wsPromise = options.workspaces(startupAbortController.signal);
+        workspaceDeps = await Promise.race([wsPromise, startupAbortPromise]);
+      }
+      app = createApp({ config, auth: authDeps, workspaces: workspaceDeps });
     }
 
     // Phase 1: Probe Database connection before listening

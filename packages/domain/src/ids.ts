@@ -12,6 +12,11 @@ export type MembershipId = string & { readonly [MembershipIdBrand]: typeof Membe
 declare const AuditEventIdBrand: unique symbol;
 export type AuditEventId = string & { readonly [AuditEventIdBrand]: typeof AuditEventIdBrand };
 
+declare const IdempotencyKeyIdBrand: unique symbol;
+export type IdempotencyKeyId = string & {
+  readonly [IdempotencyKeyIdBrand]: typeof IdempotencyKeyIdBrand;
+};
+
 declare const CorrelationIdBrand: unique symbol;
 export type CorrelationId = string & { readonly [CorrelationIdBrand]: typeof CorrelationIdBrand };
 
@@ -50,12 +55,20 @@ export function isAuditEventId(value: unknown): value is AuditEventId {
   return isValidUuidV7(value);
 }
 
+export function isIdempotencyKeyId(value: unknown): value is IdempotencyKeyId {
+  return isValidUuidV7(value);
+}
+
 export function isCorrelationId(value: unknown): value is CorrelationId {
   return isValidUuidV7(value);
 }
 
 export function parseAuditEventId(value: unknown): AuditEventId {
   return assertCanonicalUuidV7(value, 'audit event') as AuditEventId;
+}
+
+export function parseIdempotencyKeyId(value: unknown): IdempotencyKeyId {
+  return assertCanonicalUuidV7(value, 'idempotency key') as IdempotencyKeyId;
 }
 
 export function parseCorrelationId(value: unknown): CorrelationId {

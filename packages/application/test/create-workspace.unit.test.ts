@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
+  parseAuditEventId,
+  parseIdempotencyKeyId,
   parseIsoTimestamp,
   parseMembershipId,
   parseUserId,
   parseWorkspaceId,
+  type AuditEventId,
+  type IdempotencyKeyId,
   type MembershipId,
   type UserId,
   type UserSnapshot,
@@ -20,6 +24,7 @@ import {
   type ClockPort,
   type CreateWorkspaceCommand,
   type CreateWorkspaceDependencies,
+  type CreateWorkspaceIdempotencyInput,
   type CreateWorkspaceWithOwnerParams,
   type CreateWorkspaceResult,
   type IdGeneratorPort,
@@ -54,6 +59,15 @@ class FakeIdGenerator implements IdGeneratorPort {
   public generateUserId(): UserId {
     return this.userId;
   }
+  public generateId(): string {
+    return '0192b012-3456-789a-8bcd-ef0123456783';
+  }
+  public generateAuditEventId(): AuditEventId {
+    return parseAuditEventId('0192b012-3456-789a-8bcd-ef0123456784');
+  }
+  public generateIdempotencyKeyId(): IdempotencyKeyId {
+    return parseIdempotencyKeyId('0192b012-3456-789a-8bcd-ef0123456785');
+  }
 }
 
 class FakeUserDirectory implements UserDirectoryPort {
@@ -80,6 +94,8 @@ class FakeWorkspacePersistence implements WorkspacePersistencePort {
     return {
       workspace: params.workspace,
       membership: params.membership,
+      idempotencyRecord: params.idempotencyRecord,
+      auditEvent: params.auditEvent,
     };
   }
 
@@ -133,6 +149,10 @@ describe('CreateWorkspace Use Case', () => {
       brandVoice: '  Punchy and direct  ',
       defaultDisclosure: '  #affiliate  ',
       aiEnabled: true,
+      idempotency: {
+        keyHash: new Uint8Array(32).fill(1),
+        requestHash: new Uint8Array(32).fill(2),
+      },
     };
 
     return { deps, userDirectory, workspacePersistence, idGenerator, clock, baseCommand };
@@ -357,5 +377,238 @@ describe('CreateWorkspace Use Case', () => {
     workspacePersistence.slugConflictOn = 'acme-marketing-01';
 
     await expect(createWorkspace(baseCommand, deps)).rejects.toThrow(SlugConflictError);
+  });
+
+  it('generates an idempotency record and allowlisted audit event for workspace creation', async () => {
+    const { deps, baseCommand } = setupTestDeps();
+    const keyHash = new Uint8Array(32).fill(1);
+    const requestHash = new Uint8Array(32).fill(2);
+
+    const result = await createWorkspace(
+      {
+        ...baseCommand,
+        idempotency: { keyHash, requestHash },
+        auditContext: {
+          ipHash: 'a'.repeat(64),
+          userAgentSummary: 'Mozilla/5.0',
+          correlationId: '0192b012-3456-789a-8bcd-ef0123456799',
+        },
+      },
+      deps,
+    );
+
+    expect(result.idempotencyRecord).toBeDefined();
+    expect(result.idempotencyRecord?.keyHash).toEqual(keyHash);
+    expect(result.idempotencyRecord?.requestHash).toEqual(requestHash);
+    expect(result.idempotencyRecord?.routeKey).toBe('POST /api/v1/workspaces');
+    expect(result.idempotencyRecord?.statusCode).toBe(201);
+    expect(result.idempotencyRecord?.resourceType).toBe('workspace');
+    expect(result.idempotencyRecord?.resourceId).toBe(result.workspace.id);
+
+    expect(result.auditEvent).toBeDefined();
+    expect(result.auditEvent?.action).toBe('workspace.created');
+    expect(result.auditEvent?.resourceType).toBe('workspace');
+    expect(result.auditEvent?.resourceId).toBe(result.workspace.id);
+    expect(result.auditEvent?.result).toBe('succeeded');
+    expect(result.auditEvent?.changes.status).toEqual({ before: null, after: 'active' });
+    expect(result.auditEvent?.changes.name).toEqual({
+      before: null,
+      after: result.workspace.name,
+    });
+    expect(result.auditEvent?.changes.slug).toEqual({
+      before: null,
+      after: result.workspace.slug,
+    });
+    expect(result.auditEvent?.changes.timezone).toEqual({
+      before: null,
+      after: result.workspace.timezone,
+    });
+  });
+
+  it('rejects command with missing idempotency with ValidationError', async () => {
+    const { deps, baseCommand } = setupTestDeps();
+    const commandWithoutIdempotency = { ...baseCommand } as Record<string, unknown>;
+    delete commandWithoutIdempotency['idempotency'];
+
+    await expect(
+      createWorkspace(commandWithoutIdempotency as unknown as CreateWorkspaceCommand, deps),
+    ).rejects.toThrow(ValidationError);
+  });
+
+  it('rejects command.idempotency with getter property on keyHash without invoking the getter', async () => {
+    const { deps, baseCommand } = setupTestDeps();
+    let getterCalled = false;
+    const hostileIdempotency = {};
+    Object.defineProperty(hostileIdempotency, 'keyHash', {
+      get() {
+        getterCalled = true;
+        return new Uint8Array(32);
+      },
+      enumerable: true,
+      configurable: true,
+    });
+    Object.defineProperty(hostileIdempotency, 'requestHash', {
+      value: new Uint8Array(32),
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+
+    const err = await createWorkspace(
+      {
+        ...baseCommand,
+        idempotency: hostileIdempotency as unknown as CreateWorkspaceIdempotencyInput,
+      },
+      deps,
+    ).catch((e) => e);
+
+    expect(err).toBeInstanceOf(ValidationError);
+    expect((err as ValidationError).field).toBe('idempotency');
+    expect(getterCalled).toBe(false);
+  });
+
+  it('rejects command.idempotency with getter property on requestHash without invoking the getter', async () => {
+    const { deps, baseCommand } = setupTestDeps();
+    let getterCalled = false;
+    const hostileIdempotency = {
+      keyHash: new Uint8Array(32),
+    };
+    Object.defineProperty(hostileIdempotency, 'requestHash', {
+      get() {
+        getterCalled = true;
+        return new Uint8Array(32);
+      },
+      enumerable: true,
+      configurable: true,
+    });
+
+    const err = await createWorkspace(
+      {
+        ...baseCommand,
+        idempotency: hostileIdempotency as unknown as CreateWorkspaceIdempotencyInput,
+      },
+      deps,
+    ).catch((e) => e);
+
+    expect(err).toBeInstanceOf(ValidationError);
+    expect((err as ValidationError).field).toBe('idempotency');
+    expect(getterCalled).toBe(false);
+  });
+
+  it('rejects Proxy objects for command.idempotency and for buffer hashes', async () => {
+    const { deps, baseCommand } = setupTestDeps();
+
+    // Proxy as idempotency container
+    const proxyContainer = new Proxy(
+      { keyHash: new Uint8Array(32), requestHash: new Uint8Array(32) },
+      {},
+    );
+    await expect(
+      createWorkspace({ ...baseCommand, idempotency: proxyContainer }, deps),
+    ).rejects.toThrow(ValidationError);
+
+    // Proxy as keyHash
+    const proxyKeyHash = new Proxy(new Uint8Array(32), {});
+    await expect(
+      createWorkspace(
+        {
+          ...baseCommand,
+          idempotency: {
+            keyHash: proxyKeyHash as unknown as Uint8Array,
+            requestHash: new Uint8Array(32),
+          },
+        },
+        deps,
+      ),
+    ).rejects.toThrow(ValidationError);
+  });
+
+  it('rejects idempotency with extra properties or prototype extensions', async () => {
+    const { deps, baseCommand } = setupTestDeps();
+
+    // Extra property
+    const extraProps = {
+      keyHash: new Uint8Array(32),
+      requestHash: new Uint8Array(32),
+      extra: 'malicious',
+    };
+    await expect(
+      createWorkspace(
+        {
+          ...baseCommand,
+          idempotency: extraProps as unknown as CreateWorkspaceIdempotencyInput,
+        },
+        deps,
+      ),
+    ).rejects.toThrow(ValidationError);
+
+    // Custom prototype
+    const customProto = Object.create({ inherited: true });
+    customProto.keyHash = new Uint8Array(32);
+    customProto.requestHash = new Uint8Array(32);
+    await expect(
+      createWorkspace({ ...baseCommand, idempotency: customProto }, deps),
+    ).rejects.toThrow(ValidationError);
+  });
+
+  it('defensively clones hashes so caller buffer mutation cannot alter persisted records', async () => {
+    const { deps, workspacePersistence, baseCommand } = setupTestDeps();
+    const callerKeyHash = new Uint8Array(32).fill(7);
+    const callerReqHash = new Uint8Array(32).fill(8);
+
+    const resultPromise = createWorkspace(
+      { ...baseCommand, idempotency: { keyHash: callerKeyHash, requestHash: callerReqHash } },
+      deps,
+    );
+
+    // Immediately mutate caller buffers
+    callerKeyHash[0] = 255;
+    callerReqHash[0] = 255;
+
+    const result = await resultPromise;
+
+    // Persisted call must receive cloned buffers with original values
+    const persistedCall = workspacePersistence.createCalls[0];
+    expect(persistedCall).toBeDefined();
+    expect(persistedCall!.idempotencyRecord.keyHash[0]).toBe(7);
+    expect(persistedCall!.idempotencyRecord.requestHash[0]).toBe(8);
+    expect(result.idempotencyRecord.keyHash[0]).toBe(7);
+    expect(result.idempotencyRecord.requestHash[0]).toBe(8);
+  });
+
+  it('returns auditEvent: null when cached replay is returned by persistence', async () => {
+    const { deps, workspacePersistence, baseCommand } = setupTestDeps();
+    workspacePersistence.createWorkspaceWithOwner = async (params) => {
+      return {
+        workspace: params.workspace,
+        membership: params.membership,
+        idempotencyRecord: params.idempotencyRecord,
+        auditEvent: null,
+        cached: true,
+      };
+    };
+
+    const result = await createWorkspace(baseCommand, deps);
+    expect(result.cached).toBe(true);
+    expect(result.auditEvent).toBeNull();
+  });
+
+  it('MEDIUM-1: ensures ipHash is always null and sanitizes hostile user agent', async () => {
+    const { deps, baseCommand } = setupTestDeps();
+    const result = await createWorkspace(
+      {
+        ...baseCommand,
+        auditContext: {
+          ipHash: 'attempted-raw-ip-hash',
+          userAgentSummary: 'Mozilla/5.0\0\r\n\x1b[31mEvil\x1b[0m\tAgent\u200B',
+        },
+      },
+      deps,
+    );
+
+    // ipHash must be null
+    expect(result.auditEvent?.ipHash).toBeNull();
+    // userAgentSummary must be stripped of control chars, escape sequences, null bytes
+    expect(result.auditEvent?.userAgentSummary).toBe('Mozilla/5.0[31mEvil[0mAgent');
   });
 });

@@ -22,6 +22,7 @@ import { createPostgresTenancyAdapter } from '@affiliate-content-os/infrastructu
 import { SystemClock, DefaultIdGenerator } from '@affiliate-content-os/application';
 import { startApiServer } from './server.js';
 import type { AuthDependencies } from './auth/index.js';
+import type { WorkspaceRouteDependencies } from './workspaces/index.js';
 
 async function main(): Promise<void> {
   let config: AppConfig;
@@ -43,13 +44,22 @@ async function main(): Promise<void> {
   }
 
   const database = createDatabase(databaseConfig, { sslCaContent });
+  const tenancyAdapter = createPostgresTenancyAdapter(database);
+  const clock = new SystemClock();
+  const idGenerator = new DefaultIdGenerator();
+
+  let resolvedAuthDeps: AuthDependencies | undefined;
 
   const authProvider = async (signal: AbortSignal): Promise<AuthDependencies> => {
+    if (resolvedAuthDeps) {
+      return resolvedAuthDeps;
+    }
     if (!authConfig.enabled) {
-      return {
+      resolvedAuthDeps = {
         config: authConfig,
         appBaseUrl: config.appBaseUrl,
       };
+      return resolvedAuthDeps;
     }
 
     const oidcAdapter = await discoverOidcAdapter(
@@ -67,11 +77,7 @@ async function main(): Promise<void> {
       authConfig.transactionKeyVersion!,
     );
 
-    const tenancyAdapter = createPostgresTenancyAdapter(database);
-    const clock = new SystemClock();
-    const idGenerator = new DefaultIdGenerator();
-
-    return {
+    resolvedAuthDeps = {
       config: authConfig,
       appBaseUrl: config.appBaseUrl,
       now: () => clock.now(),
@@ -88,10 +94,28 @@ async function main(): Promise<void> {
       workspaceSummary: createPostgresWorkspaceSummaryAdapter(database),
       crypto: cryptoAdapter,
     };
+    return resolvedAuthDeps;
+  };
+
+  const workspaceProvider = async (signal: AbortSignal): Promise<WorkspaceRouteDependencies> => {
+    const authDeps = resolvedAuthDeps ?? (await authProvider(signal));
+    return {
+      auth: authDeps,
+      workspacePersistence: tenancyAdapter,
+      workspaceAuthorization: tenancyAdapter,
+      userDirectory: tenancyAdapter,
+      clock,
+      idGenerator,
+    };
   };
 
   try {
-    await startApiServer({ config, database, auth: authProvider });
+    await startApiServer({
+      config,
+      database,
+      auth: authProvider,
+      workspaces: workspaceProvider,
+    });
     const metadata = getRedactedConfigMetadata(config);
     const dbMetadata = getRedactedDatabaseMetadata(databaseConfig);
     const authMetadata = getRedactedAuthConfigMetadata(authConfig);

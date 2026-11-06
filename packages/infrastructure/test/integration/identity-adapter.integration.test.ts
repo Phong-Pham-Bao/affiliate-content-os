@@ -338,6 +338,7 @@ describe('Real PostgreSQL Identity Adapter & Concurrency Integration Suite', () 
     expect(tables).toEqual([
       'application_sessions',
       'audit_events',
+      'idempotency_keys',
       'oidc_login_transactions',
       'schema_migrations',
       'users',

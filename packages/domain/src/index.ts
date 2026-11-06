@@ -34,17 +34,21 @@ export {
   isValidUuidV7,
   isAuditEventId,
   isCorrelationId,
+  isIdempotencyKeyId,
   parseAuditEventId,
   parseCorrelationId,
+  parseIdempotencyKeyId,
   parseMembershipId,
   parseUserId,
   parseWorkspaceId,
   type MembershipId,
   type AuditEventId,
   type CorrelationId,
+  type IdempotencyKeyId,
   type UserId,
   type WorkspaceId,
 } from './ids.js';
+export { validateIdempotencyKey, type IdempotencyRecordSnapshot } from './idempotency.js';
 export {
   isMembershipStatus,
   isUserStatus,

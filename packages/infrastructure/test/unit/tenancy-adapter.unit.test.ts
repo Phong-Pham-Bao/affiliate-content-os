@@ -1,14 +1,22 @@
+import crypto from 'node:crypto';
 import util from 'node:util';
 import { describe, expect, it } from 'vitest';
 import {
+  parseAuditEventId,
+  parseIdempotencyKeyId,
   parseIsoTimestamp,
   parseMembershipId,
   parseUserId,
   parseWorkspaceId,
+  type IsoTimestamp,
   type WorkspaceMembershipSnapshot,
   type WorkspaceSnapshot,
 } from '@affiliate-content-os/domain';
-import { SlugConflictError } from '@affiliate-content-os/application';
+import {
+  generateUuidV7,
+  SlugConflictError,
+  type CreateWorkspaceWithOwnerParams,
+} from '@affiliate-content-os/application';
 import { DatabaseError } from '../../src/database/errors.js';
 import type {
   Database,
@@ -157,17 +165,67 @@ describe('PostgresTenancyAdapter Unit Tests', () => {
     expect(user).toBeNull();
   });
 
+  function makeTestParams(
+    ws: WorkspaceSnapshot,
+    mem: WorkspaceMembershipSnapshot,
+    keySuffix = '1',
+  ): CreateWorkspaceWithOwnerParams {
+    const keyHash = crypto.createHash('sha256').update(`key-${ws.id}-${keySuffix}`).digest();
+    const requestHash = crypto.createHash('sha256').update(`req-${ws.id}-${keySuffix}`).digest();
+    const auditId = parseAuditEventId(generateUuidV7());
+    const idempotencyId = parseIdempotencyKeyId(generateUuidV7());
+    const expiresAt = new Date(
+      new Date(ws.createdAt).getTime() + 86400000,
+    ).toISOString() as IsoTimestamp;
+    return {
+      workspace: ws,
+      membership: mem,
+      idempotencyRecord: {
+        id: idempotencyId,
+        workspaceId: ws.id,
+        principalId: mem.userId,
+        routeKey: 'POST /api/v1/workspaces',
+        keyHash: new Uint8Array(keyHash),
+        requestHash: new Uint8Array(requestHash),
+        statusCode: 201,
+        responseJson: { id: ws.id, name: ws.name },
+        resourceType: 'workspace',
+        resourceId: ws.id,
+        expiresAt,
+        createdAt: ws.createdAt,
+      },
+      auditEvent: {
+        id: auditId,
+        workspaceId: ws.id,
+        actorType: 'user',
+        actorUserId: mem.userId,
+        action: 'workspace.created',
+        resourceType: 'workspace',
+        resourceId: ws.id,
+        result: 'succeeded',
+        reasonCode: null,
+        changes: { name: { before: null, after: ws.name } },
+        ipHash: null,
+        userAgentSummary: 'TestAgent/1.0',
+        correlationId: null,
+        occurredAt: ws.createdAt,
+        createdAt: ws.createdAt,
+      },
+    };
+  }
+
   it('createWorkspaceWithOwner executes transaction and returns snapshots', async () => {
     const fakeDb = new FakeDatabase();
     const adapter = createPostgresTenancyAdapter(fakeDb);
 
-    const result = await adapter.createWorkspaceWithOwner({ workspace, membership });
+    const result = await adapter.createWorkspaceWithOwner(makeTestParams(workspace, membership));
 
     expect(result.workspace).toEqual(workspace);
     expect(result.membership).toEqual(membership);
-    expect(fakeDb.txQueryCalls).toHaveLength(2);
-    expect(fakeDb.txQueryCalls[0]?.params?.[0]).toBe(workspaceId);
-    expect(fakeDb.txQueryCalls[1]?.params?.[0]).toBe(membershipId);
+    expect(fakeDb.txQueryCalls.some((c) => c.text.includes('INSERT INTO workspaces'))).toBe(true);
+    expect(
+      fakeDb.txQueryCalls.some((c) => c.text.includes('INSERT INTO workspace_memberships')),
+    ).toBe(true);
   });
 
   describe('Explicit SQL slug conflict and constraint safety (Remediation 03 Finding 2)', () => {
@@ -176,9 +234,9 @@ describe('PostgresTenancyAdapter Unit Tests', () => {
       fakeDb.wsInsertRowCount = 0; // Conflict on slug triggers DO NOTHING RETURNING id -> 0 rows
 
       const adapter = createPostgresTenancyAdapter(fakeDb);
-      await expect(adapter.createWorkspaceWithOwner({ workspace, membership })).rejects.toThrow(
-        SlugConflictError,
-      );
+      await expect(
+        adapter.createWorkspaceWithOwner(makeTestParams(workspace, membership)),
+      ).rejects.toThrow(SlugConflictError);
 
       // Verify the query includes explicit ON CONFLICT (slug) DO NOTHING RETURNING id
       const wsQuery = fakeDb.txQueryCalls.find((c) => c.text.includes('INSERT INTO workspaces'));
@@ -195,7 +253,7 @@ describe('PostgresTenancyAdapter Unit Tests', () => {
       fakeDb.wsInsertRowCount = 1;
 
       const adapter = createPostgresTenancyAdapter(fakeDb);
-      const res = await adapter.createWorkspaceWithOwner({ workspace, membership });
+      const res = await adapter.createWorkspaceWithOwner(makeTestParams(workspace, membership));
       expect(res.workspace).toBe(workspace);
       expect(res.membership).toBe(membership);
 
@@ -212,7 +270,9 @@ describe('PostgresTenancyAdapter Unit Tests', () => {
       });
 
       const adapter = createPostgresTenancyAdapter(fakeDb);
-      const err = await adapter.createWorkspaceWithOwner({ workspace, membership }).catch((e) => e);
+      const err = await adapter
+        .createWorkspaceWithOwner(makeTestParams(workspace, membership))
+        .catch((e) => e);
 
       expect(err).toBeInstanceOf(DatabaseError);
       expect(err).not.toBeInstanceOf(SlugConflictError);
@@ -225,7 +285,9 @@ describe('PostgresTenancyAdapter Unit Tests', () => {
       });
 
       const adapter = createPostgresTenancyAdapter(fakeDb);
-      const err = await adapter.createWorkspaceWithOwner({ workspace, membership }).catch((e) => e);
+      const err = await adapter
+        .createWorkspaceWithOwner(makeTestParams(workspace, membership))
+        .catch((e) => e);
 
       expect(err).toBeInstanceOf(DatabaseError);
       expect(err).not.toBeInstanceOf(SlugConflictError);
@@ -238,7 +300,9 @@ describe('PostgresTenancyAdapter Unit Tests', () => {
       });
 
       const adapter = createPostgresTenancyAdapter(fakeDb);
-      const err = await adapter.createWorkspaceWithOwner({ workspace, membership }).catch((e) => e);
+      const err = await adapter
+        .createWorkspaceWithOwner(makeTestParams(workspace, membership))
+        .catch((e) => e);
 
       expect(err).toBeInstanceOf(DatabaseError);
       expect(err).not.toBeInstanceOf(SlugConflictError);
@@ -251,7 +315,9 @@ describe('PostgresTenancyAdapter Unit Tests', () => {
       });
 
       const adapter = createPostgresTenancyAdapter(fakeDb);
-      const err = await adapter.createWorkspaceWithOwner({ workspace, membership }).catch((e) => e);
+      const err = await adapter
+        .createWorkspaceWithOwner(makeTestParams(workspace, membership))
+        .catch((e) => e);
 
       expect(err).toBeInstanceOf(DatabaseError);
       expect(err).not.toBeInstanceOf(SlugConflictError);
@@ -271,7 +337,7 @@ describe('PostgresTenancyAdapter Unit Tests', () => {
 
         const adapter = createPostgresTenancyAdapter(fakeDb);
         const err = await adapter
-          .createWorkspaceWithOwner({ workspace, membership })
+          .createWorkspaceWithOwner(makeTestParams(workspace, membership))
           .catch((e) => e);
 
         expect(err).toBeInstanceOf(DatabaseError);
@@ -285,9 +351,9 @@ describe('PostgresTenancyAdapter Unit Tests', () => {
       fakeDb.txFailWith = conflict;
 
       const adapter = createPostgresTenancyAdapter(fakeDb);
-      await expect(adapter.createWorkspaceWithOwner({ workspace, membership })).rejects.toBe(
-        conflict,
-      );
+      await expect(
+        adapter.createWorkspaceWithOwner(makeTestParams(workspace, membership)),
+      ).rejects.toBe(conflict);
     });
 
     it('proves no raw driver error object or constraint is needed or inspected by adapter', async () => {
@@ -303,7 +369,9 @@ describe('PostgresTenancyAdapter Unit Tests', () => {
       fakeDb.wsInsertFailWith = rawDriverErr;
 
       const adapter = createPostgresTenancyAdapter(fakeDb);
-      const err = await adapter.createWorkspaceWithOwner({ workspace, membership }).catch((e) => e);
+      const err = await adapter
+        .createWorkspaceWithOwner(makeTestParams(workspace, membership))
+        .catch((e) => e);
 
       expect(constraintInspected).toBe(false);
       expect(err).toBeInstanceOf(DatabaseError);
@@ -315,7 +383,9 @@ describe('PostgresTenancyAdapter Unit Tests', () => {
       fakeDb.txFailWith = new Error('Connection terminated postgresql://user:secret@127.0.0.1/db');
 
       const adapter = createPostgresTenancyAdapter(fakeDb);
-      const err = await adapter.createWorkspaceWithOwner({ workspace, membership }).catch((e) => e);
+      const err = await adapter
+        .createWorkspaceWithOwner(makeTestParams(workspace, membership))
+        .catch((e) => e);
 
       expect(err).toBeInstanceOf(DatabaseError);
       expect(err).not.toBeInstanceOf(SlugConflictError);

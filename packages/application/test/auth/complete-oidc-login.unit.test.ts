@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { parseMembershipId, parseUserId, parseWorkspaceId } from '@affiliate-content-os/domain';
+import { DefaultIdGenerator } from '../../src/id-generator.js';
 import { completeOidcLogin } from '../../src/auth/complete-oidc-login.js';
 import {
   AuthConfigurationUnavailableError,
@@ -100,6 +101,7 @@ describe('packages/application - completeOidcLogin', () => {
         },
         clock: { now: () => sampleNow },
         idGenerator: {
+          ...new DefaultIdGenerator(),
           generateUserId: () => parseUserId(sampleUserId),
           generateMembershipId: () => parseMembershipId('0192b012-3456-789a-8bcd-ef0123456721'),
           generateWorkspaceId: () => parseWorkspaceId('0192b012-3456-789a-8bcd-ef0123456722'),

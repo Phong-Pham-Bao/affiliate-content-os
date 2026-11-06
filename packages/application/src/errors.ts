@@ -141,3 +141,23 @@ export class AuditEventDependencyError extends ApplicationError {
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }
+
+export class IdempotencyKeyReusedError extends ApplicationError {
+  public override readonly name = 'IdempotencyKeyReusedError';
+  public readonly code = 'IDEMPOTENCY_KEY_REUSED' as const;
+
+  constructor() {
+    super('Idempotency key has already been used with a different request payload');
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export class IdempotencyConflictError extends ApplicationError {
+  public override readonly name = 'IdempotencyConflictError';
+  public readonly code = 'IDEMPOTENCY_CONFLICT' as const;
+
+  constructor() {
+    super('A concurrent request with the same idempotency key is in progress');
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}

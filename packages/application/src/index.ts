@@ -6,13 +6,17 @@ export {
 export { SystemClock } from './clock.js';
 export {
   createWorkspace,
+  type CreateWorkspaceAuditContext,
   type CreateWorkspaceCommand,
   type CreateWorkspaceDependencies,
+  type CreateWorkspaceIdempotencyInput,
 } from './create-workspace.js';
 export {
   AuditEventDependencyError,
   AuditEventInputError,
   ApplicationError,
+  IdempotencyConflictError,
+  IdempotencyKeyReusedError,
   IdentityClaimsValidationError,
   IdentityPersistenceError,
   IdentityProvisioningRaceError,
@@ -34,6 +38,7 @@ export type {
   CreateWorkspaceResult,
   CreateWorkspaceWithOwnerParams,
   IdGeneratorPort,
+  IdempotencyStorePort,
   IdentityLookupKey,
   UserDirectoryPort,
   UserIdentityDirectoryPort,

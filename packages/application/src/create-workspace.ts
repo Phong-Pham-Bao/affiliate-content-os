@@ -18,6 +18,15 @@ import type {
   UserDirectoryPort,
   WorkspacePersistencePort,
 } from './ports.js';
+import {
+  buildWorkspaceAuditEvent,
+  buildWorkspaceIdempotencyRecord,
+  validateIdempotencyInput,
+  type CreateWorkspaceAuditContext,
+  type CreateWorkspaceIdempotencyInput,
+} from './create-workspace-helpers.js';
+
+export type { CreateWorkspaceAuditContext, CreateWorkspaceIdempotencyInput };
 
 export interface CreateWorkspaceCommand {
   readonly userId: UserId;
@@ -27,6 +36,8 @@ export interface CreateWorkspaceCommand {
   readonly brandVoice?: string | null | undefined;
   readonly defaultDisclosure?: string | null | undefined;
   readonly aiEnabled?: boolean | undefined;
+  readonly idempotency: CreateWorkspaceIdempotencyInput;
+  readonly auditContext?: CreateWorkspaceAuditContext | undefined;
 }
 
 export interface CreateWorkspaceDependencies {
@@ -60,6 +71,8 @@ export async function createWorkspace(
     }
     throw err;
   }
+
+  const idempotencyInput = validateIdempotencyInput(command.idempotency);
 
   let aiEnabled: boolean;
   if (command.aiEnabled === undefined) {
@@ -114,13 +127,35 @@ export async function createWorkspace(
     version: 1,
   });
 
+  const auditEvent = buildWorkspaceAuditEvent({
+    workspace,
+    userId: validUserId,
+    now,
+    idGenerator: deps.idGenerator,
+    auditContext: command.auditContext,
+  });
+
+  const idempotencyRecord = buildWorkspaceIdempotencyRecord({
+    workspace,
+    userId: validUserId,
+    now,
+    clockDate,
+    idGenerator: deps.idGenerator,
+    idempotency: idempotencyInput,
+  });
+
   const result = await deps.workspacePersistence.createWorkspaceWithOwner({
     workspace,
     membership,
+    idempotencyRecord,
+    auditEvent,
   });
 
   return Object.freeze({
     workspace: Object.freeze(result.workspace),
     membership: Object.freeze(result.membership),
+    idempotencyRecord: Object.freeze(result.idempotencyRecord),
+    auditEvent: result.auditEvent ? Object.freeze(result.auditEvent) : null,
+    cached: result.cached ?? false,
   });
 }

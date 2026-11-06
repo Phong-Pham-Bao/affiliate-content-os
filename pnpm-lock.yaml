@@ -212,6 +212,9 @@ importers:
       '@affiliate-content-os/config':
         specifier: workspace:*
         version: link:../../packages/config
+      '@affiliate-content-os/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
       '@affiliate-content-os/infrastructure':
         specifier: workspace:*
         version: link:../../packages/infrastructure

@@ -44,3 +44,8 @@ export {
   loadTestAdminDatabaseConfig,
   readAndValidateSslCaFile,
 } from './validate-database.js';
+export {
+  DEFAULT_DEV_WEB_API_BASE_URL,
+  UNREACHABLE_PRODUCTION_WEB_API_BASE_URL,
+  resolveWebApiBaseUrl,
+} from './validate-web-api.js';
