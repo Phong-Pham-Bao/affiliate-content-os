@@ -76,3 +76,4 @@ export {
   validateSlug,
   validateWorkspaceName,
 } from './validation.js';
+export * from './catalog/index.js';

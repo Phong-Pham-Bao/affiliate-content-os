@@ -31,10 +31,14 @@ describe('Real PostgreSQL Tenancy Schema and Constraints Integration', () => {
 
     const tableNames = res.rows.map((r) => r.table_name);
     expect(tableNames).toEqual([
+      'affiliate_destinations',
       'application_sessions',
       'audit_events',
       'idempotency_keys',
       'oidc_login_transactions',
+      'product_fact_sets',
+      'product_facts',
+      'products',
       'schema_migrations',
       'users',
       'workspace_memberships',

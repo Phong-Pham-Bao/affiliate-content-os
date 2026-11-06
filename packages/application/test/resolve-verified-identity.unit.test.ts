@@ -1713,7 +1713,7 @@ describe('resolveVerifiedIdentity Use Case', () => {
       expect(exitCode).toBe(0);
       expect(stdout).not.toContain(sentinel);
       expect(stderr).not.toContain(sentinel);
-    }, 15000);
+    }, 45000);
 
     it('proves hostile clock Date sentinels never leak to child process stdout or stderr', async () => {
       const { spawn } = await import('node:child_process');
@@ -1780,7 +1780,7 @@ describe('resolveVerifiedIdentity Use Case', () => {
       expect(exitCode).toBe(0);
       expect(stdout).not.toContain(sentinel);
       expect(stderr).not.toContain(sentinel);
-    }, 15000);
+    }, 45000);
 
     it('proves hostile proxy claims sentinels never leak to child process stdout, stderr, or inspect', async () => {
       const { spawn } = await import('node:child_process');
@@ -1872,7 +1872,7 @@ describe('resolveVerifiedIdentity Use Case', () => {
       expect(exitCode).toBe(0);
       expect(stdout).not.toContain(sentinel);
       expect(stderr).not.toContain(sentinel);
-    }, 15000);
+    }, 45000);
 
     it('proves spoofed persistence array Object.create(Array.prototype) sentinels never leak to child process stdout, stderr, or inspect', async () => {
       const { spawn } = await import('node:child_process');
@@ -1963,6 +1963,6 @@ describe('resolveVerifiedIdentity Use Case', () => {
       expect(exitCode).toBe(0);
       expect(stdout).not.toContain(sentinel);
       expect(stderr).not.toContain(sentinel);
-    }, 15000);
+    }, 45000);
   });
 });

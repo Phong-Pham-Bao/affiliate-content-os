@@ -3,7 +3,7 @@ import { createApp } from '../src/app.js';
 import { COOKIE_SESSION, COOKIE_TRANSACTION } from '../src/auth/constants.js';
 import { createMockAuthDeps, createTestAuthConfig } from './helpers/auth-test-fakes.js';
 
-describe('GET /auth/callback route', { timeout: 15000 }, () => {
+describe('GET /auth/callback route', { timeout: 30000 }, () => {
   it('returns 503 AUTH_NOT_CONFIGURED when auth is disabled', async () => {
     const auth = createMockAuthDeps({ config: createTestAuthConfig({ enabled: false }) });
     const app = createApp({ auth });

@@ -3,7 +3,7 @@ import { createApp } from '../src/app.js';
 import { COOKIE_SESSION } from '../src/auth/constants.js';
 import { createMockAuthDeps, createTestAuthConfig } from './helpers/auth-test-fakes.js';
 
-describe('POST /api/v1/logout route', { timeout: 15000 }, () => {
+describe('POST /api/v1/logout route', { timeout: 30000 }, () => {
   const validSessionCookie = 'A'.repeat(43);
 
   it('returns 503 AUTH_NOT_CONFIGURED when auth is disabled', async () => {

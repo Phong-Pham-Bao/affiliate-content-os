@@ -46,6 +46,7 @@ export type {
   WorkspacePersistencePort,
 } from './ports.js';
 export * from './audit/index.js';
+export * from './catalog/index.js';
 export {
   resolveVerifiedIdentity,
   type ResolveVerifiedIdentityCommand,

@@ -5,9 +5,17 @@ import {
   parseWorkspaceId,
   parseAuditEventId,
   parseIdempotencyKeyId,
+  parseProductId,
+  parseProductFactSetId,
+  parseProductFactId,
+  parseAffiliateDestinationId,
   type AuditEventId,
   type IdempotencyKeyId,
   type MembershipId,
+  type ProductId,
+  type ProductFactSetId,
+  type ProductFactId,
+  type AffiliateDestinationId,
   type UserId,
   type WorkspaceId,
 } from '@affiliate-content-os/domain';
@@ -55,5 +63,21 @@ export class DefaultIdGenerator implements IdGeneratorPort {
 
   public generateUserId(): UserId {
     return parseUserId(generateUuidV7());
+  }
+
+  public generateProductId(): ProductId {
+    return parseProductId(generateUuidV7());
+  }
+
+  public generateProductFactSetId(): ProductFactSetId {
+    return parseProductFactSetId(generateUuidV7());
+  }
+
+  public generateProductFactId(): ProductFactId {
+    return parseProductFactId(generateUuidV7());
+  }
+
+  public generateAffiliateDestinationId(): AffiliateDestinationId {
+    return parseAffiliateDestinationId(generateUuidV7());
   }
 }

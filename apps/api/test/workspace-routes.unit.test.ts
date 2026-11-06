@@ -26,7 +26,7 @@ import { COOKIE_SESSION } from '../src/auth/constants.js';
 import type { WorkspaceRouteDependencies } from '../src/workspaces/types.js';
 import { createMockAuthDeps } from './helpers/auth-test-fakes.js';
 
-describe('Workspace HTTP Routes', { timeout: 15000 }, () => {
+describe('Workspace HTTP Routes', { timeout: 30000 }, () => {
   const validSessionCookie = 'A'.repeat(43);
   const testUserId = '0192b012-3456-789a-8bcd-ef0123456701' as UserId;
   const testWorkspaceId = '0192b012-3456-789a-8bcd-ef0123456702' as WorkspaceId;

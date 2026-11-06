@@ -9,6 +9,10 @@ import type {
   AuditEventSnapshot,
   IdempotencyKeyId,
   IdempotencyRecordSnapshot,
+  ProductId,
+  ProductFactSetId,
+  ProductFactId,
+  AffiliateDestinationId,
 } from '@affiliate-content-os/domain';
 
 export interface UserDirectoryPort {
@@ -88,4 +92,8 @@ export interface IdGeneratorPort {
   generateUserId(): UserId;
   generateAuditEventId?(): AuditEventId;
   generateIdempotencyKeyId?(): IdempotencyKeyId;
+  generateProductId?(): ProductId;
+  generateProductFactSetId?(): ProductFactSetId;
+  generateProductFactId?(): ProductFactId;
+  generateAffiliateDestinationId?(): AffiliateDestinationId;
 }
