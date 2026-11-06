@@ -13,11 +13,13 @@ import {
 } from '@affiliate-content-os/config';
 import { createAuthRoutes, type AuthDependencies } from './auth/index.js';
 import { createWorkspaceRoutes, type WorkspaceRouteDependencies } from './workspaces/index.js';
+import { createCatalogRoutes, type CatalogRouteDependencies } from './catalog/index.js';
 
 export interface CreateAppOptions {
   readonly config?: AppConfig | undefined;
   readonly auth?: AuthDependencies | undefined;
   readonly workspaces?: WorkspaceRouteDependencies | undefined;
+  readonly catalog?: CatalogRouteDependencies | undefined;
 }
 
 const defaultDisabledAuthConfig: AuthConfig = Object.freeze({
@@ -69,6 +71,10 @@ export function createApp(options?: CreateAppOptions): FastifyInstance {
 
   if (options?.workspaces) {
     void app.register(createWorkspaceRoutes(options.workspaces));
+  }
+
+  if (options?.catalog) {
+    void app.register(createCatalogRoutes(options.catalog));
   }
 
   return app;

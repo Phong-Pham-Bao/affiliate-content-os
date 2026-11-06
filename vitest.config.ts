@@ -30,6 +30,11 @@ export default defineConfig({
       'apps/**/*.spec.ts',
       'test/**/*.test.ts',
     ],
-    exclude: ['**/node_modules/**', '**/dist/**', 'packages/infrastructure/test/integration/**'],
+    exclude: [
+      '**/node_modules/**',
+      '**/dist/**',
+      'packages/infrastructure/test/integration/**',
+      'apps/api/test/integration/**',
+    ],
   },
 });

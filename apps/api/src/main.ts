@@ -19,10 +19,12 @@ import {
   discoverOidcAdapter,
 } from '@affiliate-content-os/infrastructure/auth';
 import { createPostgresTenancyAdapter } from '@affiliate-content-os/infrastructure/tenancy';
+import { PostgresCatalogAdapter } from '@affiliate-content-os/infrastructure/catalog';
 import { SystemClock, DefaultIdGenerator } from '@affiliate-content-os/application';
 import { startApiServer } from './server.js';
 import type { AuthDependencies } from './auth/index.js';
 import type { WorkspaceRouteDependencies } from './workspaces/index.js';
+import type { CatalogRouteDependencies } from './catalog/index.js';
 
 async function main(): Promise<void> {
   let config: AppConfig;
@@ -45,6 +47,7 @@ async function main(): Promise<void> {
 
   const database = createDatabase(databaseConfig, { sslCaContent });
   const tenancyAdapter = createPostgresTenancyAdapter(database);
+  const catalogAdapter = new PostgresCatalogAdapter(database);
   const clock = new SystemClock();
   const idGenerator = new DefaultIdGenerator();
 
@@ -109,12 +112,24 @@ async function main(): Promise<void> {
     };
   };
 
+  const catalogProvider = async (signal: AbortSignal): Promise<CatalogRouteDependencies> => {
+    const authDeps = resolvedAuthDeps ?? (await authProvider(signal));
+    return {
+      auth: authDeps,
+      catalogPersistence: catalogAdapter,
+      workspaceAuthorization: tenancyAdapter,
+      clock,
+      idGenerator,
+    };
+  };
+
   try {
     await startApiServer({
       config,
       database,
       auth: authProvider,
       workspaces: workspaceProvider,
+      catalog: catalogProvider,
     });
     const metadata = getRedactedConfigMetadata(config);
     const dbMetadata = getRedactedDatabaseMetadata(databaseConfig);

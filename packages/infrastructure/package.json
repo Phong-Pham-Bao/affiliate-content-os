@@ -33,6 +33,12 @@
       "development": "./src/catalog/index.ts",
       "import": "./dist/catalog/index.js",
       "default": "./dist/catalog/index.js"
+    },
+    "./testing": {
+      "types": "./src/testing/index.ts",
+      "development": "./src/testing/index.ts",
+      "import": "./dist/testing/index.js",
+      "default": "./dist/testing/index.js"
     }
   },
   "scripts": {

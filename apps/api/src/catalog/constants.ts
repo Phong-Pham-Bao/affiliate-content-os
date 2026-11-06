@@ -1,0 +1,5 @@
+export const RATE_LIMIT_CATALOG_MUTATION_MAX = 60;
+export const RATE_LIMIT_CATALOG_MUTATION_WINDOW_MS = 60_000;
+
+export const DEFAULT_PAGE_LIMIT = 20;
+export const MAX_PAGE_LIMIT = 100;

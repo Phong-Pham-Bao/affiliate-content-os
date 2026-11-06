@@ -31,6 +31,7 @@ import { UserNav } from './user-nav.js';
 import { WorkspaceSelector } from './workspace-selector.js';
 import { WorkspaceCard } from './workspace-card.js';
 import { CreateWorkspaceDialog } from './create-workspace-dialog.js';
+import { CatalogWorkspaceView } from './catalog/catalog-workspace-view.js';
 
 export function AppShell(): ReactElement {
   const [state, setState] = useState<AppShellState>(createInitialAppShellState);
@@ -164,7 +165,13 @@ export function AppShell(): ReactElement {
             )}
           </div>
         ) : state.activeWorkspace ? (
-          <WorkspaceCard workspace={state.activeWorkspace} />
+          <div className="workspace-active-view">
+            <WorkspaceCard workspace={state.activeWorkspace} />
+            <CatalogWorkspaceView
+              workspaceId={state.activeWorkspace.id}
+              userRole={state.activeWorkspace.role}
+            />
+          </div>
         ) : (
           <div className="empty-workspace-state">Select a workspace to view details.</div>
         )}

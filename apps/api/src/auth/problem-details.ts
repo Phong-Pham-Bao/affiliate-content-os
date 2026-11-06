@@ -1,23 +1,47 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import {
+  AffiliateDestinationNotFoundError,
   AuthConfigurationUnavailableError,
   AuthPersistenceError,
   AuthRequestValidationError,
   AuthenticationRequiredError,
+  DuplicateFactKeyError,
+  FactSetAlreadyConfirmedError,
+  FactSetNotFoundError,
   IdempotencyConflictError,
   IdempotencyKeyReusedError,
   OidcCallbackInvalidError,
   OidcProviderUnavailableError,
+  ProductArchivedError,
+  ProductNotFoundError,
   SlugConflictError,
+  StaleVersionConflictError,
   ValidationError,
   WorkspaceAccessDeniedError,
 } from '@affiliate-content-os/application';
+import { DomainValidationError } from '@affiliate-content-os/domain';
 import { AuthOriginInvalidError } from './origin.js';
+import { PreconditionRequiredError, MalformedIdempotencyKeyError } from '../catalog/errors.js';
 import { type ProblemDetails, type ProblemSpec, PROBLEM_SPECS } from './problem-details-specs.js';
 import { hasProxyInPrototype } from './proxy-detector.js';
 
 export type { ProblemDetails, ProblemSpec } from './problem-details-specs.js';
 export { PROBLEM_SPECS } from './problem-details-specs.js';
+
+function getOwnDataProperty(target: unknown, property: string): unknown {
+  if ((typeof target !== 'object' && typeof target !== 'function') || target === null) {
+    return undefined;
+  }
+  try {
+    const desc = Object.getOwnPropertyDescriptor(target, property);
+    if (desc && desc.get === undefined && desc.set === undefined && 'value' in desc) {
+      return desc.value;
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
 
 export function resolveProblemSpec(error: unknown, request?: FastifyRequest): ProblemSpec {
   if (typeof error !== 'object' || error === null) {
@@ -56,8 +80,38 @@ export function resolveProblemSpec(error: unknown, request?: FastifyRequest): Pr
     if (error instanceof WorkspaceAccessDeniedError) {
       return PROBLEM_SPECS['WORKSPACE_NOT_FOUND']!;
     }
+    if (error instanceof ProductNotFoundError) {
+      return PROBLEM_SPECS['PRODUCT_NOT_FOUND']!;
+    }
+    if (error instanceof FactSetNotFoundError) {
+      return PROBLEM_SPECS['FACT_SET_NOT_FOUND']!;
+    }
+    if (error instanceof AffiliateDestinationNotFoundError) {
+      return PROBLEM_SPECS['AFFILIATE_DESTINATION_NOT_FOUND']!;
+    }
+    if (error instanceof StaleVersionConflictError) {
+      return PROBLEM_SPECS['STALE_VERSION_CONFLICT']!;
+    }
+    if (error instanceof FactSetAlreadyConfirmedError) {
+      return PROBLEM_SPECS['FACT_SET_ALREADY_CONFIRMED']!;
+    }
+    if (error instanceof ProductArchivedError) {
+      return PROBLEM_SPECS['PRODUCT_ARCHIVED']!;
+    }
+    if (error instanceof DuplicateFactKeyError) {
+      return PROBLEM_SPECS['DUPLICATE_FACT_KEY']!;
+    }
+    if (error instanceof DomainValidationError) {
+      return PROBLEM_SPECS['VALIDATION_ERROR']!;
+    }
     if (error instanceof ValidationError) {
       return PROBLEM_SPECS['VALIDATION_ERROR']!;
+    }
+    if (error instanceof PreconditionRequiredError) {
+      return PROBLEM_SPECS['PRECONDITION_REQUIRED']!;
+    }
+    if (error instanceof MalformedIdempotencyKeyError) {
+      return PROBLEM_SPECS['MALFORMED_IDEMPOTENCY_KEY']!;
     }
     if (error instanceof AuthOriginInvalidError) {
       return PROBLEM_SPECS['AUTH_ORIGIN_INVALID']!;
@@ -89,9 +143,47 @@ export function resolveProblemSpec(error: unknown, request?: FastifyRequest): Pr
       maybeStatus = statusDesc.value;
     }
 
+    if (maybeStatus === 428 || maybeCode === 'PRECONDITION_REQUIRED') {
+      return PROBLEM_SPECS['PRECONDITION_REQUIRED']!;
+    }
+
+    if (
+      maybeCode &&
+      maybeCode !== 'FST_ERR_VALIDATION' &&
+      maybeCode !== 'FST_ERR_RATE_LIMIT' &&
+      PROBLEM_SPECS[maybeCode]
+    ) {
+      return PROBLEM_SPECS[maybeCode]!;
+    }
+
     if (maybeStatus === 429 || maybeCode === 'FST_ERR_RATE_LIMIT') {
       return PROBLEM_SPECS['RATE_LIMIT_EXCEEDED']!;
     }
+
+    const validationErrors = getOwnDataProperty(error, 'validation');
+    const validationContext = getOwnDataProperty(error, 'validationContext');
+    const requestUrl = request?.raw?.url ?? request?.url ?? '';
+    const isCatalogRequest = /^\/api\/v1\/workspaces\/[^/]+\/products(?:\/|\?|$)/.test(requestUrl);
+    if (isCatalogRequest && validationContext === 'headers' && Array.isArray(validationErrors)) {
+      for (const vErr of validationErrors) {
+        if (typeof vErr !== 'object' || vErr === null) {
+          continue;
+        }
+        const instancePath = getOwnDataProperty(vErr, 'instancePath');
+        const params = getOwnDataProperty(vErr, 'params');
+        const missingProp = getOwnDataProperty(params, 'missingProperty');
+        if (instancePath === '/if-match' || missingProp === 'if-match') {
+          return PROBLEM_SPECS['PRECONDITION_REQUIRED']!;
+        }
+        if (instancePath === '/idempotency-key' || missingProp === 'idempotency-key') {
+          return PROBLEM_SPECS['MALFORMED_IDEMPOTENCY_KEY']!;
+        }
+        if (instancePath === '/origin' || missingProp === 'origin') {
+          return PROBLEM_SPECS['AUTH_ORIGIN_INVALID']!;
+        }
+      }
+    }
+
     if (maybeStatus === 400 || maybeCode === 'FST_ERR_VALIDATION') {
       const url = request?.raw?.url ?? request?.url ?? '';
       const isAuth =

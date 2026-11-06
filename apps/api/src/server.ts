@@ -4,6 +4,7 @@ import type { Database } from '@affiliate-content-os/infrastructure/database';
 import { createApp } from './app.js';
 import type { AuthDependencies } from './auth/index.js';
 import type { WorkspaceRouteDependencies } from './workspaces/index.js';
+import type { CatalogRouteDependencies } from './catalog/index.js';
 import {
   raceWithDeadline,
   type ClearTimerFn,
@@ -26,6 +27,10 @@ export interface StartServerOptions {
   readonly workspaces?:
     | WorkspaceRouteDependencies
     | ((signal: AbortSignal) => Promise<WorkspaceRouteDependencies>)
+    | undefined;
+  readonly catalog?:
+    | CatalogRouteDependencies
+    | ((signal: AbortSignal) => Promise<CatalogRouteDependencies>)
     | undefined;
   readonly app?: FastifyInstance | undefined;
   readonly installSignalHandlers?: boolean | undefined;
@@ -50,8 +55,15 @@ export async function startApiServer(options: StartServerOptions): Promise<ApiSe
 
   let app =
     options.app ??
-    (typeof options.auth !== 'function' && typeof options.workspaces !== 'function'
-      ? createApp({ config, auth: options.auth, workspaces: options.workspaces })
+    (typeof options.auth !== 'function' &&
+    typeof options.workspaces !== 'function' &&
+    typeof options.catalog !== 'function'
+      ? createApp({
+          config,
+          auth: options.auth,
+          workspaces: options.workspaces,
+          catalog: options.catalog,
+        })
       : undefined);
 
   type ServerState = 'starting' | 'running' | 'closing' | 'closed';
@@ -214,13 +226,18 @@ export async function startApiServer(options: StartServerOptions): Promise<ApiSe
   });
 
   try {
-    // Phase 0: Resolve auth and workspace dependencies if factories were provided
-    if (typeof options.auth === 'function' || typeof options.workspaces === 'function') {
+    // Phase 0: Resolve auth, workspace, and catalog dependencies if factories were provided
+    if (
+      typeof options.auth === 'function' ||
+      typeof options.workspaces === 'function' ||
+      typeof options.catalog === 'function'
+    ) {
       if (startupAbortController.signal.aborted) {
         throw new Error('API server startup aborted before dependency resolution');
       }
       let authDeps = typeof options.auth !== 'function' ? options.auth : undefined;
       let workspaceDeps = typeof options.workspaces !== 'function' ? options.workspaces : undefined;
+      let catalogDeps = typeof options.catalog !== 'function' ? options.catalog : undefined;
 
       if (typeof options.auth === 'function') {
         const authPromise = options.auth(startupAbortController.signal);
@@ -230,7 +247,11 @@ export async function startApiServer(options: StartServerOptions): Promise<ApiSe
         const wsPromise = options.workspaces(startupAbortController.signal);
         workspaceDeps = await Promise.race([wsPromise, startupAbortPromise]);
       }
-      app = createApp({ config, auth: authDeps, workspaces: workspaceDeps });
+      if (typeof options.catalog === 'function') {
+        const catPromise = options.catalog(startupAbortController.signal);
+        catalogDeps = await Promise.race([catPromise, startupAbortPromise]);
+      }
+      app = createApp({ config, auth: authDeps, workspaces: workspaceDeps, catalog: catalogDeps });
     }
 
     // Phase 1: Probe Database connection before listening
