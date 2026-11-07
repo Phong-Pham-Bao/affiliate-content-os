@@ -2,6 +2,7 @@ import { buildOpenApiAuthPaths } from './openapi-auth-paths.js';
 import { buildOpenApiApiPaths } from './openapi-api-paths.js';
 import { buildOpenApiWorkspacePaths } from '../workspaces/openapi.js';
 import { buildOpenApiCatalogPaths } from '../catalog/openapi.js';
+import { buildOpenApiAnalysisPaths } from '../analysis/openapi.js';
 
 export { commonHeaders, problemDetailsContent } from './openapi-auth-paths.js';
 
@@ -11,5 +12,6 @@ export function buildOpenApiPaths(): Record<string, unknown> {
     ...buildOpenApiApiPaths(),
     ...buildOpenApiWorkspacePaths(),
     ...buildOpenApiCatalogPaths(),
+    ...buildOpenApiAnalysisPaths(),
   };
 }

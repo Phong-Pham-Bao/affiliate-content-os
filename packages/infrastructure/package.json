@@ -34,6 +34,18 @@
       "import": "./dist/catalog/index.js",
       "default": "./dist/catalog/index.js"
     },
+    "./analysis": {
+      "types": "./src/analysis/index.ts",
+      "development": "./src/analysis/index.ts",
+      "import": "./dist/analysis/index.js",
+      "default": "./dist/analysis/index.js"
+    },
+    "./jobs": {
+      "types": "./src/jobs/index.ts",
+      "development": "./src/jobs/index.ts",
+      "import": "./dist/jobs/index.js",
+      "default": "./dist/jobs/index.js"
+    },
     "./testing": {
       "types": "./src/testing/index.ts",
       "development": "./src/testing/index.ts",
@@ -49,6 +61,7 @@
     "@affiliate-content-os/application": "workspace:*",
     "@affiliate-content-os/config": "workspace:*",
     "@affiliate-content-os/domain": "workspace:*",
+    "@google/genai": "3.0.0",
     "openid-client": "6.8.8",
     "pg": "8.23.1"
   },

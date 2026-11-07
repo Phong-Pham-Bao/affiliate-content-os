@@ -1,7 +1,9 @@
 import type {
+  AIConfig,
   AppConfig,
   AuthConfig,
   DatabaseConfig,
+  RedactedAIMetadata,
   RedactedAuthConfigMetadata,
   RedactedConfigMetadata,
   RedactedDatabaseMetadata,
@@ -75,6 +77,26 @@ export function getRedactedAuthConfigMetadata(config: AuthConfig): RedactedAuthC
     sessionRotationGraceSeconds: config.sessionRotationGraceSeconds,
     sessionTouchIntervalSeconds: config.sessionTouchIntervalSeconds,
     cookieSecure: config.cookieSecure,
+  };
+
+  return Object.freeze(result);
+}
+
+/**
+ * Returns redacted AI configuration metadata for diagnostics.
+ * Never exposes the raw API key, headers, prompts, or provider responses.
+ */
+export function getRedactedAIMetadata(config: AIConfig): RedactedAIMetadata {
+  const result: RedactedAIMetadata = {
+    enabled: config.enabled,
+    hasGeminiApiKey: Boolean(config.geminiApiKey),
+    geminiModel: config.geminiModel,
+    geminiThinkingLevel: config.geminiThinkingLevel,
+    geminiTimeoutMs: config.geminiTimeoutMs,
+    geminiMaxOutputTokens: config.geminiMaxOutputTokens,
+    workerPollingIntervalMs: config.workerPollingIntervalMs,
+    workerLeaseDurationSeconds: config.workerLeaseDurationSeconds,
+    estimatedCostMicrounits: config.estimatedCostMicrounits,
   };
 
   return Object.freeze(result);

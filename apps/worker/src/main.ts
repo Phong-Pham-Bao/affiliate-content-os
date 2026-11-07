@@ -1,7 +1,9 @@
 import {
+  loadAIConfig,
   loadConfig,
   loadDatabaseConfig,
   readAndValidateSslCaFile,
+  type AIConfig,
   type AppConfig,
   type DatabaseConfig,
 } from '@affiliate-content-os/config';
@@ -10,11 +12,13 @@ import { startWorker } from './runner.js';
 
 async function main(): Promise<void> {
   let config: AppConfig;
+  let aiConfig: AIConfig | undefined;
   let databaseConfig: DatabaseConfig;
   let sslCaContent: string | undefined;
 
   try {
     config = loadConfig(process.env);
+    aiConfig = loadAIConfig(process.env);
     databaseConfig = loadDatabaseConfig(process.env);
     if (databaseConfig.sslMode === 'verify-full' && databaseConfig.sslCaFile) {
       sslCaContent = readAndValidateSslCaFile(databaseConfig.sslCaFile);
@@ -42,7 +46,7 @@ async function main(): Promise<void> {
   }
 
   try {
-    await startWorker({ config, database });
+    await startWorker({ config, aiConfig, database });
     console.log('Worker process stopped gracefully');
     process.exit(0);
   } catch (err) {

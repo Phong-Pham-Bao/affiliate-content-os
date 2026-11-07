@@ -47,6 +47,7 @@ export type {
 } from './ports.js';
 export * from './audit/index.js';
 export * from './catalog/index.js';
+export * from './analysis/index.js';
 export {
   resolveVerifiedIdentity,
   type ResolveVerifiedIdentityCommand,

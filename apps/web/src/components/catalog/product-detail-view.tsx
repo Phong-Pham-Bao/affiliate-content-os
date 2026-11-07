@@ -13,6 +13,7 @@ import type {
 } from '../../types/catalog.js';
 import { AffiliateDestinationsSection } from './affiliate-destinations-section.js';
 import { FactSetsSection } from './fact-sets-section.js';
+import { AnalysesSection } from './analyses-section.js';
 import { ApiError } from '../../lib/api-validators-common.js';
 
 interface ProductDetailViewProps {
@@ -396,6 +397,13 @@ export function ProductDetailView(props: ProductDetailViewProps): ReactElement {
         hasMore={props.factSetsHasMore}
         isLoadingMore={props.isFactSetsLoadingMore}
         onLoadMore={props.onLoadMoreFactSets}
+      />
+
+      <AnalysesSection
+        workspaceId={product.workspaceId}
+        productId={product.id}
+        factSetId={product.currentFactSetId}
+        canManage={canManage}
       />
 
       {showArchiveConfirm && (

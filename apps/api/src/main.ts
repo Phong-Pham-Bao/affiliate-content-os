@@ -2,6 +2,7 @@ import {
   loadConfig,
   loadDatabaseConfig,
   loadAuthConfig,
+  loadAIConfig,
   readAndValidateSslCaFile,
   getRedactedConfigMetadata,
   getRedactedDatabaseMetadata,
@@ -9,6 +10,7 @@ import {
   type AppConfig,
   type DatabaseConfig,
   type AuthConfig,
+  type AIConfig,
 } from '@affiliate-content-os/config';
 import { createDatabase } from '@affiliate-content-os/infrastructure/database';
 import {
@@ -20,22 +22,26 @@ import {
 } from '@affiliate-content-os/infrastructure/auth';
 import { createPostgresTenancyAdapter } from '@affiliate-content-os/infrastructure/tenancy';
 import { PostgresCatalogAdapter } from '@affiliate-content-os/infrastructure/catalog';
+import { PostgresAnalysisAdapter } from '@affiliate-content-os/infrastructure/analysis';
 import { SystemClock, DefaultIdGenerator } from '@affiliate-content-os/application';
 import { startApiServer } from './server.js';
 import type { AuthDependencies } from './auth/index.js';
 import type { WorkspaceRouteDependencies } from './workspaces/index.js';
 import type { CatalogRouteDependencies } from './catalog/index.js';
+import type { AnalysisRouteDependencies } from './analysis/index.js';
 
 async function main(): Promise<void> {
   let config: AppConfig;
   let databaseConfig: DatabaseConfig;
   let authConfig: AuthConfig;
+  let aiConfig: AIConfig;
   let sslCaContent: string | undefined;
 
   try {
     config = loadConfig(process.env);
     databaseConfig = loadDatabaseConfig(process.env);
     authConfig = loadAuthConfig(process.env);
+    aiConfig = loadAIConfig(process.env);
     if (databaseConfig.sslMode === 'verify-full' && databaseConfig.sslCaFile) {
       sslCaContent = readAndValidateSslCaFile(databaseConfig.sslCaFile);
     }
@@ -48,6 +54,7 @@ async function main(): Promise<void> {
   const database = createDatabase(databaseConfig, { sslCaContent });
   const tenancyAdapter = createPostgresTenancyAdapter(database);
   const catalogAdapter = new PostgresCatalogAdapter(database);
+  const analysisAdapter = new PostgresAnalysisAdapter(database.pool!);
   const clock = new SystemClock();
   const idGenerator = new DefaultIdGenerator();
 
@@ -123,6 +130,34 @@ async function main(): Promise<void> {
     };
   };
 
+  const analysisProvider = async (signal: AbortSignal): Promise<AnalysisRouteDependencies> => {
+    const authDeps = resolvedAuthDeps ?? (await authProvider(signal));
+    return {
+      auth: authDeps,
+      workspaceAuthorization: tenancyAdapter,
+      catalogPersistence: catalogAdapter,
+      analysisPersistence: analysisAdapter,
+      aiRunPersistence: analysisAdapter,
+      operationPersistence: analysisAdapter,
+      enqueueTxPort: analysisAdapter,
+      persistTxPort: analysisAdapter,
+      aiPolicyPort: analysisAdapter,
+      aiModelConfig: aiConfig.enabled
+        ? {
+            provider: 'google',
+            model: aiConfig.geminiModel,
+            promptTemplate: 'product_analysis_v1',
+            promptVersion: '1.0.0',
+            inputSchemaVersion: 1,
+            outputSchemaVersion: 1,
+            estimatedCostMicrounits: aiConfig.estimatedCostMicrounits,
+          }
+        : undefined,
+      clock,
+      idGenerator,
+    };
+  };
+
   try {
     await startApiServer({
       config,
@@ -130,6 +165,7 @@ async function main(): Promise<void> {
       auth: authProvider,
       workspaces: workspaceProvider,
       catalog: catalogProvider,
+      analysis: analysisProvider,
     });
     const metadata = getRedactedConfigMetadata(config);
     const dbMetadata = getRedactedDatabaseMetadata(databaseConfig);

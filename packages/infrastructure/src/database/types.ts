@@ -12,6 +12,8 @@ export interface TransactionExecutor {
 }
 
 export interface Database {
+  readonly pool?: pg.Pool | undefined;
+
   query<T = unknown>(text: string, params?: readonly unknown[]): Promise<DatabaseQueryResult<T>>;
 
   withTransaction<T>(fn: (tx: TransactionExecutor) => Promise<T>): Promise<T>;

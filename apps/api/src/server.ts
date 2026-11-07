@@ -5,6 +5,7 @@ import { createApp } from './app.js';
 import type { AuthDependencies } from './auth/index.js';
 import type { WorkspaceRouteDependencies } from './workspaces/index.js';
 import type { CatalogRouteDependencies } from './catalog/index.js';
+import type { AnalysisRouteDependencies } from './analysis/index.js';
 import {
   raceWithDeadline,
   type ClearTimerFn,
@@ -32,6 +33,10 @@ export interface StartServerOptions {
     | CatalogRouteDependencies
     | ((signal: AbortSignal) => Promise<CatalogRouteDependencies>)
     | undefined;
+  readonly analysis?:
+    | AnalysisRouteDependencies
+    | ((signal: AbortSignal) => Promise<AnalysisRouteDependencies>)
+    | undefined;
   readonly app?: FastifyInstance | undefined;
   readonly installSignalHandlers?: boolean | undefined;
   readonly shutdownTimeoutMs?: number | undefined;
@@ -57,12 +62,14 @@ export async function startApiServer(options: StartServerOptions): Promise<ApiSe
     options.app ??
     (typeof options.auth !== 'function' &&
     typeof options.workspaces !== 'function' &&
-    typeof options.catalog !== 'function'
+    typeof options.catalog !== 'function' &&
+    typeof options.analysis !== 'function'
       ? createApp({
           config,
           auth: options.auth,
           workspaces: options.workspaces,
           catalog: options.catalog,
+          analysis: options.analysis,
         })
       : undefined);
 
@@ -230,7 +237,8 @@ export async function startApiServer(options: StartServerOptions): Promise<ApiSe
     if (
       typeof options.auth === 'function' ||
       typeof options.workspaces === 'function' ||
-      typeof options.catalog === 'function'
+      typeof options.catalog === 'function' ||
+      typeof options.analysis === 'function'
     ) {
       if (startupAbortController.signal.aborted) {
         throw new Error('API server startup aborted before dependency resolution');
@@ -238,6 +246,7 @@ export async function startApiServer(options: StartServerOptions): Promise<ApiSe
       let authDeps = typeof options.auth !== 'function' ? options.auth : undefined;
       let workspaceDeps = typeof options.workspaces !== 'function' ? options.workspaces : undefined;
       let catalogDeps = typeof options.catalog !== 'function' ? options.catalog : undefined;
+      let analysisDeps = typeof options.analysis !== 'function' ? options.analysis : undefined;
 
       if (typeof options.auth === 'function') {
         const authPromise = options.auth(startupAbortController.signal);
@@ -251,7 +260,17 @@ export async function startApiServer(options: StartServerOptions): Promise<ApiSe
         const catPromise = options.catalog(startupAbortController.signal);
         catalogDeps = await Promise.race([catPromise, startupAbortPromise]);
       }
-      app = createApp({ config, auth: authDeps, workspaces: workspaceDeps, catalog: catalogDeps });
+      if (typeof options.analysis === 'function') {
+        const analysisPromise = options.analysis(startupAbortController.signal);
+        analysisDeps = await Promise.race([analysisPromise, startupAbortPromise]);
+      }
+      app = createApp({
+        config,
+        auth: authDeps,
+        workspaces: workspaceDeps,
+        catalog: catalogDeps,
+        analysis: analysisDeps,
+      });
     }
 
     // Phase 1: Probe Database connection before listening

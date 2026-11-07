@@ -154,8 +154,15 @@ describe('Real PostgreSQL Tenancy Adapter & Isolation Matrix Integration', () =>
     const memCheck = await client.query('SELECT id FROM workspace_memberships WHERE id = $1;', [
       memId,
     ]);
+    const aiPolicyCheck = await client.query(
+      'SELECT ai_enabled, monthly_budget_microunits, version FROM workspace_ai_policies WHERE workspace_id = $1;',
+      [wsId],
+    );
     expect(wsCheck.rows).toHaveLength(1);
     expect(memCheck.rows).toHaveLength(1);
+    expect(aiPolicyCheck.rows).toEqual([
+      { ai_enabled: true, monthly_budget_microunits: '0', version: '1' },
+    ]);
 
     // 2. Forced rollback test: membership insert violates FK (non-existent user)
     const failWsId = parseWorkspaceId('0192b012-3456-789a-8bcd-ef0123456804');

@@ -381,6 +381,7 @@ export function createDatabase(config: DatabaseConfig, options?: CreateDatabaseO
   const isClosing = (): boolean => isClosingState || isClosedState;
 
   return {
+    pool,
     query,
     withTransaction,
     probe,

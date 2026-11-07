@@ -1,13 +1,16 @@
 export { ConfigurationError, type ConfigurationIssue } from './errors.js';
 export {
+  getRedactedAIMetadata,
   getRedactedAuthConfigMetadata,
   getRedactedConfigMetadata,
   getRedactedDatabaseMetadata,
 } from './redact.js';
 export {
   ALLOWED_DATABASE_SSL_MODES,
+  ALLOWED_GEMINI_THINKING_LEVELS,
   ALLOWED_LOG_LEVELS,
   ALLOWED_NODE_ENVS,
+  DEFAULT_AI_ESTIMATED_RESERVATION_MICROUNITS,
   DEFAULT_API_HOST,
   DEFAULT_API_PORT,
   DEFAULT_AUTH_SESSION_ABSOLUTE_TTL_SECONDS,
@@ -21,16 +24,25 @@ export {
   DEFAULT_DATABASE_POOL_MAX,
   DEFAULT_DATABASE_SSL_MODE,
   DEFAULT_DATABASE_STATEMENT_TIMEOUT_MS,
+  DEFAULT_GEMINI_MAX_OUTPUT_TOKENS,
+  DEFAULT_GEMINI_MODEL,
+  DEFAULT_GEMINI_THINKING_LEVEL,
+  DEFAULT_GEMINI_TIMEOUT_MS,
   DEFAULT_LOG_LEVEL,
+  DEFAULT_WORKER_LEASE_DURATION_SECONDS,
+  DEFAULT_WORKER_POLLING_INTERVAL_MS,
   TEST_DATABASE_DISPOSABLE_SENTINEL,
+  type AIConfig,
   type AppConfig,
   type AuthConfig,
   type DatabaseConfig,
   type DatabaseSslMode,
+  type GeminiThinkingLevel,
   type LogLevel,
   type MigrationConfig,
   type NodeEnv,
   type RawEnvironment,
+  type RedactedAIMetadata,
   type RedactedAuthConfigMetadata,
   type RedactedConfigMetadata,
   type RedactedDatabaseMetadata,
@@ -38,6 +50,7 @@ export {
 } from './types.js';
 export { loadConfig } from './validate.js';
 export { loadAuthConfig } from './validate-auth.js';
+export { loadAIConfig } from './validate-ai.js';
 export {
   loadDatabaseConfig,
   loadMigrationConfig,

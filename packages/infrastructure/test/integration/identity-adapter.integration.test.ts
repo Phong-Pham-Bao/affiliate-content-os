@@ -337,15 +337,22 @@ describe('Real PostgreSQL Identity Adapter & Concurrency Integration Suite', () 
     const tables = res.rows.map((r) => r.table_name);
     expect(tables).toEqual([
       'affiliate_destinations',
+      'ai_runs',
+      'analyses',
+      'analysis_subjects',
       'application_sessions',
       'audit_events',
       'idempotency_keys',
+      'job_executions',
       'oidc_login_transactions',
+      'operations',
+      'outbox_events',
       'product_fact_sets',
       'product_facts',
       'products',
       'schema_migrations',
       'users',
+      'workspace_ai_policies',
       'workspace_memberships',
       'workspaces',
     ]);

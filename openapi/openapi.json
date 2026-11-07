@@ -6250,6 +6250,2078 @@
           }
         }
       }
+    },
+    "/api/v1/workspaces/{workspaceId}/products/{productId}/analyses": {
+      "post": {
+        "summary": "Request asynchronous AI product or niche analysis",
+        "description": "Enqueues analysis job and returns 202 Accepted with operation location.",
+        "operationId": "enqueueAnalysis",
+        "tags": ["Analysis"],
+        "parameters": [
+          {
+            "name": "acos_session",
+            "in": "cookie",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Opaque application session token."
+          },
+          {
+            "name": "workspaceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Unique identifier of the workspace."
+          },
+          {
+            "name": "productId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Unique identifier of the product."
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            },
+            "description": "Request origin validated against application base URL."
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[!-~]{1,128}$"
+            },
+            "description": "Mandatory idempotency key for safe duplicate prevention."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["analysisType", "factSetId"],
+                "additionalProperties": false,
+                "properties": {
+                  "analysisType": {
+                    "type": "string",
+                    "enum": ["product", "niche"]
+                  },
+                  "factSetId": {
+                    "type": "string",
+                    "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                  },
+                  "sourceAnalysisIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Analysis request accepted and queued.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-store"
+                },
+                "description": "Disables caching for sensitive authentication responses."
+              },
+              "Pragma": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-cache"
+                },
+                "description": "Legacy HTTP 1.0 cache prevention."
+              },
+              "Referrer-Policy": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-referrer"
+                },
+                "description": "Prevents token leakage in Referer headers."
+              },
+              "Location": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Location of the operation resource."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["operationId", "location", "status"],
+                  "properties": {
+                    "operationId": {
+                      "type": "string",
+                      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                    },
+                    "location": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "const": "queued"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-store"
+                },
+                "description": "Disables caching for sensitive authentication responses."
+              },
+              "Pragma": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-cache"
+                },
+                "description": "Legacy HTTP 1.0 cache prevention."
+              },
+              "Referrer-Policy": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-referrer"
+                },
+                "description": "Prevents token leakage in Referer headers."
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-store"
+                },
+                "description": "Disables caching for sensitive authentication responses."
+              },
+              "Pragma": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-cache"
+                },
+                "description": "Legacy HTTP 1.0 cache prevention."
+              },
+              "Referrer-Policy": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-referrer"
+                },
+                "description": "Prevents token leakage in Referer headers."
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-store"
+                },
+                "description": "Disables caching for sensitive authentication responses."
+              },
+              "Pragma": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-cache"
+                },
+                "description": "Legacy HTTP 1.0 cache prevention."
+              },
+              "Referrer-Policy": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-referrer"
+                },
+                "description": "Prevents token leakage in Referer headers."
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-store"
+                },
+                "description": "Disables caching for sensitive authentication responses."
+              },
+              "Pragma": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-cache"
+                },
+                "description": "Legacy HTTP 1.0 cache prevention."
+              },
+              "Referrer-Policy": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-referrer"
+                },
+                "description": "Prevents token leakage in Referer headers."
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-store"
+                },
+                "description": "Disables caching for sensitive authentication responses."
+              },
+              "Pragma": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-cache"
+                },
+                "description": "Legacy HTTP 1.0 cache prevention."
+              },
+              "Referrer-Policy": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-referrer"
+                },
+                "description": "Prevents token leakage in Referer headers."
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-store"
+                },
+                "description": "Disables caching for sensitive authentication responses."
+              },
+              "Pragma": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-cache"
+                },
+                "description": "Legacy HTTP 1.0 cache prevention."
+              },
+              "Referrer-Policy": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-referrer"
+                },
+                "description": "Prevents token leakage in Referer headers."
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "List analyses for a product",
+        "description": "Returns paginated analyses for a product.",
+        "operationId": "listAnalyses",
+        "tags": ["Analysis"],
+        "parameters": [
+          {
+            "name": "acos_session",
+            "in": "cookie",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Opaque application session token."
+          },
+          {
+            "name": "workspaceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Unique identifier of the workspace."
+          },
+          {
+            "name": "productId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Unique identifier of the product."
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": ["product", "niche", "performance"]
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": ["generated", "accepted", "rejected"]
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated list of analyses.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-store"
+                },
+                "description": "Disables caching for sensitive authentication responses."
+              },
+              "Pragma": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-cache"
+                },
+                "description": "Legacy HTTP 1.0 cache prevention."
+              },
+              "Referrer-Policy": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-referrer"
+                },
+                "description": "Prevents token leakage in Referer headers."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["items", "nextCursor"],
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "id",
+                          "workspaceId",
+                          "productId",
+                          "analysisType",
+                          "revisionNumber",
+                          "factSetId",
+                          "factSetRevision",
+                          "provider",
+                          "model",
+                          "status",
+                          "createdAt",
+                          "updatedAt",
+                          "version"
+                        ],
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                          },
+                          "workspaceId": {
+                            "type": "string",
+                            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                          },
+                          "productId": {
+                            "type": "string",
+                            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                          },
+                          "analysisType": {
+                            "type": "string",
+                            "enum": ["product", "niche", "performance"]
+                          },
+                          "revisionNumber": {
+                            "type": "integer",
+                            "minimum": 1
+                          },
+                          "factSetId": {
+                            "type": "string",
+                            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                          },
+                          "factSetRevision": {
+                            "type": ["integer", "null"],
+                            "minimum": 1
+                          },
+                          "provider": {
+                            "type": ["string", "null"]
+                          },
+                          "model": {
+                            "type": ["string", "null"]
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": ["generated", "accepted", "rejected"]
+                          },
+                          "createdAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "updatedAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "version": {
+                            "type": "integer",
+                            "minimum": 1
+                          }
+                        }
+                      }
+                    },
+                    "nextCursor": {
+                      "type": ["string", "null"]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-store"
+                },
+                "description": "Disables caching for sensitive authentication responses."
+              },
+              "Pragma": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-cache"
+                },
+                "description": "Legacy HTTP 1.0 cache prevention."
+              },
+              "Referrer-Policy": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-referrer"
+                },
+                "description": "Prevents token leakage in Referer headers."
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-store"
+                },
+                "description": "Disables caching for sensitive authentication responses."
+              },
+              "Pragma": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-cache"
+                },
+                "description": "Legacy HTTP 1.0 cache prevention."
+              },
+              "Referrer-Policy": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-referrer"
+                },
+                "description": "Prevents token leakage in Referer headers."
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspaceId}/analyses/{analysisId}": {
+      "get": {
+        "summary": "Get analysis by ID",
+        "description": "Returns single immutable analysis with structured content and safe model provenance.",
+        "operationId": "getAnalysis",
+        "tags": ["Analysis"],
+        "parameters": [
+          {
+            "name": "acos_session",
+            "in": "cookie",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Opaque application session token."
+          },
+          {
+            "name": "workspaceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Unique identifier of the workspace."
+          },
+          {
+            "name": "analysisId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Unique identifier of the analysis."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Analysis details.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-store"
+                },
+                "description": "Disables caching for sensitive authentication responses."
+              },
+              "Pragma": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-cache"
+                },
+                "description": "Legacy HTTP 1.0 cache prevention."
+              },
+              "Referrer-Policy": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-referrer"
+                },
+                "description": "Prevents token leakage in Referer headers."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "id",
+                    "workspaceId",
+                    "productId",
+                    "analysisType",
+                    "revisionNumber",
+                    "factSetId",
+                    "factSetRevision",
+                    "provider",
+                    "model",
+                    "status",
+                    "createdAt",
+                    "updatedAt",
+                    "version",
+                    "aiRunId",
+                    "content",
+                    "schemaVersion",
+                    "reviewedByUserId",
+                    "reviewedAt",
+                    "reviewReason",
+                    "rejectionReason",
+                    "createdByUserId",
+                    "isRepair",
+                    "contentHash"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                    },
+                    "workspaceId": {
+                      "type": "string",
+                      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                    },
+                    "productId": {
+                      "type": "string",
+                      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                    },
+                    "analysisType": {
+                      "type": "string",
+                      "enum": ["product", "niche", "performance"]
+                    },
+                    "revisionNumber": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "factSetId": {
+                      "type": "string",
+                      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                    },
+                    "factSetRevision": {
+                      "type": ["integer", "null"],
+                      "minimum": 1
+                    },
+                    "provider": {
+                      "type": ["string", "null"]
+                    },
+                    "model": {
+                      "type": ["string", "null"]
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": ["generated", "accepted", "rejected"]
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "updatedAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "version": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "aiRunId": {
+                      "type": "string",
+                      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                    },
+                    "content": {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    "schemaVersion": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "reviewedByUserId": {
+                      "type": ["string", "null"],
+                      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                    },
+                    "reviewedAt": {
+                      "type": ["string", "null"],
+                      "format": "date-time"
+                    },
+                    "reviewReason": {
+                      "type": ["string", "null"]
+                    },
+                    "rejectionReason": {
+                      "type": ["string", "null"]
+                    },
+                    "createdByUserId": {
+                      "type": "string",
+                      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                    },
+                    "isRepair": {
+                      "type": "boolean"
+                    },
+                    "contentHash": {
+                      "type": ["string", "null"]
+                    },
+                    "provenance": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["provider", "model", "promptTemplate", "promptVersion"],
+                      "properties": {
+                        "provider": {
+                          "type": "string"
+                        },
+                        "model": {
+                          "type": "string"
+                        },
+                        "promptTemplate": {
+                          "type": "string"
+                        },
+                        "promptVersion": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-store"
+                },
+                "description": "Disables caching for sensitive authentication responses."
+              },
+              "Pragma": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-cache"
+                },
+                "description": "Legacy HTTP 1.0 cache prevention."
+              },
+              "Referrer-Policy": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-referrer"
+                },
+                "description": "Prevents token leakage in Referer headers."
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-store"
+                },
+                "description": "Disables caching for sensitive authentication responses."
+              },
+              "Pragma": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-cache"
+                },
+                "description": "Legacy HTTP 1.0 cache prevention."
+              },
+              "Referrer-Policy": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-referrer"
+                },
+                "description": "Prevents token leakage in Referer headers."
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspaceId}/operations/{operationId}": {
+      "get": {
+        "summary": "Get operation status",
+        "description": "Returns asynchronous operation progress, terminal status, or failure category.",
+        "operationId": "getOperation",
+        "tags": ["Analysis"],
+        "parameters": [
+          {
+            "name": "acos_session",
+            "in": "cookie",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Opaque application session token."
+          },
+          {
+            "name": "workspaceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Unique identifier of the workspace."
+          },
+          {
+            "name": "operationId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Unique identifier of the asynchronous operation."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Operation status.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-store"
+                },
+                "description": "Disables caching for sensitive authentication responses."
+              },
+              "Pragma": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-cache"
+                },
+                "description": "Legacy HTTP 1.0 cache prevention."
+              },
+              "Referrer-Policy": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-referrer"
+                },
+                "description": "Prevents token leakage in Referer headers."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "id",
+                    "workspaceId",
+                    "operationType",
+                    "resourceType",
+                    "resourceId",
+                    "status",
+                    "progressPercent",
+                    "resultLocation",
+                    "errorCategory",
+                    "errorCode",
+                    "errorMessage",
+                    "startedAt",
+                    "completedAt",
+                    "createdAt",
+                    "updatedAt",
+                    "version"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                    },
+                    "workspaceId": {
+                      "type": "string",
+                      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                    },
+                    "operationType": {
+                      "type": "string"
+                    },
+                    "resourceType": {
+                      "type": "string"
+                    },
+                    "resourceId": {
+                      "type": "string",
+                      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": ["queued", "running", "succeeded", "failed", "canceled"]
+                    },
+                    "progressPercent": {
+                      "type": ["integer", "null"],
+                      "minimum": 0,
+                      "maximum": 100
+                    },
+                    "resultLocation": {
+                      "type": ["string", "null"]
+                    },
+                    "errorCategory": {
+                      "type": ["string", "null"]
+                    },
+                    "errorCode": {
+                      "type": ["string", "null"]
+                    },
+                    "errorMessage": {
+                      "type": ["string", "null"]
+                    },
+                    "startedAt": {
+                      "type": ["string", "null"],
+                      "format": "date-time"
+                    },
+                    "completedAt": {
+                      "type": ["string", "null"],
+                      "format": "date-time"
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "updatedAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "version": {
+                      "type": "integer",
+                      "minimum": 1
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-store"
+                },
+                "description": "Disables caching for sensitive authentication responses."
+              },
+              "Pragma": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-cache"
+                },
+                "description": "Legacy HTTP 1.0 cache prevention."
+              },
+              "Referrer-Policy": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-referrer"
+                },
+                "description": "Prevents token leakage in Referer headers."
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-store"
+                },
+                "description": "Disables caching for sensitive authentication responses."
+              },
+              "Pragma": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-cache"
+                },
+                "description": "Legacy HTTP 1.0 cache prevention."
+              },
+              "Referrer-Policy": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-referrer"
+                },
+                "description": "Prevents token leakage in Referer headers."
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspaceId}/analyses/{analysisId}/accept": {
+      "post": {
+        "summary": "Accept an analysis",
+        "description": "Records human review acceptance of generated analysis.",
+        "operationId": "acceptAnalysis",
+        "tags": ["Analysis"],
+        "parameters": [
+          {
+            "name": "acos_session",
+            "in": "cookie",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Opaque application session token."
+          },
+          {
+            "name": "workspaceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Unique identifier of the workspace."
+          },
+          {
+            "name": "analysisId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Unique identifier of the analysis."
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            },
+            "description": "Request origin validated against application base URL."
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^\"?[1-9][0-9]*\"?$"
+            },
+            "description": "Optimistic concurrency version. Required unless expectedVersion is in the body."
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": ["object", "null"],
+                "additionalProperties": false,
+                "properties": {
+                  "expectedVersion": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Analysis accepted.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-store"
+                },
+                "description": "Disables caching for sensitive authentication responses."
+              },
+              "Pragma": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-cache"
+                },
+                "description": "Legacy HTTP 1.0 cache prevention."
+              },
+              "Referrer-Policy": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-referrer"
+                },
+                "description": "Prevents token leakage in Referer headers."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "id",
+                    "workspaceId",
+                    "productId",
+                    "analysisType",
+                    "revisionNumber",
+                    "factSetId",
+                    "factSetRevision",
+                    "provider",
+                    "model",
+                    "status",
+                    "createdAt",
+                    "updatedAt",
+                    "version",
+                    "aiRunId",
+                    "content",
+                    "schemaVersion",
+                    "reviewedByUserId",
+                    "reviewedAt",
+                    "reviewReason",
+                    "rejectionReason",
+                    "createdByUserId",
+                    "isRepair",
+                    "contentHash"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                    },
+                    "workspaceId": {
+                      "type": "string",
+                      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                    },
+                    "productId": {
+                      "type": "string",
+                      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                    },
+                    "analysisType": {
+                      "type": "string",
+                      "enum": ["product", "niche", "performance"]
+                    },
+                    "revisionNumber": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "factSetId": {
+                      "type": "string",
+                      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                    },
+                    "factSetRevision": {
+                      "type": ["integer", "null"],
+                      "minimum": 1
+                    },
+                    "provider": {
+                      "type": ["string", "null"]
+                    },
+                    "model": {
+                      "type": ["string", "null"]
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": ["generated", "accepted", "rejected"]
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "updatedAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "version": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "aiRunId": {
+                      "type": "string",
+                      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                    },
+                    "content": {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    "schemaVersion": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "reviewedByUserId": {
+                      "type": ["string", "null"],
+                      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                    },
+                    "reviewedAt": {
+                      "type": ["string", "null"],
+                      "format": "date-time"
+                    },
+                    "reviewReason": {
+                      "type": ["string", "null"]
+                    },
+                    "rejectionReason": {
+                      "type": ["string", "null"]
+                    },
+                    "createdByUserId": {
+                      "type": "string",
+                      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                    },
+                    "isRepair": {
+                      "type": "boolean"
+                    },
+                    "contentHash": {
+                      "type": ["string", "null"]
+                    },
+                    "provenance": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["provider", "model", "promptTemplate", "promptVersion"],
+                      "properties": {
+                        "provider": {
+                          "type": "string"
+                        },
+                        "model": {
+                          "type": "string"
+                        },
+                        "promptTemplate": {
+                          "type": "string"
+                        },
+                        "promptVersion": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-store"
+                },
+                "description": "Disables caching for sensitive authentication responses."
+              },
+              "Pragma": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-cache"
+                },
+                "description": "Legacy HTTP 1.0 cache prevention."
+              },
+              "Referrer-Policy": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-referrer"
+                },
+                "description": "Prevents token leakage in Referer headers."
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-store"
+                },
+                "description": "Disables caching for sensitive authentication responses."
+              },
+              "Pragma": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-cache"
+                },
+                "description": "Legacy HTTP 1.0 cache prevention."
+              },
+              "Referrer-Policy": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-referrer"
+                },
+                "description": "Prevents token leakage in Referer headers."
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-store"
+                },
+                "description": "Disables caching for sensitive authentication responses."
+              },
+              "Pragma": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-cache"
+                },
+                "description": "Legacy HTTP 1.0 cache prevention."
+              },
+              "Referrer-Policy": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-referrer"
+                },
+                "description": "Prevents token leakage in Referer headers."
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspaceId}/analyses/{analysisId}/reject": {
+      "post": {
+        "summary": "Reject an analysis",
+        "description": "Records human review rejection of generated analysis with bounded reason.",
+        "operationId": "rejectAnalysis",
+        "tags": ["Analysis"],
+        "parameters": [
+          {
+            "name": "acos_session",
+            "in": "cookie",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Opaque application session token."
+          },
+          {
+            "name": "workspaceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Unique identifier of the workspace."
+          },
+          {
+            "name": "analysisId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Unique identifier of the analysis."
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            },
+            "description": "Request origin validated against application base URL."
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^\"?[1-9][0-9]*\"?$"
+            },
+            "description": "Optimistic concurrency version. Required unless expectedVersion is in the body."
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": ["object", "null"],
+                "additionalProperties": false,
+                "properties": {
+                  "expectedVersion": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "reason": {
+                    "type": "string",
+                    "maxLength": 2048
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Analysis rejected.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-store"
+                },
+                "description": "Disables caching for sensitive authentication responses."
+              },
+              "Pragma": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-cache"
+                },
+                "description": "Legacy HTTP 1.0 cache prevention."
+              },
+              "Referrer-Policy": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-referrer"
+                },
+                "description": "Prevents token leakage in Referer headers."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "id",
+                    "workspaceId",
+                    "productId",
+                    "analysisType",
+                    "revisionNumber",
+                    "factSetId",
+                    "factSetRevision",
+                    "provider",
+                    "model",
+                    "status",
+                    "createdAt",
+                    "updatedAt",
+                    "version",
+                    "aiRunId",
+                    "content",
+                    "schemaVersion",
+                    "reviewedByUserId",
+                    "reviewedAt",
+                    "reviewReason",
+                    "rejectionReason",
+                    "createdByUserId",
+                    "isRepair",
+                    "contentHash"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                    },
+                    "workspaceId": {
+                      "type": "string",
+                      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                    },
+                    "productId": {
+                      "type": "string",
+                      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                    },
+                    "analysisType": {
+                      "type": "string",
+                      "enum": ["product", "niche", "performance"]
+                    },
+                    "revisionNumber": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "factSetId": {
+                      "type": "string",
+                      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                    },
+                    "factSetRevision": {
+                      "type": ["integer", "null"],
+                      "minimum": 1
+                    },
+                    "provider": {
+                      "type": ["string", "null"]
+                    },
+                    "model": {
+                      "type": ["string", "null"]
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": ["generated", "accepted", "rejected"]
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "updatedAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "version": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "aiRunId": {
+                      "type": "string",
+                      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                    },
+                    "content": {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    "schemaVersion": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "reviewedByUserId": {
+                      "type": ["string", "null"],
+                      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                    },
+                    "reviewedAt": {
+                      "type": ["string", "null"],
+                      "format": "date-time"
+                    },
+                    "reviewReason": {
+                      "type": ["string", "null"]
+                    },
+                    "rejectionReason": {
+                      "type": ["string", "null"]
+                    },
+                    "createdByUserId": {
+                      "type": "string",
+                      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                    },
+                    "isRepair": {
+                      "type": "boolean"
+                    },
+                    "contentHash": {
+                      "type": ["string", "null"]
+                    },
+                    "provenance": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["provider", "model", "promptTemplate", "promptVersion"],
+                      "properties": {
+                        "provider": {
+                          "type": "string"
+                        },
+                        "model": {
+                          "type": "string"
+                        },
+                        "promptTemplate": {
+                          "type": "string"
+                        },
+                        "promptVersion": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-store"
+                },
+                "description": "Disables caching for sensitive authentication responses."
+              },
+              "Pragma": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-cache"
+                },
+                "description": "Legacy HTTP 1.0 cache prevention."
+              },
+              "Referrer-Policy": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-referrer"
+                },
+                "description": "Prevents token leakage in Referer headers."
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-store"
+                },
+                "description": "Disables caching for sensitive authentication responses."
+              },
+              "Pragma": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-cache"
+                },
+                "description": "Legacy HTTP 1.0 cache prevention."
+              },
+              "Referrer-Policy": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-referrer"
+                },
+                "description": "Prevents token leakage in Referer headers."
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-store"
+                },
+                "description": "Disables caching for sensitive authentication responses."
+              },
+              "Pragma": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-cache"
+                },
+                "description": "Legacy HTTP 1.0 cache prevention."
+              },
+              "Referrer-Policy": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-referrer"
+                },
+                "description": "Prevents token leakage in Referer headers."
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspaceId}/ai-policy": {
+      "put": {
+        "summary": "Update workspace AI policy (demo / admin)",
+        "description": "Safely configures AI enablement and budget limit for local demonstration.",
+        "operationId": "updateAIPolicy",
+        "tags": ["Analysis"],
+        "parameters": [
+          {
+            "name": "acos_session",
+            "in": "cookie",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Opaque application session token."
+          },
+          {
+            "name": "workspaceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Unique identifier of the workspace."
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            },
+            "description": "Request origin validated against application base URL."
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^\"?[1-9][0-9]*\"?$"
+            },
+            "description": "Optimistic concurrency version. Required unless expectedVersion is in the body."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["aiEnabled", "monthlyBudgetMicrounits", "rateLimitPerMinute"],
+                "additionalProperties": false,
+                "properties": {
+                  "aiEnabled": {
+                    "type": "boolean"
+                  },
+                  "monthlyBudgetMicrounits": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "rateLimitPerMinute": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1000
+                  },
+                  "expectedVersion": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Policy updated.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-store"
+                },
+                "description": "Disables caching for sensitive authentication responses."
+              },
+              "Pragma": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-cache"
+                },
+                "description": "Legacy HTTP 1.0 cache prevention."
+              },
+              "Referrer-Policy": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-referrer"
+                },
+                "description": "Prevents token leakage in Referer headers."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "workspaceId",
+                    "aiEnabled",
+                    "monthlyBudgetMicrounits",
+                    "currentSpendMicrounits",
+                    "reservedSpendMicrounits",
+                    "rateLimitPerMinute",
+                    "budgetPeriodStart",
+                    "updatedAt",
+                    "version"
+                  ],
+                  "properties": {
+                    "workspaceId": {
+                      "type": "string",
+                      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                    },
+                    "aiEnabled": {
+                      "type": "boolean"
+                    },
+                    "monthlyBudgetMicrounits": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "currentSpendMicrounits": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "reservedSpendMicrounits": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "rateLimitPerMinute": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "budgetPeriodStart": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "updatedAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "version": {
+                      "type": "integer",
+                      "minimum": 1
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-store"
+                },
+                "description": "Disables caching for sensitive authentication responses."
+              },
+              "Pragma": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-cache"
+                },
+                "description": "Legacy HTTP 1.0 cache prevention."
+              },
+              "Referrer-Policy": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-referrer"
+                },
+                "description": "Prevents token leakage in Referer headers."
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-store"
+                },
+                "description": "Disables caching for sensitive authentication responses."
+              },
+              "Pragma": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-cache"
+                },
+                "description": "Legacy HTTP 1.0 cache prevention."
+              },
+              "Referrer-Policy": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-referrer"
+                },
+                "description": "Prevents token leakage in Referer headers."
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-store"
+                },
+                "description": "Disables caching for sensitive authentication responses."
+              },
+              "Pragma": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-cache"
+                },
+                "description": "Legacy HTTP 1.0 cache prevention."
+              },
+              "Referrer-Policy": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-referrer"
+                },
+                "description": "Prevents token leakage in Referer headers."
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "Precondition Required",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-store"
+                },
+                "description": "Disables caching for sensitive authentication responses."
+              },
+              "Pragma": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-cache"
+                },
+                "description": "Legacy HTTP 1.0 cache prevention."
+              },
+              "Referrer-Policy": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-referrer"
+                },
+                "description": "Prevents token leakage in Referer headers."
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {

@@ -114,4 +114,38 @@ export interface RedactedAuthConfigMetadata {
   readonly cookieSecure: boolean;
 }
 
+export const DEFAULT_GEMINI_MODEL = 'gemini-3.8-flash';
+export const ALLOWED_GEMINI_THINKING_LEVELS = ['low', 'medium', 'high'] as const;
+export type GeminiThinkingLevel = (typeof ALLOWED_GEMINI_THINKING_LEVELS)[number];
+export const DEFAULT_GEMINI_THINKING_LEVEL: GeminiThinkingLevel = 'high';
+export const DEFAULT_GEMINI_TIMEOUT_MS = 30000;
+export const DEFAULT_GEMINI_MAX_OUTPUT_TOKENS = 8192;
+export const DEFAULT_WORKER_POLLING_INTERVAL_MS = 2000;
+export const DEFAULT_WORKER_LEASE_DURATION_SECONDS = 30;
+export const DEFAULT_AI_ESTIMATED_RESERVATION_MICROUNITS = 50000;
+
+export interface AIConfig {
+  readonly enabled: boolean;
+  readonly geminiApiKey: string | null;
+  readonly geminiModel: string;
+  readonly geminiThinkingLevel: GeminiThinkingLevel;
+  readonly geminiTimeoutMs: number;
+  readonly geminiMaxOutputTokens: number;
+  readonly workerPollingIntervalMs: number;
+  readonly workerLeaseDurationSeconds: number;
+  readonly estimatedCostMicrounits: number;
+}
+
+export interface RedactedAIMetadata {
+  readonly enabled: boolean;
+  readonly hasGeminiApiKey: boolean;
+  readonly geminiModel: string;
+  readonly geminiThinkingLevel: GeminiThinkingLevel;
+  readonly geminiTimeoutMs: number;
+  readonly geminiMaxOutputTokens: number;
+  readonly workerPollingIntervalMs: number;
+  readonly workerLeaseDurationSeconds: number;
+  readonly estimatedCostMicrounits: number;
+}
+
 export type RawEnvironment = Record<string, string | undefined>;

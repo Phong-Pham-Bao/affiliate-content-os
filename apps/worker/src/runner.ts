@@ -1,6 +1,10 @@
-import { getRedactedConfigMetadata, type AppConfig } from '@affiliate-content-os/config';
+import {
+  getRedactedConfigMetadata,
+  type AIConfig,
+  type AppConfig,
+} from '@affiliate-content-os/config';
 import type { Database } from '@affiliate-content-os/infrastructure/database';
-import { runWorker, type WorkerRuntimeHandle } from './worker.js';
+import { runWorker, type WorkerDependencies, type WorkerRuntimeHandle } from './worker.js';
 import {
   raceWithDeadline,
   type ClearTimerFn,
@@ -10,6 +14,7 @@ import {
 
 export interface StartWorkerOptions {
   readonly config: AppConfig;
+  readonly aiConfig?: AIConfig | undefined;
   readonly database: Database;
   readonly abortController?: AbortController | undefined;
   readonly installSignalHandlers?: boolean | undefined;
@@ -20,14 +25,7 @@ export interface StartWorkerOptions {
   readonly now?: (() => number) | undefined;
   readonly setTimer?: SetTimerFn | undefined;
   readonly clearTimer?: ClearTimerFn | undefined;
-  readonly workerRunner?:
-    | ((opts: {
-        config: AppConfig;
-        signal: AbortSignal;
-        onStarted?: () => void;
-        runtimeHandle?: WorkerRuntimeHandle;
-      }) => Promise<void>)
-    | undefined;
+  readonly workerRunner?: ((opts: WorkerDependencies) => Promise<void>) | undefined;
 }
 
 export async function startWorker(options: StartWorkerOptions): Promise<void> {
@@ -211,6 +209,8 @@ export async function startWorker(options: StartWorkerOptions): Promise<void> {
   try {
     runtimePromise = workerRunnerFn({
       config,
+      aiConfig: options.aiConfig,
+      database,
       signal: controller.signal,
       onStarted: handleStarted,
       ...(options.runtimeHandle !== undefined ? { runtimeHandle: options.runtimeHandle } : {}),

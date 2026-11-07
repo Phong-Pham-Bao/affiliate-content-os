@@ -11,7 +11,9 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "@affiliate-content-os/application": "workspace:*",
     "@affiliate-content-os/config": "workspace:*",
+    "@affiliate-content-os/domain": "workspace:*",
     "@affiliate-content-os/infrastructure": "workspace:*"
   },
   "devDependencies": {

@@ -77,3 +77,4 @@ export {
   validateWorkspaceName,
 } from './validation.js';
 export * from './catalog/index.js';
+export * from './analysis/index.js';

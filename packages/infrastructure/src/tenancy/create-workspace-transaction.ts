@@ -126,6 +126,12 @@ export async function executeCreateWorkspaceTransaction(
   }
 
   await tx.query(
+    `INSERT INTO workspace_ai_policies (workspace_id, ai_enabled)
+     VALUES ($1, $2)`,
+    [params.workspace.id, params.workspace.aiEnabled],
+  );
+
+  await tx.query(
     `INSERT INTO workspace_memberships (
       id, workspace_id, user_id, role, status, invited_by_user_id, joined_at, created_at, updated_at, version
     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,

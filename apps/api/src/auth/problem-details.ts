@@ -22,6 +22,7 @@ import {
 import { DomainValidationError } from '@affiliate-content-os/domain';
 import { AuthOriginInvalidError } from './origin.js';
 import { PreconditionRequiredError, MalformedIdempotencyKeyError } from '../catalog/errors.js';
+import { resolveAnalysisProblemSpec } from '../analysis/problem-details-specs.js';
 import { type ProblemDetails, type ProblemSpec, PROBLEM_SPECS } from './problem-details-specs.js';
 import { hasProxyInPrototype } from './proxy-detector.js';
 
@@ -97,6 +98,10 @@ export function resolveProblemSpec(error: unknown, request?: FastifyRequest): Pr
     }
     if (error instanceof ProductArchivedError) {
       return PROBLEM_SPECS['PRODUCT_ARCHIVED']!;
+    }
+    const analysisSpec = resolveAnalysisProblemSpec(error);
+    if (analysisSpec) {
+      return analysisSpec;
     }
     if (error instanceof DuplicateFactKeyError) {
       return PROBLEM_SPECS['DUPLICATE_FACT_KEY']!;
