@@ -1,6 +1,6 @@
 # Affiliate Content OS - Database Specification
 
-Status: Sprint 2 implemented through migration `0007_intelligence.sql`
+Status: Sprint 3 Checkpoint A implemented through migration `0008_ai_workforce_foundation.sql`
 
 Last updated: 2026-11-07
 
@@ -179,6 +179,58 @@ Constraints: unique (`product_id`, `analysis_type`, `revision_number`). A perfor
 ### `analysis_subjects`
 
 `analysis_id`, `workspace_id`, `subject_type`, `subject_id`, `role`, with a composite primary key. This provides traceability without placing polymorphic integrity solely in JSON; application use cases validate referenced subject ownership/type.
+
+### Sprint 3 AI workforce orchestration foundation
+
+Migration `0008_ai_workforce_foundation.sql` adds 7 tables supporting deterministic workforce orchestration:
+
+#### `agent_role_definitions`
+Normative definitions for office roles. Migration 0008 seeds exactly 6 active roles: `chief_of_staff`, `product_strategist`, `audience_strategist`, `creative_director`, `scriptwriter`, `compliance_reviewer`.
+- `id UUID PRIMARY KEY`: deterministic UUIDv7 literals.
+- `role_key TEXT NOT NULL`, `role_version INTEGER NOT NULL`, `display_name TEXT NOT NULL`, `department TEXT NOT NULL`, `is_active BOOLEAN NOT NULL DEFAULT TRUE`, `allowed_artifact_types_json JSONB NOT NULL DEFAULT '[]'::jsonb`.
+- Unique constraint: `(role_key, role_version)`.
+
+#### `context_packages`
+Immutable context snapshot linking a product and confirmed fact set for a work order.
+- `id UUID PRIMARY KEY`, `workspace_id UUID NOT NULL REFERENCES workspaces(id)`, `product_id UUID NOT NULL`, `fact_set_id UUID NOT NULL`, `context_schema_version INTEGER NOT NULL`, `context_hash BYTEA NOT NULL` (32 bytes), `created_by_user_id UUID NOT NULL REFERENCES users(id)`, `created_at TIMESTAMPTZ NOT NULL`.
+- Unique: `(workspace_id, id)`.
+- Composite FKs: `(workspace_id, product_id)` to `products`, `(workspace_id, product_id, fact_set_id)` to `product_fact_sets`.
+- Immutability: enforced by trigger `context_packages_enforce_immutability` raising exception on `UPDATE` or `DELETE`.
+
+#### `context_package_analyses`
+Immutable join table linking a context package to accepted source analyses.
+- `workspace_id UUID NOT NULL`, `context_package_id UUID NOT NULL`, `analysis_id UUID NOT NULL`, `created_at TIMESTAMPTZ NOT NULL`.
+- Primary key: `(context_package_id, analysis_id)`.
+- Composite FKs: `(workspace_id, context_package_id)` to `context_packages`, `(workspace_id, analysis_id)` to `analyses`.
+- Immutability: enforced by trigger `context_package_analyses_enforce_immutability`.
+
+#### `work_orders`
+Boss-directed container for deterministic creative office graphs.
+- `id UUID PRIMARY KEY`, `workspace_id UUID NOT NULL REFERENCES workspaces(id)`, `product_id UUID NOT NULL`, `context_package_id UUID NOT NULL`, `mission_type TEXT NOT NULL`, `directive_text TEXT NOT NULL`, `graph_template TEXT NOT NULL`, `graph_version INTEGER NOT NULL`, `status TEXT NOT NULL`, `priority INTEGER NOT NULL DEFAULT 50`, `created_by_user_id UUID NOT NULL REFERENCES users(id)`, `failure_category TEXT NULL`, `completed_at TIMESTAMPTZ NULL`, `created_at`, `updated_at`, `version`.
+- Directive constraint: 1 to 4000 characters, trimmed, no control characters.
+- Template constraint: `graph_template = 'creative_office_v1'`, `graph_version = 1`.
+- Mission types: `short_video_series`, `product_launch_plan`, `objection_handling_series`, `educational_series`, `custom`.
+- Statuses: `preparing`, `in_progress`, `waiting_review`, `completed`, `blocked`, `failed`, `canceled`.
+- Indexes: `(workspace_id, updated_at DESC, id DESC)`, `(workspace_id, product_id, status, updated_at DESC)`.
+
+#### `work_items`
+Execution nodes within a work order graph.
+- `id UUID PRIMARY KEY`, `workspace_id UUID NOT NULL`, `work_order_id UUID NOT NULL`, `role_definition_id UUID NOT NULL REFERENCES agent_role_definitions(id)`, `task_key TEXT NOT NULL`, `expected_artifact_type TEXT NOT NULL`, `status TEXT NOT NULL`, `blocked_reason_code TEXT NULL`, `started_at`, `completed_at`, `created_at`, `updated_at`, `version`.
+- Statuses: `ready`, `waiting_dependency`, `queued`, `running`, `review_required`, `completed`, `blocked`, `failed`, `canceled`.
+- Constraints: unique `(work_order_id, task_key)`, unique `(workspace_id, work_order_id, id)`.
+- Composite FK: `(workspace_id, work_order_id)` to `work_orders`.
+
+#### `work_item_dependencies`
+Directed acyclic dependency edges between work items within the same work order.
+- `id UUID PRIMARY KEY`, `workspace_id UUID NOT NULL`, `work_order_id UUID NOT NULL`, `work_item_id UUID NOT NULL`, `depends_on_work_item_id UUID NOT NULL`, `created_at`.
+- Constraints: unique `(work_item_id, depends_on_work_item_id)`, check `work_item_id <> depends_on_work_item_id`.
+- Composite FKs: target and source both reference `work_items(workspace_id, work_order_id, id)`.
+
+#### `agent_assignments`
+Office state projections for human-facing office visualization.
+- `id UUID PRIMARY KEY`, `workspace_id UUID NOT NULL`, `work_order_id UUID NOT NULL`, `role_definition_id UUID NOT NULL REFERENCES agent_role_definitions(id)`, `work_item_id UUID NULL`, `office_state TEXT NOT NULL`, `waiting_on_work_item_id UUID NULL`, `latest_report_code TEXT NULL`, `created_at`, `updated_at`, `version`.
+- Unique constraint: `(work_order_id, role_definition_id)`.
+- Trigger `agent_assignments_check_chief_of_staff`: enforces Chief of Staff has `work_item_id IS NULL`; all other 5 roles must have `work_item_id IS NOT NULL`.
 
 ## 6. Content and approval
 

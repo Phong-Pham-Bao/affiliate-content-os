@@ -398,3 +398,28 @@ Architecture review rejects changes that:
 - allow AI to approve or publish;
 - claim normalized metrics have equivalent meaning without evidence;
 - add distributed infrastructure before measured need and an approved decision record.
+
+## 22. AI Workforce Orchestration Foundation (Sprint 3 Checkpoint A)
+
+Sprint 3 Checkpoint A implements the orchestration foundation defined in ADR-023 and `docs/SPRINT-3-AI-WORKFORCE-PLAN.md`:
+
+### 1. Deterministic Graph Template (`creative_office_v1`)
+
+The creative office workflow is a directed acyclic graph with versioned semantics:
+- **Planning Pod (Parallel-Ready)**: `product_strategy` (Product Strategist), `audience_strategy` (Audience Strategist), and `creative_direction` (Creative Director) all begin in `ready` status with 0 dependencies.
+- **Sequential Stages (Dependency Waiting)**: `scriptwriting` (Scriptwriter) begins in `waiting_dependency` requiring all 3 planning pod items to complete; `compliance_review` (Compliance Reviewer) begins in `waiting_dependency` requiring `scriptwriting` to complete.
+- **Chief of Staff**: Oversees the entire work order, has no specific work item (`work_item_id IS NULL`), and begins in `preparing`. All 5 task-assigned agents also begin in `preparing`.
+
+### 2. Immutable Context Snapshot Boundaries
+
+- A work order references an immutable `context_packages` row containing `product_id`, `fact_set_id`, and a 32-byte `context_hash`.
+- `computeCanonicalContextHash` computes SHA-256 over stable IDs and versions only (`workspaceId`, `productId`, `productVersion`, `factSetId`, `factSetVersion`, and sorted `sourceAnalyses`).
+- Immutability is enforced in PostgreSQL via triggers rejecting `UPDATE` and `DELETE` on `context_packages` and `context_package_analyses`.
+
+### 3. Atomic Audited Kickoff
+
+A single transactional boundary in PostgreSQL (`kickoffWorkOrderAtomic`):
+1. Verifies workspace authorization (`catalog.manage` capability) and locks/revalidates the confirmed fact set and accepted source analyses.
+2. Acquires an advisory lock on the idempotency key hash.
+3. Inserts 1 context package, M analysis junction rows, 1 work order, 5 work items, 6 agent assignments, 4 dependency edges, 1 idempotency key, and 1 audit event.
+4. The audit event (`creative.work_order.created`) uses an allowlisted safe payload with counts and hashes—never raw directive text, prompt content, or user secrets.

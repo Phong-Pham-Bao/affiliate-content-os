@@ -46,6 +46,12 @@
       "import": "./dist/jobs/index.js",
       "default": "./dist/jobs/index.js"
     },
+    "./workforce": {
+      "types": "./src/workforce/index.ts",
+      "development": "./src/workforce/index.ts",
+      "import": "./dist/workforce/index.js",
+      "default": "./dist/workforce/index.js"
+    },
     "./testing": {
       "types": "./src/testing/index.ts",
       "development": "./src/testing/index.ts",

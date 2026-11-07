@@ -18,6 +18,10 @@ Runtime schemas and `openapi/openapi.json` are authoritative for these implement
 
 AI output remains `generated` until human review. Responses may expose safe provider/model provenance and evidence IDs, but never prompts, raw provider bodies, API keys, OAuth secrets, or chain-of-thought.
 
+### Sprint 3 Checkpoint A note
+
+The AI workforce orchestration foundation (domain models, migration `0008_ai_workforce_foundation.sql`, atomic kickoff persistence, and application queries) is implemented as internal domain/application/infrastructure modules. Public HTTP routes (`POST /api/v1/workspaces/{workspaceId}/products/{productId}/work-orders`, work order polling, and detail endpoints) are intentionally deferred to Checkpoint B when worker execution and user-visible recovery exist. The OpenAPI specification remains unchanged in Checkpoint A.
+
 ## 1. Contract principles
 
 - Base path: `/api/v1`.
