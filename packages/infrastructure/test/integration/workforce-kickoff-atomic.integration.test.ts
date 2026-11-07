@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { setupIsolatedTestDatabase, type TestDatabaseContext } from './helpers/setup.js';
 import {
   seedWorkforceBaseData,
+  seedAcceptedAnalysisFixture,
   createTestKickoffParams,
   FIXTURE_IDS,
 } from './helpers/workforce-fixtures.js';
@@ -13,7 +14,9 @@ import {
   WorkforceFactSetNotConfirmedError,
 } from '@affiliate-content-os/application';
 import {
+  parseAIRunId,
   parseAnalysisId,
+  parseOperationId,
   parseProductFactSetId,
   parseProductId,
 } from '@affiliate-content-os/domain';
@@ -226,85 +229,117 @@ describe('workforce-kickoff-atomic.integration', () => {
   });
 
   it('rejects cross-workspace analysis at transaction boundary and rolls back', async () => {
-    // Insert an accepted analysis in another workspace (ws2Id)
-    const otherWsAnalysisId = '018f6c5b-21a4-789a-8def-777777777777';
-    await pool.query(
-      `INSERT INTO analyses (
-         id, workspace_id, product_id, analysis_type, revision_number,
-         fact_set_id, ai_run_id, content_json, schema_version, status,
-         reviewed_by_user_id, reviewed_at, review_reason, created_by_user_id, created_at, updated_at, version
-       ) VALUES ($1, $2, $3, 'product', 1, $4, $5, '{}', 1, 'accepted', $6, NOW(), 'Approved', $6, NOW(), NOW(), 1)`,
-      [
-        otherWsAnalysisId,
-        FIXTURE_IDS.ws2Id,
-        FIXTURE_IDS.prodId,
-        FIXTURE_IDS.factSetId,
-        FIXTURE_IDS.runId,
-        FIXTURE_IDS.userId,
-      ],
-    );
+    const ws2ProductId = parseProductId('018f6c5b-21a4-789a-8def-200000000020');
+    const ws2FactSetId = parseProductFactSetId('018f6c5b-21a4-789a-8def-200000000021');
+    const ws2OperationId = parseOperationId('018f6c5b-21a4-789a-8def-200000000022');
+    const ws2AIRunId = parseAIRunId('018f6c5b-21a4-789a-8def-200000000023');
+    const ws2AnalysisId = parseAnalysisId('018f6c5b-21a4-789a-8def-777777777777');
 
+    // Build a complete schema-valid accepted analysis graph in workspace 2 (ws2Id)
+    await seedAcceptedAnalysisFixture(pool, {
+      workspaceId: FIXTURE_IDS.ws2Id,
+      productId: ws2ProductId,
+      factSetId: ws2FactSetId,
+      operationId: ws2OperationId,
+      aiRunId: ws2AIRunId,
+      analysisId: ws2AnalysisId,
+      productName: 'WS2 Isolation Product',
+      canonicalUrl: 'https://example.com/ws2-isolation',
+    });
+
+    // Attempt to kickoff in workspace 1 (wsId) referencing the workspace 2 analysis
     const params = createTestKickoffParams({
-      sourceAnalyses: [{ id: parseAnalysisId(otherWsAnalysisId), version: 1 }],
+      sourceAnalyses: [{ id: ws2AnalysisId, version: 1 }],
     });
 
     await expect(adapter.kickoffWorkOrderAtomic(params)).rejects.toThrow(
       WorkforceAnalysisNotAcceptedError,
     );
 
-    const woRes = await pool.query(`SELECT * FROM work_orders WHERE id = $1`, [
-      params.workOrder.id,
-    ]);
-    expect(woRes.rows).toHaveLength(0);
-  });
-
-  it('rejects same-workspace, wrong-product analysis at transaction boundary and rolls back', async () => {
-    // Insert another product in the same workspace (wsId)
-    const otherProdId = '018f6c5b-21a4-789a-8def-300000000001';
-    await pool.query(
-      `INSERT INTO products (
-         id, workspace_id, name, merchant_name, canonical_url, canonical_url_hash,
-         category, description, status, current_fact_set_id, created_at, updated_at, version
-       ) VALUES ($1, $2, 'Other Prod', 'Merchant', 'https://example.com/otherprod', $3, 'Cat', 'Desc', 'active', null, NOW(), NOW(), 1)`,
-      [otherProdId, FIXTURE_IDS.wsId, Buffer.alloc(32, 30)],
-    );
-
-    // Insert an accepted analysis belonging to otherProdId in the same workspace (wsId)
-    const wrongProductAnalysisId = '018f6c5b-21a4-789a-8def-300000000002';
-    await pool.query(
-      `INSERT INTO analyses (
-         id, workspace_id, product_id, analysis_type, revision_number,
-         fact_set_id, ai_run_id, content_json, schema_version, status,
-         reviewed_by_user_id, reviewed_at, review_reason, created_by_user_id, created_at, updated_at, version
-       ) VALUES ($1, $2, $3, 'product', 1, $4, $5, '{}', 1, 'accepted', $6, NOW(), 'Approved', $6, NOW(), NOW(), 1)`,
-      [
-        wrongProductAnalysisId,
-        FIXTURE_IDS.wsId,
-        otherProdId,
-        FIXTURE_IDS.factSetId,
-        FIXTURE_IDS.runId,
-        FIXTURE_IDS.userId,
-      ],
-    );
-
-    // Attempt to kickoff for prodId with an analysis belonging to otherProdId
-    const params = createTestKickoffParams({
-      sourceAnalyses: [{ id: parseAnalysisId(wrongProductAnalysisId), version: 1 }],
-    });
-
-    await expect(adapter.kickoffWorkOrderAtomic(params)).rejects.toThrow(
-      WorkforceAnalysisNotAcceptedError,
-    );
-
-    const woRes = await pool.query(`SELECT * FROM work_orders WHERE id = $1`, [
+    // Verify zero residue across all workforce entities
+    const woRes = await pool.query(`SELECT id FROM work_orders WHERE id = $1`, [
       params.workOrder.id,
     ]);
     expect(woRes.rows).toHaveLength(0);
 
-    const cpRes = await pool.query(`SELECT * FROM context_packages WHERE id = $1`, [
+    const cpRes = await pool.query(`SELECT id FROM context_packages WHERE id = $1`, [
       params.contextPackage.id,
     ]);
     expect(cpRes.rows).toHaveLength(0);
+
+    const cpaRes = await pool.query(
+      `SELECT analysis_id FROM context_package_analyses WHERE context_package_id = $1`,
+      [params.contextPackage.id],
+    );
+    expect(cpaRes.rows).toHaveLength(0);
+
+    const idempRes = await pool.query(
+      `SELECT id FROM idempotency_keys WHERE workspace_id = $1 AND key_hash = $2`,
+      [params.workOrder.workspaceId, Buffer.from(params.idempotency.keyHash)],
+    );
+    expect(idempRes.rows).toHaveLength(0);
+
+    const auditRes = await pool.query(`SELECT id FROM audit_events WHERE resource_id = $1`, [
+      params.workOrder.id,
+    ]);
+    expect(auditRes.rows).toHaveLength(0);
+  });
+
+  it('rejects same-workspace, wrong-product analysis at transaction boundary and rolls back', async () => {
+    const wrongProdId = parseProductId('018f6c5b-21a4-789a-8def-300000000001');
+    const wrongFactSetId = parseProductFactSetId('018f6c5b-21a4-789a-8def-300000000002');
+    const wrongOperationId = parseOperationId('018f6c5b-21a4-789a-8def-300000000003');
+    const wrongAIRunId = parseAIRunId('018f6c5b-21a4-789a-8def-300000000004');
+    const wrongProductAnalysisId = parseAnalysisId('018f6c5b-21a4-789a-8def-300000000005');
+
+    // Build a complete schema-valid accepted analysis graph for a second product in the same workspace (wsId)
+    await seedAcceptedAnalysisFixture(pool, {
+      workspaceId: FIXTURE_IDS.wsId,
+      productId: wrongProdId,
+      factSetId: wrongFactSetId,
+      operationId: wrongOperationId,
+      aiRunId: wrongAIRunId,
+      analysisId: wrongProductAnalysisId,
+      productName: 'Other Workspace-1 Product',
+      canonicalUrl: 'https://example.com/other-prod-ws1',
+    });
+
+    // Attempt to kickoff for prodId with an analysis belonging to wrongProdId
+    const params = createTestKickoffParams({
+      sourceAnalyses: [{ id: wrongProductAnalysisId, version: 1 }],
+    });
+
+    await expect(adapter.kickoffWorkOrderAtomic(params)).rejects.toThrow(
+      WorkforceAnalysisNotAcceptedError,
+    );
+
+    // Verify zero residue across all workforce entities
+    const woRes = await pool.query(`SELECT id FROM work_orders WHERE id = $1`, [
+      params.workOrder.id,
+    ]);
+    expect(woRes.rows).toHaveLength(0);
+
+    const cpRes = await pool.query(`SELECT id FROM context_packages WHERE id = $1`, [
+      params.contextPackage.id,
+    ]);
+    expect(cpRes.rows).toHaveLength(0);
+
+    const cpaRes = await pool.query(
+      `SELECT analysis_id FROM context_package_analyses WHERE context_package_id = $1`,
+      [params.contextPackage.id],
+    );
+    expect(cpaRes.rows).toHaveLength(0);
+
+    const idempRes = await pool.query(
+      `SELECT id FROM idempotency_keys WHERE workspace_id = $1 AND key_hash = $2`,
+      [params.workOrder.workspaceId, Buffer.from(params.idempotency.keyHash)],
+    );
+    expect(idempRes.rows).toHaveLength(0);
+
+    const auditRes = await pool.query(`SELECT id FROM audit_events WHERE resource_id = $1`, [
+      params.workOrder.id,
+    ]);
+    expect(auditRes.rows).toHaveLength(0);
   });
 
   it('fault injection at each insertion stage rolls back completely leaving zero residue', async () => {

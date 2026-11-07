@@ -12,6 +12,8 @@ import {
   type UserId,
   type ProductId,
   type ProductFactSetId,
+  type OperationId,
+  type AIRunId,
   type AnalysisId,
 } from '@affiliate-content-os/domain';
 import {
@@ -193,4 +195,93 @@ export function createTestKickoffParams(
     generateId: overrides?.generateId ?? testUuid,
     ...overrides,
   });
+}
+
+export interface SeedAcceptedAnalysisFixtureParams {
+  readonly workspaceId: WorkspaceId;
+  readonly productId: ProductId;
+  readonly factSetId: ProductFactSetId;
+  readonly operationId: OperationId;
+  readonly aiRunId: AIRunId;
+  readonly analysisId: AnalysisId;
+  readonly productName?: string;
+  readonly canonicalUrl?: string;
+  readonly analysisType?: 'product' | 'niche' | 'performance';
+  readonly revisionNumber?: number;
+  readonly userId?: UserId;
+}
+
+export async function seedAcceptedAnalysisFixture(
+  pool: pg.Pool,
+  params: SeedAcceptedAnalysisFixtureParams,
+): Promise<void> {
+  const userId = params.userId ?? FIXTURE_IDS.userId;
+  const productName = params.productName ?? `Product ${params.productId}`;
+  const canonicalUrl = params.canonicalUrl ?? `https://example.com/products/${params.productId}`;
+  const urlHash = createHash('sha256').update(canonicalUrl).digest();
+  const revisionNumber = params.revisionNumber ?? 1;
+  const analysisType = params.analysisType ?? 'product';
+
+  await pool.query(
+    `INSERT INTO products (
+       id, workspace_id, name, merchant_name, canonical_url, canonical_url_hash,
+       category, description, status, current_fact_set_id, created_at, updated_at, version
+     ) VALUES ($1, $2, $3, 'Merchant', $4, $5, 'Cat', 'Desc', 'active', null, NOW(), NOW(), 1)`,
+    [params.productId, params.workspaceId, productName, canonicalUrl, urlHash],
+  );
+
+  await pool.query(
+    `INSERT INTO product_fact_sets (
+       id, workspace_id, product_id, revision_number, status, created_by_user_id,
+       confirmed_by_user_id, confirmed_at, created_at, updated_at, version
+     ) VALUES ($1, $2, $3, $4, 'confirmed', $5, $5, NOW(), NOW(), NOW(), 1)`,
+    [params.factSetId, params.workspaceId, params.productId, revisionNumber, userId],
+  );
+
+  await pool.query(
+    `UPDATE products SET current_fact_set_id = $1 WHERE workspace_id = $2 AND id = $3`,
+    [params.factSetId, params.workspaceId, params.productId],
+  );
+
+  await pool.query(
+    `INSERT INTO operations (
+       id, workspace_id, operation_type, resource_type, resource_id,
+       status, result_location, started_at, completed_at, requested_by_user_id, created_at, updated_at, version
+     ) VALUES ($1, $2, 'product_analysis', 'product', $3, 'succeeded', '/res', NOW(), NOW(), $4, NOW(), NOW(), 1)`,
+    [params.operationId, params.workspaceId, params.productId, userId],
+  );
+
+  await pool.query(
+    `INSERT INTO ai_runs (
+       id, workspace_id, operation_id, purpose, provider, model,
+       prompt_template, prompt_version, input_schema_version, output_schema_version,
+       input_hash, output_hash, status, requested_by_user_id, started_at, completed_at, created_at, updated_at, version
+     ) VALUES ($1, $2, $3, 'product_analysis', 'google', 'gemini-2.5-flash', 'tmpl', '1.0', 1, 1, $4, $5, 'succeeded', $6, NOW(), NOW(), NOW(), NOW(), 1)`,
+    [
+      params.aiRunId,
+      params.workspaceId,
+      params.operationId,
+      Buffer.alloc(32, 10),
+      Buffer.alloc(32, 11),
+      userId,
+    ],
+  );
+
+  await pool.query(
+    `INSERT INTO analyses (
+       id, workspace_id, product_id, analysis_type, revision_number,
+       fact_set_id, ai_run_id, content_json, schema_version, status,
+       reviewed_by_user_id, reviewed_at, review_reason, created_by_user_id, created_at, updated_at, version
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, '{}', 1, 'accepted', $8, NOW(), 'Approved', $8, NOW(), NOW(), 1)`,
+    [
+      params.analysisId,
+      params.workspaceId,
+      params.productId,
+      analysisType,
+      revisionNumber,
+      params.factSetId,
+      params.aiRunId,
+      userId,
+    ],
+  );
 }

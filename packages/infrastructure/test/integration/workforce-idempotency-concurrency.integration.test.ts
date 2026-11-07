@@ -4,7 +4,11 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { setupIsolatedTestDatabase, type TestDatabaseContext } from './helpers/setup.js';
 import { seedWorkforceBaseData, createTestKickoffParams } from './helpers/workforce-fixtures.js';
 import { PostgresWorkforceAdapter } from '../../src/workforce/postgres-workforce-adapter.js';
-import { IdempotencyKeyReusedError } from '@affiliate-content-os/application';
+import {
+  IdempotencyKeyReusedError,
+  type KickoffWorkOrderAtomicParams,
+} from '@affiliate-content-os/application';
+import { parseIsoTimestamp } from '@affiliate-content-os/domain';
 
 describe('workforce-idempotency-concurrency.integration', () => {
   let context: TestDatabaseContext;
@@ -189,6 +193,7 @@ describe('workforce-idempotency-concurrency.integration', () => {
     const keyHash = new Uint8Array(crypto.createHash('sha256').update(key).digest());
     const reqHash1 = new Uint8Array(crypto.createHash('sha256').update('directive-one').digest());
     const reqHash2 = new Uint8Array(crypto.createHash('sha256').update('directive-two').digest());
+    const reqHash3 = new Uint8Array(crypto.createHash('sha256').update('directive-three').digest());
 
     // 1. Initial kickoff creates live record
     const params1 = createTestKickoffParams({
@@ -207,17 +212,64 @@ describe('workforce-idempotency-concurrency.integration', () => {
       [params1.workOrder.workspaceId, Buffer.from(keyHash)],
     );
 
-    // 3. Client clock is far in the future, but database transaction time is > expires_at
-    const params2 = createTestKickoffParams({
+    // 3. Client clock is far in the past (e.g. 1999), but database transaction time is > expires_at (NOW() > NOW() - 5s).
+    // If the transaction evaluated client-skewed createdAt against expires_at, it would falsely treat the key
+    // as still active (1999 < expires_at) and reject with IdempotencyKeyReusedError due to different request hash.
+    // Instead, authoritative PostgreSQL transaction_timestamp() reclaims the expired record and executes kickoff.
+    const baseParams2 = createTestKickoffParams({
       keyHash,
       requestHash: reqHash2,
       directiveText: 'Directive 2 after database expiry',
     });
+    const params2: KickoffWorkOrderAtomicParams = {
+      ...baseParams2,
+      idempotency: {
+        ...baseParams2.idempotency,
+        createdAt: parseIsoTimestamp('1999-01-01T00:00:00.000Z'),
+      },
+    };
     const res2 = await adapter.kickoffWorkOrderAtomic(params2);
 
-    // Proven: Database time expired the row, so fresh work order is created
     expect(res2.cached).toBe(false);
     expect(res2.workOrder.id).toBe(params2.workOrder.id);
     expect(res2.workOrder.id).not.toBe(res1.workOrder.id);
+
+    // 4. Now test the converse: client clock is far in the future (e.g. 2099), but database record is LIVE.
+    // The key was just recreated by params2 with 24-hour expiry in PostgreSQL time.
+    // If the transaction evaluated client-skewed createdAt against expires_at, it would falsely treat the key
+    // as already expired (2099 > expires_at) and allow conflicting reuse.
+    // Instead, authoritative PostgreSQL transaction_timestamp() knows the key is still live and rejects with IdempotencyKeyReusedError.
+    const baseParams3 = createTestKickoffParams({
+      keyHash,
+      requestHash: reqHash3,
+      directiveText: 'Directive 3 with conflicting payload and far-future clock',
+    });
+    const params3: KickoffWorkOrderAtomicParams = {
+      ...baseParams3,
+      idempotency: {
+        ...baseParams3.idempotency,
+        createdAt: parseIsoTimestamp('2099-01-01T00:00:00.000Z'),
+      },
+    };
+    await expect(adapter.kickoffWorkOrderAtomic(params3)).rejects.toThrow(
+      IdempotencyKeyReusedError,
+    );
+
+    // 5. Far-future matching replay still returns cached=true without prematurely expiring or duplicating
+    const baseParamsReplay = createTestKickoffParams({
+      keyHash,
+      requestHash: reqHash2,
+      directiveText: 'Directive 2 after database expiry',
+    });
+    const paramsReplay: KickoffWorkOrderAtomicParams = {
+      ...baseParamsReplay,
+      idempotency: {
+        ...baseParamsReplay.idempotency,
+        createdAt: parseIsoTimestamp('2099-01-01T00:00:00.000Z'),
+      },
+    };
+    const resReplay = await adapter.kickoffWorkOrderAtomic(paramsReplay);
+    expect(resReplay.cached).toBe(true);
+    expect(resReplay.workOrder.id).toBe(res2.workOrder.id);
   });
 });
