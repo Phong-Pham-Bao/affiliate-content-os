@@ -1,10 +1,12 @@
 import {
   computeCanonicalContextHash,
   CREATIVE_OFFICE_V1_SPEC,
+  dateToIsoTimestamp,
   GRAPH_TEMPLATE_CREATIVE_OFFICE_V1,
   GRAPH_VERSION_CREATIVE_OFFICE_V1,
   parseAgentAssignmentId,
   parseAgentRoleDefinitionId,
+  parseAnalysisId,
   parseAuditEventId,
   parseContextPackageId,
   parseIdempotencyKeyId,
@@ -53,6 +55,22 @@ export function buildKickoffAtomicPayload(
 ): KickoffWorkOrderAtomicParams {
   const { wsId, prodId, factSetId, actorId, generateId } = input;
 
+  // Normalize source analyses (deduplicate and sort deterministically)
+  const uniqueAnalysesMap = new Map<string, number>();
+  for (const a of input.sourceAnalyses) {
+    uniqueAnalysesMap.set(a.id, a.version);
+  }
+  const normalizedSourceAnalyses = Object.freeze(
+    Array.from(uniqueAnalysesMap.entries())
+      .map(([id, version]) =>
+        Object.freeze({
+          id: parseAnalysisId(id),
+          version,
+        }),
+      )
+      .sort((a, b) => a.id.localeCompare(b.id)),
+  );
+
   // 1. Context package ID and canonical hash
   const contextPackageId = parseContextPackageId(generateId());
   const contextHash = computeCanonicalContextHash({
@@ -61,7 +79,7 @@ export function buildKickoffAtomicPayload(
     productVersion: input.productVersion,
     factSetId,
     factSetVersion: input.factSetVersion,
-    analyses: input.sourceAnalyses.map((a) => ({
+    analyses: normalizedSourceAnalyses.map((a) => ({
       analysisId: a.id,
       version: a.version,
     })),
@@ -167,7 +185,7 @@ export function buildKickoffAtomicPayload(
     initialStatus: 'preparing',
   };
 
-  const responseSummary = {
+  const responseSummary = Object.freeze({
     id: workOrderId,
     workspaceId: wsId,
     productId: prodId,
@@ -175,16 +193,20 @@ export function buildKickoffAtomicPayload(
     missionType: input.missionType,
     graphTemplate: GRAPH_TEMPLATE_CREATIVE_OFFICE_V1,
     graphVersion: GRAPH_VERSION_CREATIVE_OFFICE_V1,
-    status: 'preparing',
+    status: 'preparing' as const,
     priority: input.priority,
     createdByUserId: actorId,
     failureCategory: null,
     completedAt: null,
     version: 1,
-  };
+  });
 
-  return {
-    workOrder: {
+  const copiedKeyHash = new Uint8Array(input.keyHash);
+  const copiedRequestHash = new Uint8Array(input.requestHash);
+  const copiedContextHash = new Uint8Array(contextHash);
+
+  return Object.freeze({
+    workOrder: Object.freeze({
       id: workOrderId,
       workspaceId: wsId,
       productId: prodId,
@@ -193,41 +215,45 @@ export function buildKickoffAtomicPayload(
       directiveText: input.directiveText,
       graphTemplate: GRAPH_TEMPLATE_CREATIVE_OFFICE_V1,
       graphVersion: GRAPH_VERSION_CREATIVE_OFFICE_V1,
-      status: 'preparing',
+      status: 'preparing' as const,
       priority: input.priority,
       createdByUserId: actorId,
-    },
-    contextPackage: {
+    }),
+    contextPackage: Object.freeze({
       id: contextPackageId,
       workspaceId: wsId,
       productId: prodId,
       factSetId,
       contextSchemaVersion: 1,
-      contextHash,
+      contextHash: copiedContextHash,
       createdByUserId: actorId,
-    },
-    sourceAnalysisIds: input.sourceAnalyses.map((a) => a.id),
-    workItems,
-    assignments,
-    dependencies,
-    idempotency: {
+      productVersion: input.productVersion,
+      factSetVersion: input.factSetVersion,
+      sourceAnalyses: normalizedSourceAnalyses,
+    }),
+    sourceAnalysisIds: Object.freeze(normalizedSourceAnalyses.map((a) => a.id)),
+    workItems: Object.freeze(workItems.map((item) => Object.freeze({ ...item }))),
+    assignments: Object.freeze(assignments.map((a) => Object.freeze({ ...a }))),
+    dependencies: Object.freeze(dependencies.map((d) => Object.freeze({ ...d }))),
+    idempotency: Object.freeze({
       id: parseIdempotencyKeyId(generateId()),
-      keyHash: input.keyHash,
-      requestHash: input.requestHash,
+      keyHash: copiedKeyHash,
+      requestHash: copiedRequestHash,
       principalId: actorId,
       routeKey: input.routeKey,
       statusCode: 201,
       responseJson: responseSummary,
       resourceId: workOrderId,
-    },
-    auditEvent: {
+      createdAt: dateToIsoTimestamp(new Date()),
+    }),
+    auditEvent: Object.freeze({
       id: auditEventId,
       workspaceId: wsId,
       actorUserId: actorId,
       action: 'creative.work_order.created',
       resourceType: 'work_order',
       resourceId: workOrderId,
-      changesJson: auditChanges,
-    },
-  };
+      changesJson: Object.freeze({ ...auditChanges }),
+    }),
+  });
 }

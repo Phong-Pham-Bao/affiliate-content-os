@@ -20,6 +20,7 @@ export {
   WorkforceAnalysisNotAcceptedError,
   WorkforceFactSetNotConfirmedError,
   WorkforceGraphValidationError,
+  WorkforceStaleContextError,
   WorkOrderNotFoundError,
 } from './errors.js';
 

@@ -5,11 +5,17 @@ import type {
 } from '@affiliate-content-os/application';
 import { DatabaseError } from '../database/errors.js';
 import { mapWorkOrderRowToSummaryDTO } from './workforce-mappers.js';
+import type { KickoffTestHooks } from './workforce-types.js';
 
 export async function insertKickoffEntities(
   client: pg.PoolClient,
   params: KickoffWorkOrderAtomicParams,
+  testHooks?: KickoffTestHooks,
 ): Promise<WorkOrderSummaryDTO> {
+  const contextHashBuf = Buffer.from(new Uint8Array(params.contextPackage.contextHash));
+  const keyHashBuf = Buffer.from(new Uint8Array(params.idempotency.keyHash));
+  const requestHashBuf = Buffer.from(new Uint8Array(params.idempotency.requestHash));
+
   // 1. Insert context_packages
   await client.query(
     `INSERT INTO context_packages (
@@ -22,10 +28,13 @@ export async function insertKickoffEntities(
       params.contextPackage.productId,
       params.contextPackage.factSetId,
       params.contextPackage.contextSchemaVersion,
-      Buffer.from(params.contextPackage.contextHash),
+      contextHashBuf,
       params.contextPackage.createdByUserId,
     ],
   );
+  if (testHooks?.onAfterStage) {
+    await testHooks.onAfterStage('context_packages');
+  }
 
   // 2. Insert context_package_analyses
   for (const analysisId of params.sourceAnalysisIds) {
@@ -35,6 +44,9 @@ export async function insertKickoffEntities(
        ) VALUES ($1, $2, $3, NOW())`,
       [params.workOrder.workspaceId, params.contextPackage.id, analysisId],
     );
+  }
+  if (testHooks?.onAfterStage) {
+    await testHooks.onAfterStage('context_package_analyses');
   }
 
   // 3. Insert work_orders
@@ -64,6 +76,9 @@ export async function insertKickoffEntities(
   if (orderRes.rowCount !== 1) {
     throw new DatabaseError(`Failed to insert work order ${params.workOrder.id}`);
   }
+  if (testHooks?.onAfterStage) {
+    await testHooks.onAfterStage('work_orders');
+  }
 
   // 4. Insert work_items
   for (const item of params.workItems) {
@@ -84,6 +99,9 @@ export async function insertKickoffEntities(
       ],
     );
   }
+  if (testHooks?.onAfterStage) {
+    await testHooks.onAfterStage('work_items');
+  }
 
   // 5. Insert work_item_dependencies
   for (const dep of params.dependencies) {
@@ -94,6 +112,9 @@ export async function insertKickoffEntities(
        ) VALUES ($1, $2, $3, $4, $5, NOW())`,
       [dep.id, dep.workspaceId, dep.workOrderId, dep.workItemId, dep.dependsOnWorkItemId],
     );
+  }
+  if (testHooks?.onAfterStage) {
+    await testHooks.onAfterStage('work_item_dependencies');
   }
 
   // 6. Insert agent_assignments
@@ -115,6 +136,9 @@ export async function insertKickoffEntities(
       ],
     );
   }
+  if (testHooks?.onAfterStage) {
+    await testHooks.onAfterStage('agent_assignments');
+  }
 
   const createdOrder = mapWorkOrderRowToSummaryDTO(orderRes.rows[0]);
 
@@ -129,13 +153,16 @@ export async function insertKickoffEntities(
       params.workOrder.workspaceId,
       params.idempotency.principalId,
       params.idempotency.routeKey,
-      Buffer.from(params.idempotency.keyHash),
-      Buffer.from(params.idempotency.requestHash),
+      keyHashBuf,
+      requestHashBuf,
       params.idempotency.statusCode,
       JSON.stringify(createdOrder),
       params.workOrder.id,
     ],
   );
+  if (testHooks?.onAfterStage) {
+    await testHooks.onAfterStage('idempotency_keys');
+  }
 
   // 8. Insert audit_events
   await client.query(
@@ -153,6 +180,9 @@ export async function insertKickoffEntities(
       JSON.stringify(params.auditEvent.changesJson),
     ],
   );
+  if (testHooks?.onAfterStage) {
+    await testHooks.onAfterStage('audit_events');
+  }
 
   return createdOrder;
 }

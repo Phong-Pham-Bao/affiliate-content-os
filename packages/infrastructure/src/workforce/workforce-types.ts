@@ -1,68 +1,83 @@
+export type KickoffInsertStage =
+  | 'context_packages'
+  | 'context_package_analyses'
+  | 'work_orders'
+  | 'work_items'
+  | 'work_item_dependencies'
+  | 'agent_assignments'
+  | 'idempotency_keys'
+  | 'audit_events';
+
+export interface KickoffTestHooks {
+  readonly onAfterStage?: (stage: KickoffInsertStage) => Promise<void> | void;
+}
+
 export interface RawWorkOrderRow {
-  readonly id: string;
-  readonly workspace_id: string;
-  readonly product_id: string;
-  readonly context_package_id: string;
-  readonly mission_type: string;
-  readonly graph_template: string;
-  readonly graph_version: number | string;
-  readonly status: string;
-  readonly priority: number | string;
-  readonly created_by_user_id: string;
-  readonly failure_category?: string | null;
-  readonly completed_at?: Date | string | null;
-  readonly created_at: Date | string;
-  readonly updated_at: Date | string;
-  readonly version: number | string;
+  readonly id: unknown;
+  readonly workspace_id: unknown;
+  readonly product_id: unknown;
+  readonly context_package_id: unknown;
+  readonly mission_type: unknown;
+  readonly graph_template: unknown;
+  readonly graph_version: unknown;
+  readonly status: unknown;
+  readonly priority: unknown;
+  readonly created_by_user_id: unknown;
+  readonly failure_category?: unknown;
+  readonly completed_at?: unknown;
+  readonly created_at: unknown;
+  readonly updated_at: unknown;
+  readonly version: unknown;
 }
 
 export interface RawWorkItemRow {
-  readonly id: string;
-  readonly workspace_id: string;
-  readonly work_order_id: string;
-  readonly role_definition_id: string;
-  readonly role_key?: string;
-  readonly task_key: string;
-  readonly expected_artifact_type: string;
-  readonly status: string;
-  readonly blocked_reason_code?: string | null;
-  readonly started_at?: Date | string | null;
-  readonly completed_at?: Date | string | null;
-  readonly created_at: Date | string;
-  readonly updated_at: Date | string;
-  readonly version: number | string;
+  readonly id: unknown;
+  readonly workspace_id?: unknown;
+  readonly work_order_id: unknown;
+  readonly role_definition_id: unknown;
+  readonly role_key?: unknown;
+  readonly task_key: unknown;
+  readonly expected_artifact_type: unknown;
+  readonly status: unknown;
+  readonly blocked_reason_code?: unknown;
+  readonly started_at?: unknown;
+  readonly completed_at?: unknown;
+  readonly created_at: unknown;
+  readonly updated_at: unknown;
+  readonly version: unknown;
 }
 
 export interface RawAgentAssignmentRow {
-  readonly id: string;
-  readonly workspace_id: string;
-  readonly work_order_id: string;
-  readonly role_definition_id: string;
-  readonly role_key?: string;
-  readonly work_item_id?: string | null;
-  readonly office_state: string;
-  readonly waiting_on_work_item_id?: string | null;
-  readonly latest_report_code?: string | null;
-  readonly created_at: Date | string;
-  readonly updated_at: Date | string;
-  readonly version: number | string;
+  readonly id: unknown;
+  readonly workspace_id?: unknown;
+  readonly work_order_id: unknown;
+  readonly role_definition_id: unknown;
+  readonly role_key?: unknown;
+  readonly work_item_id?: unknown;
+  readonly office_state: unknown;
+  readonly waiting_on_work_item_id?: unknown;
+  readonly latest_report_code?: unknown;
+  readonly created_at: unknown;
+  readonly updated_at: unknown;
+  readonly version: unknown;
 }
 
 export interface RawWorkItemDependencyRow {
-  readonly id: string;
-  readonly work_order_id: string;
-  readonly work_item_id: string;
-  readonly depends_on_work_item_id: string;
-  readonly created_at: Date | string;
+  readonly id: unknown;
+  readonly workspace_id?: unknown;
+  readonly work_order_id: unknown;
+  readonly work_item_id: unknown;
+  readonly depends_on_work_item_id: unknown;
+  readonly created_at: unknown;
 }
 
 export interface RawContextPackageRow {
-  readonly id: string;
-  readonly workspace_id: string;
-  readonly product_id: string;
-  readonly fact_set_id: string;
-  readonly context_schema_version: number | string;
-  readonly context_hash: Buffer | Uint8Array;
-  readonly created_by_user_id: string;
-  readonly created_at: Date | string;
+  readonly id: unknown;
+  readonly workspace_id: unknown;
+  readonly product_id: unknown;
+  readonly fact_set_id: unknown;
+  readonly context_schema_version: unknown;
+  readonly context_hash: unknown;
+  readonly created_by_user_id: unknown;
+  readonly created_at: unknown;
 }

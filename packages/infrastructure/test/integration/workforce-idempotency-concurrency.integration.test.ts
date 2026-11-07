@@ -101,4 +101,86 @@ describe('workforce-idempotency-concurrency.integration', () => {
     ]);
     expect(auditRes.rows).toHaveLength(1);
   });
+
+  it('expired reuse: reclaims expired idempotency row and allows fresh work order creation with different command', async () => {
+    const key = 'expired-reclaim-test-key';
+    const keyHash = new Uint8Array(crypto.createHash('sha256').update(key).digest());
+    const reqHash1 = new Uint8Array(crypto.createHash('sha256').update('directive-first').digest());
+    const reqHash2 = new Uint8Array(
+      crypto.createHash('sha256').update('directive-second').digest(),
+    );
+
+    const params1 = createTestKickoffParams({
+      keyHash,
+      requestHash: reqHash1,
+      directiveText: 'Original directive',
+    });
+    const res1 = await adapter.kickoffWorkOrderAtomic(params1);
+    expect(res1.cached).toBe(false);
+
+    // Manually expire the idempotency row in real PostgreSQL
+    await pool.query(
+      `UPDATE idempotency_keys
+       SET expires_at = NOW() - INTERVAL '1 hour'
+       WHERE workspace_id = $1 AND key_hash = $2`,
+      [params1.workOrder.workspaceId, Buffer.from(keyHash)],
+    );
+
+    // Now execute fresh kickoff with same keyHash but new requestHash2 and new directiveText
+    const params2 = createTestKickoffParams({
+      keyHash,
+      requestHash: reqHash2,
+      directiveText: 'Reclaimed fresh directive',
+    });
+    const res2 = await adapter.kickoffWorkOrderAtomic(params2);
+
+    expect(res2.cached).toBe(false);
+    expect(res2.workOrder.id).toBe(params2.workOrder.id);
+    expect(res2.workOrder.id).not.toBe(res1.workOrder.id);
+
+    // Check that idempotency key row was replaced and is now live
+    const idempCheck = await pool.query(
+      `SELECT resource_id, expires_at > NOW() AS is_live
+       FROM idempotency_keys
+       WHERE workspace_id = $1 AND key_hash = $2`,
+      [params2.workOrder.workspaceId, Buffer.from(keyHash)],
+    );
+    expect(idempCheck.rows).toHaveLength(1);
+    expect(idempCheck.rows[0].resource_id).toBe(res2.workOrder.id);
+    expect(idempCheck.rows[0].is_live).toBe(true);
+  });
+
+  it('concurrent conflicting kickoff: serializes, one succeeds and one throws IdempotencyKeyReusedError', async () => {
+    const key = 'concurrent-conflicting-test-key';
+    const keyHash = new Uint8Array(crypto.createHash('sha256').update(key).digest());
+    const reqHashA = new Uint8Array(
+      crypto.createHash('sha256').update('directive-payload-a').digest(),
+    );
+    const reqHashB = new Uint8Array(
+      crypto.createHash('sha256').update('directive-payload-b').digest(),
+    );
+
+    const paramsA = createTestKickoffParams({
+      keyHash,
+      requestHash: reqHashA,
+      directiveText: 'Directive A for conflict test',
+    });
+    const paramsB = createTestKickoffParams({
+      keyHash,
+      requestHash: reqHashB,
+      directiveText: 'Directive B for conflict test',
+    });
+
+    const results = await Promise.allSettled([
+      adapter.kickoffWorkOrderAtomic(paramsA),
+      adapter.kickoffWorkOrderAtomic(paramsB),
+    ]);
+
+    const fulfilled = results.filter((r) => r.status === 'fulfilled');
+    const rejected = results.filter((r) => r.status === 'rejected');
+
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect((rejected[0] as PromiseRejectedResult).reason).toBeInstanceOf(IdempotencyKeyReusedError);
+  });
 });

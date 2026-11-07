@@ -12,3 +12,13 @@ export {
   mapWorkItemRowToSummaryDTO,
   mapWorkOrderRowToSummaryDTO,
 } from './workforce-mappers.js';
+
+export {
+  type KickoffInsertStage,
+  type KickoffTestHooks,
+  type RawAgentAssignmentRow,
+  type RawContextPackageRow,
+  type RawWorkItemDependencyRow,
+  type RawWorkItemRow,
+  type RawWorkOrderRow,
+} from './workforce-types.js';

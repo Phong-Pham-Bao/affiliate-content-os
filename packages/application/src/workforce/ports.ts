@@ -6,6 +6,7 @@ import type {
   AuditEventId,
   ContextPackageId,
   IdempotencyKeyId,
+  IsoTimestamp,
   ProductId,
   UserId,
   WorkItemDependencyId,
@@ -72,6 +73,12 @@ export interface KickoffWorkOrderAtomicParams {
     readonly contextSchemaVersion: number;
     readonly contextHash: Uint8Array;
     readonly createdByUserId: UserId;
+    readonly productVersion: number;
+    readonly factSetVersion: number;
+    readonly sourceAnalyses: readonly {
+      readonly id: AnalysisId;
+      readonly version: number;
+    }[];
   };
   readonly sourceAnalysisIds: readonly AnalysisId[];
   readonly workItems: readonly KickoffAtomicWorkItemParam[];
@@ -86,6 +93,7 @@ export interface KickoffWorkOrderAtomicParams {
     readonly statusCode: number;
     readonly responseJson: unknown;
     readonly resourceId: WorkOrderId;
+    readonly createdAt: IsoTimestamp;
   };
   readonly auditEvent: {
     readonly id: AuditEventId;

@@ -39,20 +39,24 @@ export interface CanonicalContextDescriptor {
 }
 
 export function computeCanonicalContextHash(descriptor: CanonicalContextDescriptor): Uint8Array {
-  const sortedAnalyses = [...descriptor.analyses]
-    .map((a) => ({ analysisId: a.analysisId, version: a.version }))
+  const analysisMap = new Map<string, number>();
+  for (const a of descriptor.analyses) {
+    analysisMap.set(String(a.analysisId), Number(a.version));
+  }
+  const sortedAnalyses = Array.from(analysisMap.entries())
+    .map(([analysisId, version]) => ({ analysisId, version }))
     .sort((a, b) => a.analysisId.localeCompare(b.analysisId));
 
   const canonicalPayload = JSON.stringify({
     analyses: sortedAnalyses,
-    factSetId: descriptor.factSetId,
-    factSetVersion: descriptor.factSetVersion,
-    productId: descriptor.productId,
-    productVersion: descriptor.productVersion,
-    schemaVersion: descriptor.schemaVersion,
-    workspaceId: descriptor.workspaceId,
+    factSetId: String(descriptor.factSetId),
+    factSetVersion: Number(descriptor.factSetVersion),
+    productId: String(descriptor.productId),
+    productVersion: Number(descriptor.productVersion),
+    schemaVersion: Number(descriptor.schemaVersion),
+    workspaceId: String(descriptor.workspaceId),
   });
 
   const digest = createHash('sha256').update(canonicalPayload, 'utf8').digest();
-  return new Uint8Array(digest.buffer, digest.byteOffset, digest.byteLength);
+  return new Uint8Array(digest);
 }

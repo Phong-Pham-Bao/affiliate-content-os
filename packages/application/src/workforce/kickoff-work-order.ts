@@ -165,8 +165,8 @@ export async function kickoffWorkOrder(
   // 7. Execute atomic transaction
   const result = await deps.workforcePersistence.kickoffWorkOrderAtomic(atomicParams);
 
-  return {
-    workOrder: result.workOrder,
+  return Object.freeze({
+    workOrder: Object.freeze({ ...result.workOrder }),
     replayed: result.cached,
-  };
+  });
 }

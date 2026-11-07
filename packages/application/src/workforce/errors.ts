@@ -1,4 +1,7 @@
+import { StaleVersionConflictError } from '../catalog/errors.js';
 import { ApplicationError } from '../errors.js';
+
+export { StaleVersionConflictError };
 
 export class WorkOrderNotFoundError extends ApplicationError {
   public override readonly name = 'WorkOrderNotFoundError';
@@ -36,6 +39,24 @@ export class WorkforceGraphValidationError extends ApplicationError {
 
   constructor(detail: string) {
     super(`Invalid workforce graph: ${detail}`);
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export class WorkforceStaleContextError extends ApplicationError {
+  public override readonly name = 'WorkforceStaleContextError';
+  public readonly code = 'WORKFORCE_STALE_CONTEXT' as const;
+  public readonly expectedVersion: number;
+  public readonly actualVersion?: number | undefined;
+
+  constructor(expectedVersion: number, actualVersion?: number) {
+    super(
+      actualVersion !== undefined
+        ? `Workforce context version conflict: expected version ${expectedVersion}, but found version ${actualVersion}`
+        : `Workforce context version conflict: expected version ${expectedVersion} does not match current version`,
+    );
+    this.expectedVersion = expectedVersion;
+    this.actualVersion = actualVersion;
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }

@@ -286,6 +286,59 @@ describe('kickoffWorkOrder Application Use Case', () => {
     );
   });
 
+  it('binds source versions to contextPackage and deduplicates normalized analysis IDs', async () => {
+    const deps = createMockDeps();
+    const commandWithDuplicates = {
+      ...validCommand,
+      acceptedAnalysisIds: [analysisId, analysisId], // Duplicates
+    };
+
+    const res = await kickoffWorkOrder(commandWithDuplicates, deps);
+    expect(res.replayed).toBe(false);
+    expect(Object.isFrozen(res)).toBe(true);
+    expect(Object.isFrozen(res.workOrder)).toBe(true);
+
+    const callArgs = (
+      deps.workforcePersistence.kickoffWorkOrderAtomic as unknown as {
+        mock: { calls: unknown[][] };
+      }
+    ).mock.calls[0]?.[0] as unknown as {
+      contextPackage: {
+        productVersion: number;
+        factSetVersion: number;
+        sourceAnalyses: readonly { id: string; version: number }[];
+      };
+      sourceAnalysisIds: readonly string[];
+    };
+
+    expect(callArgs.contextPackage.productVersion).toBe(1);
+    expect(callArgs.contextPackage.factSetVersion).toBe(1);
+    expect(callArgs.contextPackage.sourceAnalyses).toHaveLength(1);
+    expect(callArgs.sourceAnalysisIds).toHaveLength(1);
+    expect(Object.isFrozen(callArgs.contextPackage.sourceAnalyses)).toBe(true);
+  });
+
+  it('defensively copies input arrays so caller mutation cannot affect execution', async () => {
+    const deps = createMockDeps();
+    const inputAnalyses = [analysisId];
+    const mutableCommand = {
+      ...validCommand,
+      acceptedAnalysisIds: inputAnalyses,
+    };
+
+    const promise = kickoffWorkOrder(mutableCommand, deps);
+    inputAnalyses.push('018f0000-0000-7000-8000-000000000099'); // Caller mutates during/after
+    const res = await promise;
+
+    expect(res.workOrder).toBeDefined();
+    const callArgs = (
+      deps.workforcePersistence.kickoffWorkOrderAtomic as unknown as {
+        mock: { calls: unknown[][] };
+      }
+    ).mock.calls[0]?.[0] as unknown as { sourceAnalysisIds: readonly string[] };
+    expect(callArgs.sourceAnalysisIds).toEqual([analysisId]);
+  });
+
   it('rejects source analysis belonging to another product', async () => {
     const deps = createMockDeps({
       analysisQuery: {

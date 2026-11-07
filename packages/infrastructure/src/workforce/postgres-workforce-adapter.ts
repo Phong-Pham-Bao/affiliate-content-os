@@ -14,6 +14,7 @@ import {
   type WorkspaceId,
 } from '@affiliate-content-os/domain';
 import { executeKickoffWorkOrderTransaction } from './kickoff-work-order-transaction.js';
+import type { KickoffTestHooks } from './workforce-types.js';
 import {
   mapAgentAssignmentRowToSummaryDTO,
   mapContextPackageRowToSummaryDTO,
@@ -28,11 +29,12 @@ export class PostgresWorkforceAdapter implements WorkforcePersistencePort {
 
   public async kickoffWorkOrderAtomic(
     params: KickoffWorkOrderAtomicParams,
+    testHooks?: KickoffTestHooks,
   ): Promise<KickoffTransactionResult> {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
-      const result = await executeKickoffWorkOrderTransaction(client, params);
+      const result = await executeKickoffWorkOrderTransaction(client, params, testHooks);
       await client.query('COMMIT');
       return result;
     } catch (err) {
@@ -106,13 +108,16 @@ export class PostgresWorkforceAdapter implements WorkforcePersistencePort {
     );
     const dependencies = depRes.rows.map(mapWorkItemDependencyRowToSummaryDTO);
 
-    return {
-      workOrder,
-      contextPackage,
-      workItems: Object.freeze(workItems),
-      assignments: Object.freeze(assignments),
-      dependencies: Object.freeze(dependencies),
-    };
+    return Object.freeze({
+      workOrder: Object.freeze(workOrder),
+      contextPackage: Object.freeze({
+        ...contextPackage,
+        analysisIds: Object.freeze([...contextPackage.analysisIds]),
+      }),
+      workItems: Object.freeze(workItems.map((item) => Object.freeze(item))),
+      assignments: Object.freeze(assignments.map((a) => Object.freeze(a))),
+      dependencies: Object.freeze(dependencies.map((d) => Object.freeze(d))),
+    });
   }
 
   public async listWorkOrders(
