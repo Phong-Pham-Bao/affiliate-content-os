@@ -258,6 +258,55 @@ describe('workforce-kickoff-atomic.integration', () => {
     expect(woRes.rows).toHaveLength(0);
   });
 
+  it('rejects same-workspace, wrong-product analysis at transaction boundary and rolls back', async () => {
+    // Insert another product in the same workspace (wsId)
+    const otherProdId = '018f6c5b-21a4-789a-8def-300000000001';
+    await pool.query(
+      `INSERT INTO products (
+         id, workspace_id, name, merchant_name, canonical_url, canonical_url_hash,
+         category, description, status, current_fact_set_id, created_at, updated_at, version
+       ) VALUES ($1, $2, 'Other Prod', 'Merchant', 'https://example.com/otherprod', $3, 'Cat', 'Desc', 'active', null, NOW(), NOW(), 1)`,
+      [otherProdId, FIXTURE_IDS.wsId, Buffer.alloc(32, 30)],
+    );
+
+    // Insert an accepted analysis belonging to otherProdId in the same workspace (wsId)
+    const wrongProductAnalysisId = '018f6c5b-21a4-789a-8def-300000000002';
+    await pool.query(
+      `INSERT INTO analyses (
+         id, workspace_id, product_id, analysis_type, revision_number,
+         fact_set_id, ai_run_id, content_json, schema_version, status,
+         reviewed_by_user_id, reviewed_at, review_reason, created_by_user_id, created_at, updated_at, version
+       ) VALUES ($1, $2, $3, 'product', 1, $4, $5, '{}', 1, 'accepted', $6, NOW(), 'Approved', $6, NOW(), NOW(), 1)`,
+      [
+        wrongProductAnalysisId,
+        FIXTURE_IDS.wsId,
+        otherProdId,
+        FIXTURE_IDS.factSetId,
+        FIXTURE_IDS.runId,
+        FIXTURE_IDS.userId,
+      ],
+    );
+
+    // Attempt to kickoff for prodId with an analysis belonging to otherProdId
+    const params = createTestKickoffParams({
+      sourceAnalyses: [{ id: parseAnalysisId(wrongProductAnalysisId), version: 1 }],
+    });
+
+    await expect(adapter.kickoffWorkOrderAtomic(params)).rejects.toThrow(
+      WorkforceAnalysisNotAcceptedError,
+    );
+
+    const woRes = await pool.query(`SELECT * FROM work_orders WHERE id = $1`, [
+      params.workOrder.id,
+    ]);
+    expect(woRes.rows).toHaveLength(0);
+
+    const cpRes = await pool.query(`SELECT * FROM context_packages WHERE id = $1`, [
+      params.contextPackage.id,
+    ]);
+    expect(cpRes.rows).toHaveLength(0);
+  });
+
   it('fault injection at each insertion stage rolls back completely leaving zero residue', async () => {
     const stages: KickoffInsertStage[] = [
       'context_packages',

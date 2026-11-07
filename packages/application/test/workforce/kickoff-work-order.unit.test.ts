@@ -308,13 +308,11 @@ describe('kickoffWorkOrder Application Use Case', () => {
         factSetVersion: number;
         sourceAnalyses: readonly { id: string; version: number }[];
       };
-      sourceAnalysisIds: readonly string[];
     };
 
     expect(callArgs.contextPackage.productVersion).toBe(1);
     expect(callArgs.contextPackage.factSetVersion).toBe(1);
     expect(callArgs.contextPackage.sourceAnalyses).toHaveLength(1);
-    expect(callArgs.sourceAnalysisIds).toHaveLength(1);
     expect(Object.isFrozen(callArgs.contextPackage.sourceAnalyses)).toBe(true);
   });
 
@@ -335,8 +333,10 @@ describe('kickoffWorkOrder Application Use Case', () => {
       deps.workforcePersistence.kickoffWorkOrderAtomic as unknown as {
         mock: { calls: unknown[][] };
       }
-    ).mock.calls[0]?.[0] as unknown as { sourceAnalysisIds: readonly string[] };
-    expect(callArgs.sourceAnalysisIds).toEqual([analysisId]);
+    ).mock.calls[0]?.[0] as unknown as {
+      contextPackage: { sourceAnalyses: readonly { id: string; version: number }[] };
+    };
+    expect(callArgs.contextPackage.sourceAnalyses).toEqual([{ id: analysisId, version: 1 }]);
   });
 
   it('rejects source analysis belonging to another product', async () => {

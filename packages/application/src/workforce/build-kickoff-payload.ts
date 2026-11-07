@@ -231,7 +231,6 @@ export function buildKickoffAtomicPayload(
       factSetVersion: input.factSetVersion,
       sourceAnalyses: normalizedSourceAnalyses,
     }),
-    sourceAnalysisIds: Object.freeze(normalizedSourceAnalyses.map((a) => a.id)),
     workItems: Object.freeze(workItems.map((item) => Object.freeze({ ...item }))),
     assignments: Object.freeze(assignments.map((a) => Object.freeze({ ...a }))),
     dependencies: Object.freeze(dependencies.map((d) => Object.freeze({ ...d }))),

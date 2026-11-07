@@ -80,7 +80,6 @@ export interface KickoffWorkOrderAtomicParams {
       readonly version: number;
     }[];
   };
-  readonly sourceAnalysisIds: readonly AnalysisId[];
   readonly workItems: readonly KickoffAtomicWorkItemParam[];
   readonly assignments: readonly KickoffAtomicAssignmentParam[];
   readonly dependencies: readonly KickoffAtomicDependencyParam[];

@@ -183,4 +183,41 @@ describe('workforce-idempotency-concurrency.integration', () => {
     expect(rejected).toHaveLength(1);
     expect((rejected[0] as PromiseRejectedResult).reason).toBeInstanceOf(IdempotencyKeyReusedError);
   });
+
+  it('authoritative database transaction timestamp decides expiry regardless of client clock skew', async () => {
+    const key = 'clock-skew-expiry-test-key';
+    const keyHash = new Uint8Array(crypto.createHash('sha256').update(key).digest());
+    const reqHash1 = new Uint8Array(crypto.createHash('sha256').update('directive-one').digest());
+    const reqHash2 = new Uint8Array(crypto.createHash('sha256').update('directive-two').digest());
+
+    // 1. Initial kickoff creates live record
+    const params1 = createTestKickoffParams({
+      keyHash,
+      requestHash: reqHash1,
+      directiveText: 'Directive 1',
+    });
+    const res1 = await adapter.kickoffWorkOrderAtomic(params1);
+    expect(res1.cached).toBe(false);
+
+    // 2. Set expires_at in the past relative to database time (5 seconds ago)
+    await pool.query(
+      `UPDATE idempotency_keys
+       SET expires_at = NOW() - INTERVAL '5 seconds'
+       WHERE workspace_id = $1 AND key_hash = $2`,
+      [params1.workOrder.workspaceId, Buffer.from(keyHash)],
+    );
+
+    // 3. Client clock is far in the future, but database transaction time is > expires_at
+    const params2 = createTestKickoffParams({
+      keyHash,
+      requestHash: reqHash2,
+      directiveText: 'Directive 2 after database expiry',
+    });
+    const res2 = await adapter.kickoffWorkOrderAtomic(params2);
+
+    // Proven: Database time expired the row, so fresh work order is created
+    expect(res2.cached).toBe(false);
+    expect(res2.workOrder.id).toBe(params2.workOrder.id);
+    expect(res2.workOrder.id).not.toBe(res1.workOrder.id);
+  });
 });

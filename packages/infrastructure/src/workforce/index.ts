@@ -1,4 +1,7 @@
-export { executeKickoffWorkOrderTransaction } from './kickoff-work-order-transaction.js';
+export {
+  createKickoffPersistenceSnapshot,
+  executeKickoffWorkOrderTransaction,
+} from './kickoff-work-order-transaction.js';
 
 export { insertKickoffEntities } from './kickoff-work-order-row-inserts.js';
 
@@ -15,6 +18,7 @@ export {
 
 export {
   type KickoffInsertStage,
+  type KickoffPersistenceSnapshot,
   type KickoffTestHooks,
   type RawAgentAssignmentRow,
   type RawContextPackageRow,

@@ -10,7 +10,7 @@ import {
   type KickoffTransactionResult,
   type KickoffWorkOrderAtomicParams,
 } from '@affiliate-content-os/application';
-import { computeCanonicalContextHash } from '@affiliate-content-os/domain';
+import { computeCanonicalContextHash, parseAnalysisId } from '@affiliate-content-os/domain';
 import { DatabaseError } from '../database/errors.js';
 import {
   validateAndMapIdempotencyRow,
@@ -19,22 +19,104 @@ import {
 import { computeIdempotencyAdvisoryLockKey } from '../tenancy/postgres-idempotency-adapter.js';
 import { insertKickoffEntities } from './kickoff-work-order-row-inserts.js';
 import { mapWorkOrderRowToSummaryDTO } from './workforce-mappers.js';
-import type { KickoffTestHooks } from './workforce-types.js';
+import type { KickoffPersistenceSnapshot, KickoffTestHooks } from './workforce-types.js';
+
+export function createKickoffPersistenceSnapshot(
+  params: KickoffWorkOrderAtomicParams,
+): KickoffPersistenceSnapshot {
+  if (typeof params !== 'object' || params === null) {
+    throw new DatabaseError('Invalid kickoff parameters');
+  }
+
+  // Synchronously clone byte arrays and create immutable Buffers
+  const keyHash = new Uint8Array(params.idempotency.keyHash);
+  const requestHash = new Uint8Array(params.idempotency.requestHash);
+  const contextHash = new Uint8Array(params.contextPackage.contextHash);
+
+  const keyHashBuf = Buffer.from(keyHash);
+  const requestHashBuf = Buffer.from(requestHash);
+  const contextHashBuf = Buffer.from(contextHash);
+
+  // Normalize and copy source analyses once
+  const rawAnalyses = params.contextPackage.sourceAnalyses;
+  if (!Array.isArray(rawAnalyses)) {
+    throw new DatabaseError('Invalid sourceAnalyses collection in kickoff parameters');
+  }
+  const uniqueAnalyses = new Map<string, number>();
+  for (const a of rawAnalyses) {
+    if (typeof a?.id !== 'string' || typeof a?.version !== 'number') {
+      throw new DatabaseError('Invalid source analysis descriptor item');
+    }
+    uniqueAnalyses.set(a.id, a.version);
+  }
+  const normalizedSourceAnalyses = Object.freeze(
+    Array.from(uniqueAnalyses.entries())
+      .map(([id, version]) =>
+        Object.freeze({
+          id: parseAnalysisId(id),
+          version,
+        }),
+      )
+      .sort((a, b) => a.id.localeCompare(b.id)),
+  );
+
+  // Fail closed if redundant/legacy sourceAnalysisIds is supplied and does not match normalized sourceAnalyses
+  const untypedSourceIds = (params as { sourceAnalysisIds?: readonly string[] }).sourceAnalysisIds;
+  if (untypedSourceIds !== undefined) {
+    const verifiedIds: readonly string[] = normalizedSourceAnalyses.map((a) => a.id);
+    const sortedUntyped = [...new Set(untypedSourceIds)].sort();
+    if (
+      sortedUntyped.length !== verifiedIds.length ||
+      !sortedUntyped.every((id, idx) => id === verifiedIds[idx])
+    ) {
+      const offendingId =
+        untypedSourceIds.find((id) => !verifiedIds.includes(id)) ?? untypedSourceIds[0] ?? '';
+      throw new WorkforceAnalysisNotAcceptedError(offendingId);
+    }
+  }
+
+  // Freeze immutable collections
+  const workItems = Object.freeze(params.workItems.map((item) => Object.freeze({ ...item })));
+  const assignments = Object.freeze(params.assignments.map((a) => Object.freeze({ ...a })));
+  const dependencies = Object.freeze(params.dependencies.map((d) => Object.freeze({ ...d })));
+
+  return Object.freeze({
+    workOrder: Object.freeze({ ...params.workOrder }),
+    contextPackage: Object.freeze({
+      ...params.contextPackage,
+      contextHash,
+      contextHashBuf,
+      sourceAnalyses: normalizedSourceAnalyses,
+    }),
+    workItems,
+    assignments,
+    dependencies,
+    idempotency: Object.freeze({
+      ...params.idempotency,
+      keyHash,
+      keyHashBuf,
+      requestHash,
+      requestHashBuf,
+    }),
+    auditEvent: Object.freeze({
+      ...params.auditEvent,
+      changesJson: Object.freeze({ ...params.auditEvent.changesJson }),
+    }),
+  });
+}
 
 export async function executeKickoffWorkOrderTransaction(
   client: pg.PoolClient,
   params: KickoffWorkOrderAtomicParams,
   testHooks?: KickoffTestHooks,
 ): Promise<KickoffTransactionResult> {
-  const keyHash = new Uint8Array(params.idempotency.keyHash);
-  const requestHash = new Uint8Array(params.idempotency.requestHash);
-  const contextHash = new Uint8Array(params.contextPackage.contextHash);
+  const snapshot = createKickoffPersistenceSnapshot(params);
 
   // 1. Transaction-scoped advisory lock for concurrency serialization on idempotency key
   const lockKey = computeIdempotencyAdvisoryLockKey(
-    params.idempotency.principalId,
-    params.idempotency.routeKey,
-    keyHash,
+    snapshot.idempotency.principalId,
+    snapshot.idempotency.routeKey,
+    snapshot.idempotency.keyHash,
   );
   await client.query('SELECT pg_advisory_xact_lock($1::bigint)', [lockKey]);
 
@@ -46,33 +128,45 @@ export async function executeKickoffWorkOrderTransaction(
      WHERE workspace_id = $1 AND principal_id = $2 AND route_key = $3 AND key_hash = $4
      FOR UPDATE`,
     [
-      params.workOrder.workspaceId,
-      params.idempotency.principalId,
-      params.idempotency.routeKey,
-      Buffer.from(keyHash),
+      snapshot.workOrder.workspaceId,
+      snapshot.idempotency.principalId,
+      snapshot.idempotency.routeKey,
+      snapshot.idempotency.keyHashBuf,
     ],
   );
 
   if (idempCheck.rowCount !== 0 && idempCheck.rows[0]) {
     const rawRow = idempCheck.rows[0];
-    const snapshot = validateAndMapIdempotencyRow(rawRow);
+    const idempSnapshot = validateAndMapIdempotencyRow(rawRow);
 
-    const txTime = params.idempotency.createdAt
-      ? Date.parse(params.idempotency.createdAt)
-      : Date.now();
-    const isExpired = Date.parse(snapshot.expiresAt) <= txTime;
+    // Query authoritative PostgreSQL transaction timestamp inside the transaction
+    const txTimeRes = await client.query<{ now: Date | string }>(
+      'SELECT transaction_timestamp() AS now',
+    );
+    if (!txTimeRes.rows[0] || !txTimeRes.rows[0].now) {
+      throw new DatabaseError('Failed to query PostgreSQL transaction timestamp');
+    }
+    const rawTxTime = txTimeRes.rows[0].now;
+    const txTimeMs =
+      rawTxTime instanceof Date ? rawTxTime.getTime() : Date.parse(String(rawTxTime));
+    if (Number.isNaN(txTimeMs)) {
+      throw new DatabaseError('Invalid PostgreSQL transaction timestamp');
+    }
+
+    const expiresAtMs = Date.parse(idempSnapshot.expiresAt);
+    const isExpired = expiresAtMs <= txTimeMs;
 
     if (isExpired) {
-      await client.query('DELETE FROM idempotency_keys WHERE id = $1', [snapshot.id]);
+      await client.query('DELETE FROM idempotency_keys WHERE id = $1', [idempSnapshot.id]);
     } else {
       if (
-        snapshot.requestHash.byteLength !== requestHash.byteLength ||
-        !crypto.timingSafeEqual(snapshot.requestHash, requestHash)
+        idempSnapshot.requestHash.byteLength !== snapshot.idempotency.requestHash.byteLength ||
+        !crypto.timingSafeEqual(idempSnapshot.requestHash, snapshot.idempotency.requestHash)
       ) {
         throw new IdempotencyKeyReusedError();
       }
 
-      const workOrderId = snapshot.resourceId;
+      const workOrderId = idempSnapshot.resourceId;
       if (!workOrderId) {
         throw new DatabaseError(
           'Corrupt database row: missing work_order resourceId in idempotency record',
@@ -81,7 +175,7 @@ export async function executeKickoffWorkOrderTransaction(
 
       const existingOrder = await client.query(
         `SELECT * FROM work_orders WHERE workspace_id = $1 AND id = $2`,
-        [params.workOrder.workspaceId, workOrderId],
+        [snapshot.workOrder.workspaceId, workOrderId],
       );
 
       if (existingOrder.rowCount === 0 || !existingOrder.rows[0]) {
@@ -103,23 +197,23 @@ export async function executeKickoffWorkOrderTransaction(
      FROM products
      WHERE workspace_id = $1 AND id = $2
      FOR UPDATE`,
-    [params.workOrder.workspaceId, params.workOrder.productId],
+    [snapshot.workOrder.workspaceId, snapshot.workOrder.productId],
   );
 
   if (prodCheck.rowCount === 0 || !prodCheck.rows[0]) {
-    throw new ProductNotFoundError(params.workOrder.productId);
+    throw new ProductNotFoundError(snapshot.workOrder.productId);
   }
   const productRow = prodCheck.rows[0];
   if (productRow.status === 'archived' || productRow.status !== 'active') {
     throw new ProductArchivedError();
   }
-  if (productRow.current_fact_set_id !== params.contextPackage.factSetId) {
-    throw new WorkforceFactSetNotConfirmedError(params.contextPackage.factSetId);
+  if (productRow.current_fact_set_id !== snapshot.contextPackage.factSetId) {
+    throw new WorkforceFactSetNotConfirmedError(snapshot.contextPackage.factSetId);
   }
   const lockedProductVersion = Number(productRow.version);
-  if (lockedProductVersion !== params.contextPackage.productVersion) {
+  if (lockedProductVersion !== snapshot.contextPackage.productVersion) {
     throw new WorkforceStaleContextError(
-      params.contextPackage.productVersion,
+      snapshot.contextPackage.productVersion,
       lockedProductVersion,
     );
   }
@@ -130,7 +224,11 @@ export async function executeKickoffWorkOrderTransaction(
      FROM product_fact_sets
      WHERE workspace_id = $1 AND product_id = $2 AND id = $3
      FOR UPDATE`,
-    [params.workOrder.workspaceId, params.workOrder.productId, params.contextPackage.factSetId],
+    [
+      snapshot.workOrder.workspaceId,
+      snapshot.workOrder.productId,
+      snapshot.contextPackage.factSetId,
+    ],
   );
 
   if (
@@ -138,34 +236,34 @@ export async function executeKickoffWorkOrderTransaction(
     !factSetCheck.rows[0] ||
     factSetCheck.rows[0].status !== 'confirmed'
   ) {
-    throw new WorkforceFactSetNotConfirmedError(params.contextPackage.factSetId);
+    throw new WorkforceFactSetNotConfirmedError(snapshot.contextPackage.factSetId);
   }
   const factSetRow = factSetCheck.rows[0];
   const lockedFactSetVersion = Number(factSetRow.version);
-  if (lockedFactSetVersion !== params.contextPackage.factSetVersion) {
+  if (lockedFactSetVersion !== snapshot.contextPackage.factSetVersion) {
     throw new WorkforceStaleContextError(
-      params.contextPackage.factSetVersion,
+      snapshot.contextPackage.factSetVersion,
       lockedFactSetVersion,
     );
   }
 
   // 5. Lock & revalidate source analyses
   const lockedAnalyses: { analysisId: string; version: number }[] = [];
-  for (const expectedAnalysis of params.contextPackage.sourceAnalyses) {
+  for (const expectedAnalysis of snapshot.contextPackage.sourceAnalyses) {
     const analysisCheck = await client.query(
       `SELECT id, workspace_id, product_id, status, version
        FROM analyses
        WHERE workspace_id = $1 AND id = $2
        FOR UPDATE`,
-      [params.workOrder.workspaceId, expectedAnalysis.id],
+      [snapshot.workOrder.workspaceId, expectedAnalysis.id],
     );
 
     if (
       analysisCheck.rowCount === 0 ||
       !analysisCheck.rows[0] ||
       analysisCheck.rows[0].status !== 'accepted' ||
-      analysisCheck.rows[0].product_id !== params.workOrder.productId ||
-      analysisCheck.rows[0].workspace_id !== params.workOrder.workspaceId
+      analysisCheck.rows[0].product_id !== snapshot.workOrder.productId ||
+      analysisCheck.rows[0].workspace_id !== snapshot.workOrder.workspaceId
     ) {
       throw new WorkforceAnalysisNotAcceptedError(expectedAnalysis.id);
     }
@@ -180,27 +278,27 @@ export async function executeKickoffWorkOrderTransaction(
 
   // 6. Recompute and verify the canonical SHA-256 context hash from locked rows
   const canonicalHash = computeCanonicalContextHash({
-    workspaceId: params.workOrder.workspaceId,
-    productId: params.workOrder.productId,
+    workspaceId: snapshot.workOrder.workspaceId,
+    productId: snapshot.workOrder.productId,
     productVersion: lockedProductVersion,
-    factSetId: params.contextPackage.factSetId,
+    factSetId: snapshot.contextPackage.factSetId,
     factSetVersion: lockedFactSetVersion,
     analyses: lockedAnalyses,
-    schemaVersion: params.contextPackage.contextSchemaVersion,
+    schemaVersion: snapshot.contextPackage.contextSchemaVersion,
   });
 
   if (
-    canonicalHash.byteLength !== contextHash.byteLength ||
-    !crypto.timingSafeEqual(canonicalHash, contextHash)
+    canonicalHash.byteLength !== snapshot.contextPackage.contextHash.byteLength ||
+    !crypto.timingSafeEqual(canonicalHash, snapshot.contextPackage.contextHash)
   ) {
     throw new WorkforceStaleContextError(
-      params.contextPackage.productVersion,
+      snapshot.contextPackage.productVersion,
       lockedProductVersion,
     );
   }
 
-  // 7. Insert all workforce entities atomically
-  const createdOrder = await insertKickoffEntities(client, params, testHooks);
+  // 7. Insert all workforce entities atomically using the verified snapshot
+  const createdOrder = await insertKickoffEntities(client, snapshot, testHooks);
 
   return {
     workOrder: createdOrder,

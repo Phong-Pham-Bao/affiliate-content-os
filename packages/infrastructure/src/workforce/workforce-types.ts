@@ -1,3 +1,22 @@
+import type {
+  KickoffAtomicAssignmentParam,
+  KickoffAtomicDependencyParam,
+  KickoffAtomicWorkItemParam,
+} from '@affiliate-content-os/application';
+import type {
+  AnalysisId,
+  AuditEventId,
+  ContextPackageId,
+  IdempotencyKeyId,
+  IsoTimestamp,
+  ProductId,
+  UserId,
+  WorkOrderId,
+  WorkOrderMissionType,
+  WorkOrderStatus,
+  WorkspaceId,
+} from '@affiliate-content-os/domain';
+
 export type KickoffInsertStage =
   | 'context_packages'
   | 'context_package_analyses'
@@ -10,6 +29,63 @@ export type KickoffInsertStage =
 
 export interface KickoffTestHooks {
   readonly onAfterStage?: (stage: KickoffInsertStage) => Promise<void> | void;
+}
+
+export interface KickoffPersistenceSnapshot {
+  readonly workOrder: {
+    readonly id: WorkOrderId;
+    readonly workspaceId: WorkspaceId;
+    readonly productId: ProductId;
+    readonly contextPackageId: ContextPackageId;
+    readonly missionType: WorkOrderMissionType;
+    readonly directiveText: string;
+    readonly graphTemplate: string;
+    readonly graphVersion: number;
+    readonly status: WorkOrderStatus;
+    readonly priority: number;
+    readonly createdByUserId: UserId;
+  };
+  readonly contextPackage: {
+    readonly id: ContextPackageId;
+    readonly workspaceId: WorkspaceId;
+    readonly productId: ProductId;
+    readonly factSetId: string;
+    readonly contextSchemaVersion: number;
+    readonly contextHash: Uint8Array;
+    readonly contextHashBuf: Buffer;
+    readonly createdByUserId: UserId;
+    readonly productVersion: number;
+    readonly factSetVersion: number;
+    readonly sourceAnalyses: readonly {
+      readonly id: AnalysisId;
+      readonly version: number;
+    }[];
+  };
+  readonly workItems: readonly KickoffAtomicWorkItemParam[];
+  readonly assignments: readonly KickoffAtomicAssignmentParam[];
+  readonly dependencies: readonly KickoffAtomicDependencyParam[];
+  readonly idempotency: {
+    readonly id: IdempotencyKeyId;
+    readonly keyHash: Uint8Array;
+    readonly keyHashBuf: Buffer;
+    readonly requestHash: Uint8Array;
+    readonly requestHashBuf: Buffer;
+    readonly principalId: UserId;
+    readonly routeKey: string;
+    readonly statusCode: number;
+    readonly responseJson: unknown;
+    readonly resourceId: WorkOrderId;
+    readonly createdAt: IsoTimestamp;
+  };
+  readonly auditEvent: {
+    readonly id: AuditEventId;
+    readonly workspaceId: WorkspaceId;
+    readonly actorUserId: UserId;
+    readonly action: string;
+    readonly resourceType: string;
+    readonly resourceId: WorkOrderId;
+    readonly changesJson: Record<string, unknown>;
+  };
 }
 
 export interface RawWorkOrderRow {

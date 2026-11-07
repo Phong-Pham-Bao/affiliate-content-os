@@ -1,21 +1,14 @@
 import type pg from 'pg';
-import type {
-  KickoffWorkOrderAtomicParams,
-  WorkOrderSummaryDTO,
-} from '@affiliate-content-os/application';
+import type { WorkOrderSummaryDTO } from '@affiliate-content-os/application';
 import { DatabaseError } from '../database/errors.js';
 import { mapWorkOrderRowToSummaryDTO } from './workforce-mappers.js';
-import type { KickoffTestHooks } from './workforce-types.js';
+import type { KickoffPersistenceSnapshot, KickoffTestHooks } from './workforce-types.js';
 
 export async function insertKickoffEntities(
   client: pg.PoolClient,
-  params: KickoffWorkOrderAtomicParams,
+  snapshot: KickoffPersistenceSnapshot,
   testHooks?: KickoffTestHooks,
 ): Promise<WorkOrderSummaryDTO> {
-  const contextHashBuf = Buffer.from(new Uint8Array(params.contextPackage.contextHash));
-  const keyHashBuf = Buffer.from(new Uint8Array(params.idempotency.keyHash));
-  const requestHashBuf = Buffer.from(new Uint8Array(params.idempotency.requestHash));
-
   // 1. Insert context_packages
   await client.query(
     `INSERT INTO context_packages (
@@ -23,26 +16,26 @@ export async function insertKickoffEntities(
        context_schema_version, context_hash, created_by_user_id, created_at
      ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())`,
     [
-      params.contextPackage.id,
-      params.contextPackage.workspaceId,
-      params.contextPackage.productId,
-      params.contextPackage.factSetId,
-      params.contextPackage.contextSchemaVersion,
-      contextHashBuf,
-      params.contextPackage.createdByUserId,
+      snapshot.contextPackage.id,
+      snapshot.contextPackage.workspaceId,
+      snapshot.contextPackage.productId,
+      snapshot.contextPackage.factSetId,
+      snapshot.contextPackage.contextSchemaVersion,
+      snapshot.contextPackage.contextHashBuf,
+      snapshot.contextPackage.createdByUserId,
     ],
   );
   if (testHooks?.onAfterStage) {
     await testHooks.onAfterStage('context_packages');
   }
 
-  // 2. Insert context_package_analyses
-  for (const analysisId of params.sourceAnalysisIds) {
+  // 2. Insert context_package_analyses from verified sourceAnalyses
+  for (const analysis of snapshot.contextPackage.sourceAnalyses) {
     await client.query(
       `INSERT INTO context_package_analyses (
          workspace_id, context_package_id, analysis_id, created_at
        ) VALUES ($1, $2, $3, NOW())`,
-      [params.workOrder.workspaceId, params.contextPackage.id, analysisId],
+      [snapshot.workOrder.workspaceId, snapshot.contextPackage.id, analysis.id],
     );
   }
   if (testHooks?.onAfterStage) {
@@ -59,29 +52,29 @@ export async function insertKickoffEntities(
      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NULL, NULL, NOW(), NOW(), 1)
      RETURNING *`,
     [
-      params.workOrder.id,
-      params.workOrder.workspaceId,
-      params.workOrder.productId,
-      params.workOrder.contextPackageId,
-      params.workOrder.missionType,
-      params.workOrder.directiveText,
-      params.workOrder.graphTemplate,
-      params.workOrder.graphVersion,
-      params.workOrder.status,
-      params.workOrder.priority,
-      params.workOrder.createdByUserId,
+      snapshot.workOrder.id,
+      snapshot.workOrder.workspaceId,
+      snapshot.workOrder.productId,
+      snapshot.workOrder.contextPackageId,
+      snapshot.workOrder.missionType,
+      snapshot.workOrder.directiveText,
+      snapshot.workOrder.graphTemplate,
+      snapshot.workOrder.graphVersion,
+      snapshot.workOrder.status,
+      snapshot.workOrder.priority,
+      snapshot.workOrder.createdByUserId,
     ],
   );
 
   if (orderRes.rowCount !== 1) {
-    throw new DatabaseError(`Failed to insert work order ${params.workOrder.id}`);
+    throw new DatabaseError(`Failed to insert work order ${snapshot.workOrder.id}`);
   }
   if (testHooks?.onAfterStage) {
     await testHooks.onAfterStage('work_orders');
   }
 
   // 4. Insert work_items
-  for (const item of params.workItems) {
+  for (const item of snapshot.workItems) {
     await client.query(
       `INSERT INTO work_items (
          id, workspace_id, work_order_id, role_definition_id,
@@ -104,7 +97,7 @@ export async function insertKickoffEntities(
   }
 
   // 5. Insert work_item_dependencies
-  for (const dep of params.dependencies) {
+  for (const dep of snapshot.dependencies) {
     await client.query(
       `INSERT INTO work_item_dependencies (
          id, workspace_id, work_order_id, work_item_id,
@@ -118,7 +111,7 @@ export async function insertKickoffEntities(
   }
 
   // 6. Insert agent_assignments
-  for (const assignment of params.assignments) {
+  for (const assignment of snapshot.assignments) {
     await client.query(
       `INSERT INTO agent_assignments (
          id, workspace_id, work_order_id, role_definition_id,
@@ -149,15 +142,15 @@ export async function insertKickoffEntities(
        status_code, response_json, resource_type, resource_id, expires_at, created_at
      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, 'work_order', $9, NOW() + INTERVAL '24 hours', NOW())`,
     [
-      params.idempotency.id,
-      params.workOrder.workspaceId,
-      params.idempotency.principalId,
-      params.idempotency.routeKey,
-      keyHashBuf,
-      requestHashBuf,
-      params.idempotency.statusCode,
+      snapshot.idempotency.id,
+      snapshot.workOrder.workspaceId,
+      snapshot.idempotency.principalId,
+      snapshot.idempotency.routeKey,
+      snapshot.idempotency.keyHashBuf,
+      snapshot.idempotency.requestHashBuf,
+      snapshot.idempotency.statusCode,
       JSON.stringify(createdOrder),
-      params.workOrder.id,
+      snapshot.workOrder.id,
     ],
   );
   if (testHooks?.onAfterStage) {
@@ -171,13 +164,13 @@ export async function insertKickoffEntities(
        resource_id, result, reason_code, changes_json, occurred_at, created_at
      ) VALUES ($1, $2, 'user', $3, $4, $5, $6, 'succeeded', NULL, $7, NOW(), NOW())`,
     [
-      params.auditEvent.id,
-      params.auditEvent.workspaceId,
-      params.auditEvent.actorUserId,
-      params.auditEvent.action,
-      params.auditEvent.resourceType,
-      params.auditEvent.resourceId,
-      JSON.stringify(params.auditEvent.changesJson),
+      snapshot.auditEvent.id,
+      snapshot.auditEvent.workspaceId,
+      snapshot.auditEvent.actorUserId,
+      snapshot.auditEvent.action,
+      snapshot.auditEvent.resourceType,
+      snapshot.auditEvent.resourceId,
+      JSON.stringify(snapshot.auditEvent.changesJson),
     ],
   );
   if (testHooks?.onAfterStage) {
