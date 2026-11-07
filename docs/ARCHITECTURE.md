@@ -1,8 +1,8 @@
 # Affiliate Content OS - Architecture Baseline
 
-Status: Sprint 0 baseline, proposed for Product Owner approval
+Status: Sprint 2 implemented baseline with identity, catalog, and intelligence vertical slice
 
-Last updated: 2026-10-05
+Last updated: 2026-11-07
 
 ## 1. Architecture goals
 
@@ -44,20 +44,22 @@ Browser
   -> Web (SSR/UI)
        -> API (REST /api/v1)
             -> PostgreSQL (system of record + outbox + job state)
-            -> Redis-compatible queue (delivery/wakeup, not source of truth)
-            -> S3-compatible object storage (user media)
             -> Identity provider (OIDC)
-            -> AI provider(s) through AI Gateway
-            -> Threads/TikTok through SocialPlatformAdapter
+            -> Google OIDC (Sprint 2)
 
-Scheduler/Worker
+Worker
   -> PostgreSQL (claim/revalidate/record)
-  -> Queue
-  -> object storage / AI / official social APIs
-  -> observability backend
+  -> provider-neutral AI Gateway
+  -> Gemini API via official @google/genai SDK (Sprint 2)
 ```
 
-Production components are private by default. Only the web/API ingress and registered OAuth/webhook callbacks are public. PostgreSQL remains the source of truth if Redis is lost.
+PostgreSQL is the Sprint 2 source of truth for operations, outbox events, leases, attempts, analyses, budgets, and audit. Redis, object storage, social adapters, publishing, and analytics are not introduced in this sprint.
+
+### Intelligence execution boundary
+
+The HTTP transaction validates membership, confirmed facts, source analyses, idempotency, workspace AI policy, budget, and rate limit, then atomically persists the operation, AI run, durable job, outbox event, reservation, and audit event. It never calls Gemini inline.
+
+The worker claims a fenced lease with `FOR UPDATE SKIP LOCKED`, reconstructs authoritative input from PostgreSQL, verifies operation/job/AI-run linkage, and makes one SDK provider call per leased attempt. SDK retries are disabled; bounded transient retry and the single structured-output repair attempt are owned by the durable application workflow. Successful content must pass versioned schema and deterministic evidence validation before atomic persistence.
 
 ## 4. Module boundaries
 

@@ -1,8 +1,22 @@
 # Affiliate Content OS - HTTP API Contract
 
-Status: Sprint 0 conceptual contract, proposed for Product Owner approval
+Status: Sprint 2 implemented contract for identity, workspace, catalog, and intelligence slices
 
-Last updated: 2026-10-05
+Last updated: 2026-11-07
+
+## Implemented Sprint 2 surface
+
+Runtime schemas and `openapi/openapi.json` are authoritative for these implemented routes:
+
+- Google OIDC login/callback/logout/session routes.
+- Authenticated workspace creation and selection.
+- Product, immutable fact-set/fact, and affiliate-destination commands and reads.
+- `POST /api/v1/workspaces/{workspaceId}/products/{productId}/analyses` with `Idempotency-Key`, returning `202` and an operation location.
+- Product analysis listing, analysis detail, and operation polling.
+- Versioned human accept/reject commands; a conflicting second decision returns `409`.
+- Owner-only, versioned AI policy update with atomic audit.
+
+AI output remains `generated` until human review. Responses may expose safe provider/model provenance and evidence IDs, but never prompts, raw provider bodies, API keys, OAuth secrets, or chain-of-thought.
 
 ## 1. Contract principles
 

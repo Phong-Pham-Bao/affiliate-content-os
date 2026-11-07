@@ -1,8 +1,8 @@
 # Affiliate Content OS - Database Specification
 
-Status: Sprint 0 logical schema baseline, proposed for Product Owner approval
+Status: Sprint 2 implemented through migration `0007_intelligence.sql`
 
-Last updated: 2026-10-05
+Last updated: 2026-11-07
 
 ## 1. Conventions
 
@@ -19,7 +19,13 @@ Last updated: 2026-10-05
 - Secrets and tokens never appear in ordinary JSON or audit payloads.
 - User-facing deletion generally uses tombstone/status plus asynchronous purge; immutable audit/security records follow the retention policy.
 
-This is a logical schema. Exact DDL belongs to implementation migrations and must preserve these invariants.
+The exact Sprint 2 DDL is implemented by migrations `0001` through `0007`; this document also retains the approved later-sprint logical model.
+
+### Sprint 2 intelligence durability
+
+Migration `0007_intelligence.sql` adds `workspace_ai_policies`, `operations`, `ai_runs`, `analyses`, `analysis_subjects`, `job_executions`, and `outbox_events`. Existing workspaces are backfilled with a safe policy; new workspace creation provisions its policy in the same transaction.
+
+Analysis content is immutable except for the bounded human-review fields. Tenant relationships use composite keys where applicable. Durable jobs store safe IDs, versions, attempt/repair counters, leases, scheduling metadata, and sanitized categories—not prompts, provider responses, or credentials. Budget reservation/settlement, operation/AI-run/job terminal state, analysis insertion, and audit events are transactionally coordinated.
 
 ## 2. Identity and tenancy
 

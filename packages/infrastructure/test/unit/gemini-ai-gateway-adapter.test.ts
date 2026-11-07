@@ -33,6 +33,10 @@ describe('GeminiAIGatewayAdapter', () => {
     expect((captured as { config?: { abortSignal?: AbortSignal } }).config?.abortSignal).toBe(
       controller.signal,
     );
+    expect(
+      (captured as { config?: { httpOptions?: { retryOptions?: { attempts?: number } } } }).config
+        ?.httpOptions?.retryOptions?.attempts,
+    ).toBe(1);
   });
 
   it('successfully generates and parses product analysis', async () => {

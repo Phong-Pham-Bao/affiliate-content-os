@@ -111,6 +111,9 @@ export class GeminiAIGatewayAdapter implements AIGatewayPort {
           maxOutputTokens: this.config.geminiMaxOutputTokens,
           httpOptions: {
             timeout: this.config.geminiTimeoutMs,
+            // The durable worker owns bounded retry/backoff. Disable the SDK's
+            // default retry loop so one leased attempt maps to one provider call.
+            retryOptions: { attempts: 1 },
           },
           ...(options?.signal ? { abortSignal: options.signal } : {}),
         },

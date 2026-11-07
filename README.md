@@ -1,8 +1,45 @@
 # Affiliate Content OS
 
-Deterministic development foundation, runtime process shells, and architecture boundary enforcement for Affiliate Content OS.
+Grounded content-commerce intelligence workflow with human approval, durable execution, and strict architecture boundaries.
 
-> **Status Notice:** This repository contains the deterministic monorepo foundation, configuration boundary (`@affiliate-content-os/config`), persistence foundation and migration engine (`@affiliate-content-os/infrastructure`), and three minimal runtime process shells (`apps/web`, `apps/api`, `apps/worker`). Application domain workflows, ORM, authentication, AI models, and social platform integrations do not exist yet.
+> **Status Notice (Sprint 2):** The repository now contains a usable local vertical slice: Google OIDC sign-in, workspace onboarding, product/fact/affiliate catalog management, asynchronous Gemini product and niche analysis, evidence validation, operation polling, and human accept/reject review. Social publishing and analytics remain later-sprint scope.
+
+## Sprint 2 Local Demo
+
+The demonstrated user loop is:
+
+```text
+GOOGLE SIGN-IN → WORKSPACE → PRODUCT → CONFIRMED FACTS
+→ GEMINI ANALYSIS → HUMAN ACCEPT/REJECT
+```
+
+1. Create `.env` with `pnpm env:local`; never commit that file.
+2. In Google Cloud Console, create a Web OAuth client with redirect URI `http://localhost:3001/auth/callback` and local web origin `http://localhost:3000`.
+3. Set `AUTH_ENABLED=true`, `OIDC_ISSUER=https://accounts.google.com`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `OIDC_REDIRECT_URI`, and the generated authentication encryption-key settings in `.env`.
+4. Create a Gemini API key in Google AI Studio, then set `AI_ENABLED=true` and `GEMINI_API_KEY` in `.env`. The approved model is exactly `gemini-3.8-flash`; the default thinking level is `high`.
+5. Start PostgreSQL, apply migrations, and run all processes:
+
+```bash
+pnpm infra:up
+pnpm db:migrate
+pnpm dev
+```
+
+Open `http://localhost:3000`, sign in, create a workspace and product, confirm a fact set, then request an analysis. The API runs on `http://127.0.0.1:3001`; the worker must remain running while the operation is queued.
+
+Provider credentials remain server-side. The web bundle, API responses, logs, audit rows, job payloads, and Git history must never contain OAuth secrets or the Gemini API key.
+
+### Optional live Gemini contract smoke
+
+This command makes one non-destructive provider request and may consume quota. It is opt-in and prints only safe provenance/usage metadata, never the prompt, output body, or key:
+
+```bash
+# PowerShell
+$env:RUN_LIVE_GEMINI_SMOKE='YES'
+pnpm smoke:gemini
+```
+
+Exit code `0` proves the official SDK returned structured output that passed deterministic evidence validation. A nonzero exit with `provider_unavailable`, `provider_timeout`, or `rate_limited` is a real provider failure and must not be presented as successful analysis. Retry later after checking Google AI service availability and project quota; do not bypass the durable worker's bounded retry policy.
 
 ## Prerequisites
 
@@ -69,13 +106,13 @@ Database schema evolution is strictly forward-only and managed via SQL files in 
 > [!IMPORTANT]
 > The migration engine uses forward-only migrations. Down migrations are prohibited. Rollbacks are performed by creating a new forward migration. Migrations run as explicit pre-deployment CLI steps and are never automatically run on application process startup.
 
-## Runtime Process Shells
+## Runtime Processes
 
 The repository defines three independent runtime processes:
 
-1. **Web Application Shell (`apps/web`)**: Next.js App Router application providing the root layout and landing page. It enforces server-only configuration boundaries and contains no application forms, dashboards, or external client-side calls.
-2. **API Server Shell (`apps/api`)**: Fastify-based HTTP application exposing an operational `GET /health/live` liveness endpoint. It provides an import-safe application factory (`createApp`), loads validated configuration before binding, probes database connectivity on startup, and enforces genuinely bounded graceful shutdown via `SIGINT` and `SIGTERM` with deadline enforcement, error logging, and forced nonzero termination on close failure or timeout.
-3. **Worker Runtime Shell (`apps/worker`)**: Pure event-driven Node.js worker runtime. It initializes with validated configuration, probes database connectivity on startup, and remains in an idle state using a real referenced runtime handle without polling, timers, or CPU spin until receiving cancellation via `AbortSignal` or termination signals (`SIGINT`, `SIGTERM`), exiting cleanly with code 0.
+1. **Web Application (`apps/web`)**: Next.js App Router UI for authentication, workspace onboarding, catalog/fact management, analysis requests, polling, inspection, and human review.
+2. **API Server (`apps/api`)**: Fastify API with validated Google OIDC/session handling, tenant authorization, catalog and intelligence routes, runtime response schemas, verified OpenAPI, database readiness probing, and bounded shutdown.
+3. **Worker (`apps/worker`)**: Claims leased PostgreSQL jobs, reconstructs authoritative evidence, calls Gemini through the provider-neutral gateway, validates structured/evidence-linked output, and atomically persists retries, failures, analyses, usage, budget settlement, and audit events.
 
 ### Development Commands
 
@@ -162,16 +199,16 @@ affiliate-content-os/
 │   ├── workflows/ci.yml         # GitHub Actions CI workflow (Node 24 LTS, frozen lockfile)
 │   └── pull_request_template.md
 ├── apps/
-│   ├── api/                     # Fastify API application shell
+│   ├── api/                     # Fastify API for auth, tenancy, catalog, and intelligence
 │   │   ├── src/                 # createApp factory, server lifecycle, main entrypoint
 │   │   ├── test/                # API factory & liveness endpoint tests
 │   │   └── package.json
-│   ├── web/                     # Next.js App Router application shell
+│   ├── web/                     # Next.js workspace, catalog, and analysis UI
 │   │   ├── app/                 # Root layout, page, globals.css
 │   │   ├── src/server/          # Server-only configuration bootstrap
-│   │   ├── test/                # Web shell & bootstrap boundary tests
+│   │   ├── test/                # Web components, validators, and bootstrap tests
 │   │   └── package.json
-│   └── worker/                  # Idle Node.js worker runtime shell
+│   └── worker/                  # Durable PostgreSQL/Gemini analysis worker
 │       ├── src/                 # Worker lifecycle, runner, main entrypoint
 │       ├── test/                # Worker lifecycle & cancellation tests
 │       └── package.json

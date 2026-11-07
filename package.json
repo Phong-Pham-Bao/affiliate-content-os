@@ -30,6 +30,7 @@
     "db:migrate:status": "node scripts/run-with-env.mjs tsx --conditions=development packages/infrastructure/src/database/migrations/cli.ts status",
     "db:migrate:validate": "node scripts/run-with-env.mjs --set-node-env=test tsx --conditions=development packages/infrastructure/src/database/migrations/cli.ts validate",
     "test:integration": "node scripts/run-with-env.mjs --set-node-env=test vitest run -c vitest.integration.config.ts",
+    "smoke:gemini": "node scripts/run-with-env.mjs pnpm --filter @affiliate-content-os/infrastructure exec tsx --conditions=development scripts/smoke-gemini.ts",
     "dev:web": "pnpm --filter @affiliate-content-os/web dev",
     "dev:api": "pnpm --filter @affiliate-content-os/api dev",
     "dev:worker": "pnpm --filter @affiliate-content-os/worker dev",
