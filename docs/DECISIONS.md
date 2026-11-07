@@ -9,7 +9,7 @@ Last updated: 2026-10-05
 - Approved by: Product Owner (user)
 - Approved on: 2026-10-05
 - Baseline scope: `docs/PRODUCT.md`, `docs/ARCHITECTURE.md`, `docs/DATABASE.md`, `docs/API.md`, `docs/DECISIONS.md`, and `tasks/TASK-001.md`
-- Effect: ADR-001 through ADR-022 are accepted as the governing Sprint 0 architecture baseline. The open decisions listed below remain intentionally unresolved and must be decided before a dependent implementation or production beta milestone.
+- Effect: ADR-001 through ADR-023 are accepted as the governing architecture baseline. The open decisions listed below remain intentionally unresolved and must be decided before a dependent implementation or production beta milestone.
 - Implementation boundary: approval authorizes the documented Sprint 1 workflow; it does not itself implement `TASK-001`.
 
 ## How to use this document
@@ -187,6 +187,15 @@ Decision states: `proposed`, `accepted`, `superseded`, `rejected`.
 - Rationale: App review, outages, policy shifts, and regressions require fast, honest containment.
 - Consequences: Flags cannot bypass approval/authorization. Their changes are restricted and audited.
 - Rejected: compiling provider availability into UI assumptions; emergency database edits as the normal kill mechanism.
+
+## ADR-023: Deterministic AI workforce orchestration
+
+- Status: accepted
+- Approved by: Product Owner on 2026-11-07
+- Decision: Model the Sprint 3 creative office as a deterministic, persisted work-order graph. A human boss assigns one directive; all assigned AI roles enter a real `preparing` state at kickoff, independent work becomes ready in parallel, and dependency-bound work records the prerequisite it is waiting for. PostgreSQL is authoritative for work orders, work items, dependencies, context snapshots, assignments, versions, and audit. The application layer creates only approved mission-template graphs; an AI model does not invent executable tasks, tools, permissions, or approval transitions. The virtual-office and board views are projections of persisted state, use bounded polling for MVP updates, and never generate timer-based progress or fake success. AI roles produce versioned structured artifacts through the existing provider-neutral gateway in later checkpoints; no AI role may confirm facts, approve artifacts, change spending policy, or publish.
+- Rationale: The Product Owner wants to manage a visible AI workforce rather than one generic chatbot, with employees preparing concurrently and collaborating by specialty. Deterministic orchestration preserves tenant isolation, budgets, recoverability, testability, and human accountability while still delivering the office metaphor.
+- Consequences: Sprint 3 adds work-order and dependency state machines inside the modular monolith. Role definitions are product configuration, not separate provider accounts. Parallelism is bounded by workspace/provider policy and worker configuration. Accessible board/list parity is mandatory even when the office visualization is enabled. Checkpoint A builds the persistence and application foundation without provider execution or user-facing partial workflows; later checkpoints add Gemini role execution, artifacts, approval, and the visual office.
+- Rejected: a timer-driven simulation; one opaque chat transcript as source of truth; AI-generated executable task graphs; autonomous approval/publishing; one provider account per employee; browser automation of consumer AI products; microservices or a second database.
 
 ## ADR-022: Retention is explicit and deletion is asynchronous
 
