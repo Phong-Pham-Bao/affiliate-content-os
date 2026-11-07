@@ -1,6 +1,7 @@
 import { commonHeaders, problemDetailsContent } from '../auth/openapi-auth-paths.js';
 import {
   acceptAnalysisRouteSchema,
+  getAIPolicyRouteSchema,
   rejectAnalysisRouteSchema,
   updateAIPolicyRouteSchema,
 } from './schemas.js';
@@ -109,6 +110,39 @@ export function buildOpenApiAnalysisReviewAndPolicyPaths(): Record<string, unkno
       },
     },
     '/api/v1/workspaces/{workspaceId}/ai-policy': {
+      get: {
+        summary: 'Get workspace AI policy',
+        description:
+          'Returns the current AI enablement, budget, spend, and rate policy for an owner.',
+        operationId: 'getAIPolicy',
+        tags: ['Analysis'],
+        parameters: [sessionCookieParam, workspaceIdParam],
+        responses: {
+          '200': {
+            description: 'Current policy.',
+            headers: {
+              ETag: { schema: { type: 'string' }, description: 'Policy version ETag.' },
+              ...commonHeaders,
+            },
+            content: {
+              'application/json': {
+                schema: (getAIPolicyRouteSchema as { response: Record<number, unknown> })
+                  .response[200],
+              },
+            },
+          },
+          '401': {
+            description: 'Unauthorized',
+            headers: commonHeaders,
+            content: problemDetailsContent,
+          },
+          '404': {
+            description: 'Not Found',
+            headers: commonHeaders,
+            content: problemDetailsContent,
+          },
+        },
+      },
       put: {
         summary: 'Update workspace AI policy (demo / admin)',
         description: 'Safely configures AI enablement and budget limit for local demonstration.',

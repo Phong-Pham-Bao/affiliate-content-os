@@ -25,7 +25,7 @@ pnpm db:migrate
 pnpm dev
 ```
 
-Open `http://localhost:3000`, sign in, create a workspace and product, confirm a fact set, then request an analysis. The API runs on `http://127.0.0.1:3001`; the worker must remain running while the operation is queued.
+Open `http://localhost:3000`, sign in, create a workspace, and use the owner-only **AI Policy & Budget** panel to assign a positive monthly budget. Then create a product, confirm a fact set, and request an analysis. The API runs on `http://127.0.0.1:3001`; the worker must remain running while the operation is queued.
 
 Provider credentials remain server-side. The web bundle, API responses, logs, audit rows, job payloads, and Git history must never contain OAuth secrets or the Gemini API key.
 

@@ -8028,6 +8028,189 @@
       }
     },
     "/api/v1/workspaces/{workspaceId}/ai-policy": {
+      "get": {
+        "summary": "Get workspace AI policy",
+        "description": "Returns the current AI enablement, budget, spend, and rate policy for an owner.",
+        "operationId": "getAIPolicy",
+        "tags": ["Analysis"],
+        "parameters": [
+          {
+            "name": "acos_session",
+            "in": "cookie",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Opaque application session token."
+          },
+          {
+            "name": "workspaceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Unique identifier of the workspace."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current policy.",
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Policy version ETag."
+              },
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-store"
+                },
+                "description": "Disables caching for sensitive authentication responses."
+              },
+              "Pragma": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-cache"
+                },
+                "description": "Legacy HTTP 1.0 cache prevention."
+              },
+              "Referrer-Policy": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-referrer"
+                },
+                "description": "Prevents token leakage in Referer headers."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "workspaceId",
+                    "aiEnabled",
+                    "monthlyBudgetMicrounits",
+                    "currentSpendMicrounits",
+                    "reservedSpendMicrounits",
+                    "rateLimitPerMinute",
+                    "budgetPeriodStart",
+                    "updatedAt",
+                    "version"
+                  ],
+                  "properties": {
+                    "workspaceId": {
+                      "type": "string",
+                      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                    },
+                    "aiEnabled": {
+                      "type": "boolean"
+                    },
+                    "monthlyBudgetMicrounits": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "currentSpendMicrounits": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "reservedSpendMicrounits": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "rateLimitPerMinute": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "budgetPeriodStart": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "updatedAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "version": {
+                      "type": "integer",
+                      "minimum": 1
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-store"
+                },
+                "description": "Disables caching for sensitive authentication responses."
+              },
+              "Pragma": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-cache"
+                },
+                "description": "Legacy HTTP 1.0 cache prevention."
+              },
+              "Referrer-Policy": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-referrer"
+                },
+                "description": "Prevents token leakage in Referer headers."
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-store"
+                },
+                "description": "Disables caching for sensitive authentication responses."
+              },
+              "Pragma": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-cache"
+                },
+                "description": "Legacy HTTP 1.0 cache prevention."
+              },
+              "Referrer-Policy": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-referrer"
+                },
+                "description": "Prevents token leakage in Referer headers."
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      },
       "put": {
         "summary": "Update workspace AI policy (demo / admin)",
         "description": "Safely configures AI enablement and budget limit for local demonstration.",

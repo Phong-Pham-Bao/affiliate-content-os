@@ -97,6 +97,41 @@ describe('Analysis Review & Policy Routes', () => {
     expect(body.version).toBe(2);
   });
 
+  it('GET ai-policy returns the owner policy with its version ETag', async () => {
+    const { deps } = createTestAnalysisDeps();
+    const app = createApp({ auth: deps.auth, analysis: deps });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/v1/workspaces/${TEST_WORKSPACE_ID}/ai-policy`,
+      cookies: { [COOKIE_SESSION]: sessionCookie },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.headers.etag).toBe('"1"');
+    expect(res.headers['cache-control']).toBe('no-store');
+    expect(res.json()).toMatchObject({
+      workspaceId: TEST_WORKSPACE_ID,
+      aiEnabled: true,
+      monthlyBudgetMicrounits: 10_000_000,
+      rateLimitPerMinute: 60,
+      version: 1,
+    });
+  });
+
+  it('GET ai-policy hides policy from an active editor', async () => {
+    const { deps } = createTestAnalysisDeps({ defaultRole: 'editor' });
+    const app = createApp({ auth: deps.auth, analysis: deps });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/v1/workspaces/${TEST_WORKSPACE_ID}/ai-policy`,
+      cookies: { [COOKIE_SESSION]: sessionCookie },
+    });
+
+    expect(res.statusCode).toBe(404);
+  });
+
   it('PUT ai-policy rejects an active editor', async () => {
     const { deps } = createTestAnalysisDeps({ defaultRole: 'editor' });
     const app = createApp({ auth: deps.auth, analysis: deps });

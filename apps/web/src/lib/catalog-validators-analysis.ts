@@ -23,6 +23,12 @@ function createMalformedError(detail: string): ApiError {
   });
 }
 
+function isSafeIntegerInRange(value: unknown, minimum: number, maximum: number): value is number {
+  return (
+    typeof value === 'number' && Number.isSafeInteger(value) && value >= minimum && value <= maximum
+  );
+}
+
 function isAnalysisType(val: unknown): val is AnalysisType {
   return val === 'product' || val === 'niche' || val === 'performance';
 }
@@ -164,18 +170,19 @@ export function validateAIPolicy(data: unknown): WorkspaceAIPolicyDTO {
   if (typeof data.workspaceId !== 'string' || !isValidUuidV7(data.workspaceId))
     throw createMalformedError('Invalid workspaceId');
   if (typeof data.aiEnabled !== 'boolean') throw createMalformedError('Invalid aiEnabled');
-  if (typeof data.monthlyBudgetMicrounits !== 'number')
+  if (!isSafeIntegerInRange(data.monthlyBudgetMicrounits, 0, Number.MAX_SAFE_INTEGER))
     throw createMalformedError('Invalid monthlyBudgetMicrounits');
-  if (typeof data.currentSpendMicrounits !== 'number')
+  if (!isSafeIntegerInRange(data.currentSpendMicrounits, 0, Number.MAX_SAFE_INTEGER))
     throw createMalformedError('Invalid currentSpendMicrounits');
-  if (typeof data.reservedSpendMicrounits !== 'number')
+  if (!isSafeIntegerInRange(data.reservedSpendMicrounits, 0, Number.MAX_SAFE_INTEGER))
     throw createMalformedError('Invalid reservedSpendMicrounits');
-  if (typeof data.rateLimitPerMinute !== 'number')
+  if (!isSafeIntegerInRange(data.rateLimitPerMinute, 1, 1000))
     throw createMalformedError('Invalid rateLimitPerMinute');
-  if (typeof data.budgetPeriodStart !== 'string')
+  if (!isValidRfc3339DateTime(data.budgetPeriodStart))
     throw createMalformedError('Invalid budgetPeriodStart');
-  if (typeof data.updatedAt !== 'string') throw createMalformedError('Invalid updatedAt');
-  if (typeof data.version !== 'number') throw createMalformedError('Invalid version');
+  if (!isValidRfc3339DateTime(data.updatedAt)) throw createMalformedError('Invalid updatedAt');
+  if (!isSafeIntegerInRange(data.version, 1, Number.MAX_SAFE_INTEGER))
+    throw createMalformedError('Invalid version');
 
   return {
     workspaceId: data.workspaceId,

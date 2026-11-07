@@ -267,43 +267,50 @@ export const getOperationRouteSchema: FastifySchema = {
   },
 };
 
+const aiPolicyResponse = {
+  type: 'object',
+  additionalProperties: false,
+  required: [
+    'workspaceId',
+    'aiEnabled',
+    'monthlyBudgetMicrounits',
+    'currentSpendMicrounits',
+    'reservedSpendMicrounits',
+    'rateLimitPerMinute',
+    'budgetPeriodStart',
+    'updatedAt',
+    'version',
+  ],
+  properties: {
+    workspaceId: uuid,
+    aiEnabled: { type: 'boolean' },
+    monthlyBudgetMicrounits: { type: 'integer', minimum: 0 },
+    currentSpendMicrounits: { type: 'integer', minimum: 0 },
+    reservedSpendMicrounits: { type: 'integer', minimum: 0 },
+    rateLimitPerMinute: { type: 'integer', minimum: 1 },
+    budgetPeriodStart: dateTime,
+    updatedAt: dateTime,
+    version: { type: 'integer', minimum: 1 },
+  },
+} as const;
+
+const aiPolicyParams = {
+  type: 'object',
+  required: ['workspaceId'],
+  additionalProperties: false,
+  properties: {
+    workspaceId: { type: 'string', pattern: uuidPattern },
+  },
+} as const;
+
+export const getAIPolicyRouteSchema: FastifySchema = {
+  response: { 200: aiPolicyResponse },
+  params: aiPolicyParams,
+};
+
 export const updateAIPolicyRouteSchema: FastifySchema = {
-  response: {
-    200: {
-      type: 'object',
-      additionalProperties: false,
-      required: [
-        'workspaceId',
-        'aiEnabled',
-        'monthlyBudgetMicrounits',
-        'currentSpendMicrounits',
-        'reservedSpendMicrounits',
-        'rateLimitPerMinute',
-        'budgetPeriodStart',
-        'updatedAt',
-        'version',
-      ],
-      properties: {
-        workspaceId: uuid,
-        aiEnabled: { type: 'boolean' },
-        monthlyBudgetMicrounits: { type: 'integer', minimum: 0 },
-        currentSpendMicrounits: { type: 'integer', minimum: 0 },
-        reservedSpendMicrounits: { type: 'integer', minimum: 0 },
-        rateLimitPerMinute: { type: 'integer', minimum: 1 },
-        budgetPeriodStart: dateTime,
-        updatedAt: dateTime,
-        version: { type: 'integer', minimum: 1 },
-      },
-    },
-  },
-  params: {
-    type: 'object',
-    required: ['workspaceId'],
-    additionalProperties: false,
-    properties: {
-      workspaceId: { type: 'string', pattern: uuidPattern },
-    },
-  },
+  response: { 200: aiPolicyResponse },
+  params: aiPolicyParams,
   body: {
     type: 'object',
     required: ['aiEnabled', 'monthlyBudgetMicrounits', 'rateLimitPerMinute'],

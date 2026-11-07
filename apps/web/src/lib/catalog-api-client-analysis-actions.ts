@@ -72,6 +72,7 @@ export async function rejectAnalysisApi(
 export async function updateAIPolicyApi(
   workspaceId: string,
   payload: { aiEnabled: boolean; monthlyBudgetMicrounits: number; rateLimitPerMinute: number },
+  expectedVersion: number,
   signal?: AbortSignal,
 ): Promise<WorkspaceAIPolicyDTO> {
   let res: Response;
@@ -81,6 +82,7 @@ export async function updateAIPolicyApi(
       headers: {
         'Content-Type': 'application/json',
         Accept: 'application/json',
+        'If-Match': `"${expectedVersion}"`,
       },
       credentials: 'include',
       body: JSON.stringify(payload),
@@ -88,6 +90,27 @@ export async function updateAIPolicyApi(
     });
   } catch (err) {
     handleNetworkError(err, 'update AI policy');
+  }
+
+  if (!res.ok) return parseProblemResponse(res);
+  const json = await parseSuccessfulJson(res);
+  return validateAIPolicy(json);
+}
+
+export async function fetchAIPolicyApi(
+  workspaceId: string,
+  signal?: AbortSignal,
+): Promise<WorkspaceAIPolicyDTO> {
+  let res: Response;
+  try {
+    res = await fetch(`/api/v1/workspaces/${encodeURIComponent(workspaceId)}/ai-policy`, {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+      credentials: 'include',
+      ...(signal ? { signal } : {}),
+    });
+  } catch (err) {
+    handleNetworkError(err, 'load AI policy');
   }
 
   if (!res.ok) return parseProblemResponse(res);

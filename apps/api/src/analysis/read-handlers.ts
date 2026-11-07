@@ -5,15 +5,22 @@ import {
   listAnalyses,
   AnalysisNotFoundError,
   OperationNotFoundError,
+  WorkspaceAccessDeniedError,
 } from '@affiliate-content-os/application';
 import {
+  canWorkspaceRole,
   parseAnalysisId,
   parseOperationId,
   parseProductId,
   parseWorkspaceId,
 } from '@affiliate-content-os/domain';
 import { requireAuthenticatedSession } from '../auth/session-auth.js';
-import { serializeAnalysis, serializeAnalysisSummary, serializeOperation } from './serializers.js';
+import {
+  serializeAIPolicy,
+  serializeAnalysis,
+  serializeAnalysisSummary,
+  serializeOperation,
+} from './serializers.js';
 import type { AnalysisRouteDependencies } from './types.js';
 
 export async function handleListAnalyses(
@@ -145,4 +152,32 @@ export async function handleGetOperation(
   }
 
   return reply.status(200).send(serializeOperation(operation));
+}
+
+export async function handleGetAIPolicy(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  deps: AnalysisRouteDependencies,
+): Promise<void> {
+  const authContext = await requireAuthenticatedSession(request, reply, deps.auth);
+  const { workspaceId } = request.params as { readonly workspaceId: string };
+  const wsId = parseWorkspaceId(workspaceId);
+
+  const membership = await deps.workspaceAuthorization.findMembership({
+    workspaceId: wsId,
+    userId: authContext.user.id,
+  });
+  if (
+    !membership ||
+    membership.status !== 'active' ||
+    !canWorkspaceRole(membership.role, 'workspace.manage')
+  ) {
+    throw new WorkspaceAccessDeniedError();
+  }
+  if (!deps.aiPolicyPort) {
+    throw new Error('AI policy reads not supported by current adapter');
+  }
+
+  const policy = await deps.aiPolicyPort.getPolicy(wsId);
+  return reply.status(200).header('ETag', `"${policy.version}"`).send(serializeAIPolicy(policy));
 }

@@ -364,6 +364,93 @@ button:disabled,
   line-height: 1.4;
 }
 
+/* Owner AI policy controls */
+.ai-policy-panel {
+  margin: 1.5rem 0;
+  padding: 1.5rem;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: var(--border-radius);
+  box-shadow: var(--shadow);
+}
+
+.ai-policy-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.ai-policy-header h2 {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+.ai-policy-header p {
+  margin: 0.35rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+}
+
+.ai-policy-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.75rem;
+  margin: 0 0 1.25rem;
+}
+
+.ai-policy-metrics div {
+  padding: 0.75rem;
+  background: var(--secondary-bg);
+  border-radius: var(--border-radius);
+}
+
+.ai-policy-metrics dt {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.ai-policy-metrics dd {
+  margin: 0.25rem 0 0;
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.ai-policy-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(180px, 1fr);
+  gap: 1rem;
+}
+
+.ai-policy-fields small {
+  margin-top: 0.3rem;
+  color: var(--text-muted);
+  line-height: 1.35;
+}
+
+.ai-policy-enabled {
+  margin-bottom: 1rem;
+}
+
+.success-banner {
+  margin-bottom: 1rem;
+  padding: 0.75rem;
+  color: var(--success-fg);
+  background: var(--success-bg);
+  border: 1px solid #a7f3d0;
+  border-radius: var(--border-radius);
+  font-size: 0.875rem;
+}
+
+@media (max-width: 640px) {
+  .ai-policy-fields {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* Modal and Forms */
 .modal-backdrop {
   position: fixed;

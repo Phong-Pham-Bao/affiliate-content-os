@@ -32,6 +32,7 @@ import { WorkspaceSelector } from './workspace-selector.js';
 import { WorkspaceCard } from './workspace-card.js';
 import { CreateWorkspaceDialog } from './create-workspace-dialog.js';
 import { CatalogWorkspaceView } from './catalog/catalog-workspace-view.js';
+import { AIPolicyPanel } from './ai-policy-panel.js';
 
 export function AppShell(): ReactElement {
   const [state, setState] = useState<AppShellState>(createInitialAppShellState);
@@ -167,6 +168,9 @@ export function AppShell(): ReactElement {
         ) : state.activeWorkspace ? (
           <div className="workspace-active-view">
             <WorkspaceCard workspace={state.activeWorkspace} />
+            {state.activeWorkspace.role === 'owner' && (
+              <AIPolicyPanel workspaceId={state.activeWorkspace.id} />
+            )}
             <CatalogWorkspaceView
               workspaceId={state.activeWorkspace.id}
               userRole={state.activeWorkspace.role}

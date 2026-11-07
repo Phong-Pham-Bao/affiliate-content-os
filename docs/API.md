@@ -14,7 +14,7 @@ Runtime schemas and `openapi/openapi.json` are authoritative for these implement
 - `POST /api/v1/workspaces/{workspaceId}/products/{productId}/analyses` with `Idempotency-Key`, returning `202` and an operation location.
 - Product analysis listing, analysis detail, and operation polling.
 - Versioned human accept/reject commands; a conflicting second decision returns `409`.
-- Owner-only, versioned AI policy update with atomic audit.
+- Owner-only AI policy read and versioned update with atomic audit; the web UI uses the policy ETag/version for optimistic concurrency.
 
 AI output remains `generated` until human review. Responses may expose safe provider/model provenance and evidence IDs, but never prompts, raw provider bodies, API keys, OAuth secrets, or chain-of-thought.
 

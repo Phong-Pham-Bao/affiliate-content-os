@@ -4,6 +4,7 @@ import type { AnalysisDTO, AnalysisSummaryDTO } from '../src/types/analysis.js';
 import { AnalysisCard } from '../src/components/catalog/analysis-card.js';
 import { AnalysisViewerModal } from '../src/components/catalog/analysis-viewer-modal.js';
 import { RequestAnalysisDialog } from '../src/components/catalog/request-analysis-dialog.js';
+import { AIPolicyPanel } from '../src/components/ai-policy-panel.js';
 
 describe('Analysis Web Components Rendering', () => {
   const dummySummary: AnalysisSummaryDTO = {
@@ -100,5 +101,15 @@ describe('Analysis Web Components Rendering', () => {
     expect(html).toContain('Product Analysis');
     expect(html).toContain('Niche Synthesis');
     expect(html).toContain('Request Analysis');
+  });
+
+  it('renders an accessible loading state for the owner AI policy panel', () => {
+    const html = renderToStaticMarkup(
+      <AIPolicyPanel workspaceId="0192b012-3456-789a-8bcd-ef0123456703" />,
+    );
+
+    expect(html).toContain('AI Policy &amp; Budget');
+    expect(html).toContain('Loading AI policy...');
+    expect(html).toContain('role="status"');
   });
 });

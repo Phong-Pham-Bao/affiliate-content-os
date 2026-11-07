@@ -7,12 +7,18 @@ import {
   RATE_LIMIT_ANALYSIS_REVIEW_WINDOW_MS,
 } from './constants.js';
 import { handleEnqueueAnalysis, handleUpdateAIPolicy } from './request-handlers.js';
-import { handleGetAnalysis, handleGetOperation, handleListAnalyses } from './read-handlers.js';
+import {
+  handleGetAIPolicy,
+  handleGetAnalysis,
+  handleGetOperation,
+  handleListAnalyses,
+} from './read-handlers.js';
 import { handleAcceptAnalysis, handleRejectAnalysis } from './review-handlers.js';
 import {
   acceptAnalysisRouteSchema,
   enqueueAnalysisRouteSchema,
   getAnalysisRouteSchema,
+  getAIPolicyRouteSchema,
   getOperationRouteSchema,
   listAnalysesRouteSchema,
   rejectAnalysisRouteSchema,
@@ -100,7 +106,16 @@ export function createAnalysisRoutes(deps: AnalysisRouteDependencies): FastifyPl
       },
     );
 
-    // 7 PUT /api/v1/workspaces/:workspaceId/ai-policy
+    // 7 GET /api/v1/workspaces/:workspaceId/ai-policy
+    fastify.get(
+      '/api/v1/workspaces/:workspaceId/ai-policy',
+      { schema: getAIPolicyRouteSchema },
+      async (request, reply) => {
+        await handleGetAIPolicy(request, reply, deps);
+      },
+    );
+
+    // 8 PUT /api/v1/workspaces/:workspaceId/ai-policy
     fastify.put(
       '/api/v1/workspaces/:workspaceId/ai-policy',
       { schema: updateAIPolicyRouteSchema, config: reviewRateLimit },
