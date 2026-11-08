@@ -3,12 +3,15 @@ import type {
   AIUsageSnapshot,
   AnalysisSnapshot,
   AudienceInsightBoard,
+  ContentBrief,
   NicheAnalysisContent,
   ProductAnalysisContent,
   ProductCampaignPlan,
   ProductFactSnapshot,
   SafeFailureCategory,
+  SingleVideoScript,
   VideoSeriesPlan,
+  WorkOrderId,
   WorkspaceId,
 } from '@affiliate-content-os/domain';
 import type { ProductId } from '@affiliate-content-os/domain';
@@ -49,6 +52,16 @@ export interface AIPlanningRoleInput {
   readonly sourceAnalyses: readonly AnalysisSnapshot[];
   readonly brandVoice?: string | null | undefined;
   readonly disclosureRequirement?: string | null | undefined;
+}
+
+export interface AIScriptVideoInput {
+  readonly workspaceId: WorkspaceId;
+  readonly productId: ProductId;
+  readonly workOrderId: WorkOrderId;
+  readonly videoNumber: 1 | 2 | 3 | 4 | 5;
+  readonly targetVariantCount: number;
+  readonly brief: ContentBrief;
+  readonly changeInstruction?: string | null | undefined;
 }
 
 export interface AIAnalysisGatewayResult<T> {
@@ -93,4 +106,10 @@ export interface AIGatewayPort {
     repairFeedback?: { readonly errorCategory: string; readonly errorPath?: string | undefined },
     options?: { readonly signal?: AbortSignal },
   ): Promise<AIAnalysisGatewayResult<VideoSeriesPlan>>;
+
+  executeScriptVideo(
+    input: AIScriptVideoInput,
+    repairFeedback?: { readonly errorCategory: string; readonly errorPath?: string | undefined },
+    options?: { readonly signal?: AbortSignal },
+  ): Promise<AIAnalysisGatewayResult<SingleVideoScript>>;
 }

@@ -17,14 +17,26 @@ import {
   handleListWorkOrders,
 } from './read-handlers.js';
 import {
+  createManualRevisionRouteSchema,
   getArtifactByIdRouteSchema,
+  getArtifactRevisionByNumberRouteSchema,
+  getArtifactRevisionsRouteSchema,
+  getChangeRequestByIdRouteSchema,
   getWorkOrderRouteSchema,
   kickoffWorkOrderRouteSchema,
   listWorkOrderActivitiesRouteSchema,
   listWorkOrderArtifactsRouteSchema,
   listWorkOrdersRouteSchema,
+  requestScriptChangesRouteSchema,
   retryWorkOrderPlanningRouteSchema,
 } from './schemas.js';
+import {
+  handleCreateManualRevision,
+  handleGetArtifactRevisionByNumber,
+  handleGetArtifactRevisions,
+  handleGetChangeRequestById,
+  handleRequestScriptChanges,
+} from './revision-handlers.js';
 import type { WorkforceRouteDependencies } from './types.js';
 
 export function createWorkforceRoutes(deps: WorkforceRouteDependencies): FastifyPluginAsync {
@@ -113,6 +125,46 @@ export function createWorkforceRoutes(deps: WorkforceRouteDependencies): Fastify
       { schema: retryWorkOrderPlanningRouteSchema, config: retryRateLimit },
       async (request, reply) => {
         await handleRetryWorkOrderPlanning(request, reply, deps);
+      },
+    );
+
+    fastify.get(
+      '/api/v1/workspaces/:workspaceId/artifacts/:artifactId/revisions',
+      { schema: getArtifactRevisionsRouteSchema, config: readRateLimit },
+      async (request, reply) => {
+        await handleGetArtifactRevisions(request, reply, deps);
+      },
+    );
+
+    fastify.get(
+      '/api/v1/workspaces/:workspaceId/artifacts/:artifactId/revisions/:revisionNumber',
+      { schema: getArtifactRevisionByNumberRouteSchema, config: readRateLimit },
+      async (request, reply) => {
+        await handleGetArtifactRevisionByNumber(request, reply, deps);
+      },
+    );
+
+    fastify.post(
+      '/api/v1/workspaces/:workspaceId/artifacts/:artifactId/revisions',
+      { schema: createManualRevisionRouteSchema, config: kickoffRateLimit },
+      async (request, reply) => {
+        await handleCreateManualRevision(request, reply, deps);
+      },
+    );
+
+    fastify.post(
+      '/api/v1/workspaces/:workspaceId/artifacts/:artifactId/request-changes',
+      { schema: requestScriptChangesRouteSchema, config: kickoffRateLimit },
+      async (request, reply) => {
+        await handleRequestScriptChanges(request, reply, deps);
+      },
+    );
+
+    fastify.get(
+      '/api/v1/workspaces/:workspaceId/artifacts/:artifactId/change-requests/:changeRequestId',
+      { schema: getChangeRequestByIdRouteSchema, config: readRateLimit },
+      async (request, reply) => {
+        await handleGetChangeRequestById(request, reply, deps);
       },
     );
   };

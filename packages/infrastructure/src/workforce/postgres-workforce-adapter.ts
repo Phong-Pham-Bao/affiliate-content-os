@@ -1,12 +1,17 @@
 import type pg from 'pg';
 import type {
+  ArtifactChangeRequestDTO,
   ContentArtifactDetailDTO,
+  ContentArtifactRevisionDTO,
   ContentArtifactSummaryDTO,
+  CreateManualRevisionParams,
   DecodedWorkOrderCursor,
   KickoffTransactionResult,
   KickoffWorkOrderAtomicParams,
+  RequestScriptChangesParams,
   RetryWorkOrderPlanningAtomicParams,
   RetryWorkOrderPlanningResult,
+  ScriptGenerationUnitDTO,
   WorkforcePersistencePort,
   WorkOrderActivityDTO,
   WorkOrderDetailDTO,
@@ -21,27 +26,42 @@ import type {
 import { executeKickoffWorkOrderTransaction } from './kickoff-work-order-transaction.js';
 import { executeRetryWorkOrderTransaction } from './retry-work-order-transaction.js';
 import { queryWorkOrderDetail } from './workforce-detail-query.js';
+import { queryWorkOrdersList } from './workforce-list-query.js';
 import {
   queryArtifactById,
   queryWorkOrderActivities,
   queryWorkOrderArtifacts,
 } from './workforce-artifact-queries.js';
+import {
+  getArtifactRevisionByNumberQuery,
+  getArtifactRevisionsQuery,
+  getChangeRequestByIdQuery,
+  listScriptUnitsQuery,
+} from './workforce-revision-queries.js';
+import { createManualRevisionTransaction } from './workforce-manual-revision.js';
+import { requestScriptChangesTransaction } from './workforce-request-changes.js';
 import type { KickoffTestHooks } from './workforce-types.js';
-import { mapWorkItemRowToSnapshot, mapWorkOrderRowToSummaryDTO } from './workforce-mappers.js';
+import { mapWorkItemRowToSnapshot } from './workforce-mappers.js';
 
 export class PostgresWorkforceAdapter implements WorkforcePersistencePort {
   constructor(private readonly pool: pg.Pool) {}
 
-  public async kickoffWorkOrderAtomic(
-    params: KickoffWorkOrderAtomicParams,
-    testHooks?: KickoffTestHooks,
-  ): Promise<KickoffTransactionResult> {
+  private async withClient<T>(fn: (client: pg.PoolClient) => Promise<T>): Promise<T> {
+    const client = await this.pool.connect();
+    try {
+      return await fn(client);
+    } finally {
+      client.release();
+    }
+  }
+
+  private async withTransaction<T>(fn: (client: pg.PoolClient) => Promise<T>): Promise<T> {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
-      const result = await executeKickoffWorkOrderTransaction(client, params, testHooks);
+      const res = await fn(client);
       await client.query('COMMIT');
-      return result;
+      return res;
     } catch (err) {
       await client.query('ROLLBACK');
       throw err;
@@ -50,21 +70,19 @@ export class PostgresWorkforceAdapter implements WorkforcePersistencePort {
     }
   }
 
+  public async kickoffWorkOrderAtomic(
+    params: KickoffWorkOrderAtomicParams,
+    testHooks?: KickoffTestHooks,
+  ): Promise<KickoffTransactionResult> {
+    return this.withTransaction((client) =>
+      executeKickoffWorkOrderTransaction(client, params, testHooks),
+    );
+  }
+
   public async retryWorkOrderPlanningAtomic(
     params: RetryWorkOrderPlanningAtomicParams,
   ): Promise<RetryWorkOrderPlanningResult> {
-    const client = await this.pool.connect();
-    try {
-      await client.query('BEGIN');
-      const result = await executeRetryWorkOrderTransaction(client, params);
-      await client.query('COMMIT');
-      return result;
-    } catch (err) {
-      await client.query('ROLLBACK');
-      throw err;
-    } finally {
-      client.release();
-    }
+    return this.withTransaction((client) => executeRetryWorkOrderTransaction(client, params));
   }
 
   public async getWorkOrderById(
@@ -82,54 +100,7 @@ export class PostgresWorkforceAdapter implements WorkforcePersistencePort {
       readonly productId?: ProductId | undefined;
     },
   ): Promise<readonly WorkOrderSummaryDTO[]> {
-    let res: pg.QueryResult;
-    if (options.productId) {
-      if (options.cursor) {
-        res = await this.pool.query(
-          `SELECT * FROM work_orders
-           WHERE workspace_id = $1 AND product_id = $2
-             AND (updated_at < $3 OR (updated_at = $3 AND id < $4))
-           ORDER BY updated_at DESC, id DESC
-           LIMIT $5`,
-          [
-            workspaceId,
-            options.productId,
-            options.cursor.updatedAt,
-            options.cursor.id,
-            options.limit,
-          ],
-        );
-      } else {
-        res = await this.pool.query(
-          `SELECT * FROM work_orders
-           WHERE workspace_id = $1 AND product_id = $2
-           ORDER BY updated_at DESC, id DESC
-           LIMIT $3`,
-          [workspaceId, options.productId, options.limit],
-        );
-      }
-    } else {
-      if (options.cursor) {
-        res = await this.pool.query(
-          `SELECT * FROM work_orders
-           WHERE workspace_id = $1
-             AND (updated_at < $2 OR (updated_at = $2 AND id < $3))
-           ORDER BY updated_at DESC, id DESC
-           LIMIT $4`,
-          [workspaceId, options.cursor.updatedAt, options.cursor.id, options.limit],
-        );
-      } else {
-        res = await this.pool.query(
-          `SELECT * FROM work_orders
-           WHERE workspace_id = $1
-           ORDER BY updated_at DESC, id DESC
-           LIMIT $2`,
-          [workspaceId, options.limit],
-        );
-      }
-    }
-
-    return Object.freeze(res.rows.map(mapWorkOrderRowToSummaryDTO));
+    return queryWorkOrdersList(this.pool, workspaceId, options);
   }
 
   public async findReadyWorkItems(
@@ -158,6 +129,55 @@ export class PostgresWorkforceAdapter implements WorkforcePersistencePort {
     artifactId: string,
   ): Promise<ContentArtifactDetailDTO | null> {
     return queryArtifactById(this.pool, workspaceId, artifactId);
+  }
+
+  public async getArtifactRevisions(
+    workspaceId: WorkspaceId,
+    artifactId: string,
+  ): Promise<readonly ContentArtifactRevisionDTO[]> {
+    return this.withClient((client) => getArtifactRevisionsQuery(client, workspaceId, artifactId));
+  }
+
+  public async getArtifactRevisionByNumber(
+    workspaceId: WorkspaceId,
+    artifactId: string,
+    revisionNumber: number,
+  ): Promise<ContentArtifactDetailDTO | null> {
+    return this.withClient((client) =>
+      getArtifactRevisionByNumberQuery(client, workspaceId, artifactId, revisionNumber),
+    );
+  }
+
+  public async getChangeRequestById(
+    workspaceId: WorkspaceId,
+    artifactId: string,
+    changeRequestId: string,
+  ): Promise<ArtifactChangeRequestDTO | null> {
+    return this.withClient((client) =>
+      getChangeRequestByIdQuery(client, workspaceId, artifactId, changeRequestId),
+    );
+  }
+
+  public async createManualRevision(
+    params: CreateManualRevisionParams,
+  ): Promise<ContentArtifactDetailDTO> {
+    return this.withTransaction((client) => createManualRevisionTransaction(client, params));
+  }
+
+  public async requestScriptChanges(
+    params: RequestScriptChangesParams,
+  ): Promise<ArtifactChangeRequestDTO> {
+    return this.withTransaction((client) => requestScriptChangesTransaction(client, params));
+  }
+
+  public async listScriptUnits(
+    workspaceId: WorkspaceId,
+    workOrderId: string,
+    changeRequestId?: string | null,
+  ): Promise<readonly ScriptGenerationUnitDTO[]> {
+    return this.withClient((client) =>
+      listScriptUnitsQuery(client, workspaceId, workOrderId, changeRequestId),
+    );
   }
 
   public async listWorkOrderActivities(

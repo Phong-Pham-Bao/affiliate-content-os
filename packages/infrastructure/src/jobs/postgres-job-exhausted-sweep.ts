@@ -82,7 +82,36 @@ export async function sweepExhaustedJobs(client: pg.PoolClient): Promise<void> {
       }
     }
 
-    if (row.job_type === 'workforce_planning' && row.work_item_id && row.work_order_id) {
+    if (row.job_type === 'scriptwriting') {
+      await client.query(
+        `UPDATE script_generation_units
+         SET status = 'failed',
+             error_category = 'provider_timeout',
+             error_message = 'Job execution attempts exhausted after worker timeout',
+             updated_at = NOW(),
+             version = version + 1
+         WHERE job_id = $1 AND workspace_id = $2`,
+        [row.id, row.workspace_id],
+      );
+
+      await client.query(
+        `UPDATE artifact_change_requests
+         SET status = 'failed',
+             failure_reason = 'Script unit execution exhausted',
+             updated_at = NOW(),
+             version = version + 1
+         WHERE id IN (
+           SELECT change_request_id FROM script_generation_units WHERE job_id = $1 AND change_request_id IS NOT NULL
+         ) AND workspace_id = $2 AND status = 'in_progress'`,
+        [row.id, row.workspace_id],
+      );
+    }
+
+    if (
+      (row.job_type === 'workforce_planning' || row.job_type === 'scriptwriting') &&
+      row.work_item_id &&
+      row.work_order_id
+    ) {
       await client.query(
         `UPDATE work_items
          SET status = 'failed',

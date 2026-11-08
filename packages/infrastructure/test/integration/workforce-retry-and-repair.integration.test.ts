@@ -262,9 +262,13 @@ describe('workforce-retry-and-repair.integration (Items d & e)', () => {
     );
     const reservedDuringRepair = Number(pol1.rows[0].reserved_spend_microunits);
 
-    // Make job claimable for repair attempt
+    // Push any remaining initial jobs into the future and make repair job claimable
     await pool.query(
-      `UPDATE job_executions SET next_attempt_at = NOW() - INTERVAL '1 second' WHERE id = $1`,
+      `UPDATE job_executions SET next_attempt_at = NOW() + INTERVAL '1 hour' WHERE id != $1 AND work_order_id = $2`,
+      [claimedJob!.id, pl.workOrderId],
+    );
+    await pool.query(
+      `UPDATE job_executions SET next_attempt_at = NOW() - INTERVAL '1 hour' WHERE id = $1`,
       [claimedJob!.id],
     );
 

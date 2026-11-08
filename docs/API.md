@@ -1,6 +1,6 @@
 # Affiliate Content OS - HTTP API Contract
 
-Status: Sprint 3 Checkpoint B implemented contract for identity, catalog, intelligence, and workforce planning slices
+Status: Sprint 3 Checkpoint C implemented contract for identity, catalog, intelligence, workforce planning, and content studio revisions
 
 Last updated: 2026-11-08
 
@@ -29,6 +29,16 @@ The AI workforce planning HTTP routes and runtime schemas are implemented and do
 - `GET /api/v1/workspaces/{workspaceId}/artifacts/{artifactId}`: Returns validated artifact detail, latest revision, and verified evidence references.
 - `GET /api/v1/workspaces/{workspaceId}/work-orders/{workOrderId}/activity`: Lists audit activity events for the work order.
 - `POST /api/v1/workspaces/{workspaceId}/work-orders/{workOrderId}/retry`: Bounded manual retry for recoverable failed planning items.
+
+### Sprint 3 Checkpoint C: Content Studio & Immutable Revisions
+
+The Checkpoint C content studio, immutable revision history, manual editing, and change-request routes are implemented and documented in OpenAPI (`openapi/openapi.json`):
+
+- `GET /api/v1/workspaces/{workspaceId}/artifacts/{artifactId}/revisions`: Lists all immutable revisions of an artifact with pagination, revision numbers, lineage types (`ai_generated`, `manual_edit`, `request_changes`), hashes, author role keys, and timestamps.
+- `GET /api/v1/workspaces/{workspaceId}/artifacts/{artifactId}/revisions/{revisionNumber}`: Authoritative read of a specific immutable revision including full typed content (`ScriptPackage`), provider/model provenance, usage metrics, and verified lineage.
+- `POST /api/v1/workspaces/{workspaceId}/artifacts/{artifactId}/revisions`: Manual edit mutation by an editor/owner creating a new immutable revision from a complete validated structured script package. Enforces optimistic preconditions (`expectedVersion`, `baseRevisionNumber`, `baseContentHashHex`). Returns `201 Created`.
+- `POST /api/v1/workspaces/{workspaceId}/artifacts/{artifactId}/request-changes`: Targeted change request by an editor/owner against an exact base revision. Validates instruction text (1..2000 chars), selected video numbers (subset of 1..5), target variant count (1..3), reserves budget, and enqueues durable regeneration units for selected videos only under the 3-concurrency capacity gate. Returns `202 Accepted` with `changeRequestId`.
+- `GET /api/v1/workspaces/{workspaceId}/artifacts/{artifactId}/change-requests/{changeRequestId}`: Polling endpoint for change request execution status (`pending`, `in_progress`, `completed`, `failed`), failure reasons, and resulting revision number once assembled.
 
 ## 1. Contract principles
 

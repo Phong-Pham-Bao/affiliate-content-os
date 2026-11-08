@@ -1,6 +1,6 @@
 # Affiliate Content OS - Database Specification
 
-Status: Sprint 3 Checkpoint B implemented through migration `0009_workforce_planning_execution.sql`
+Status: Sprint 3 Checkpoint C implemented through migration `0010_content_studio_revisions.sql`
 
 Last updated: 2026-11-08
 
@@ -231,6 +231,60 @@ Office state projections for human-facing office visualization.
 - `id UUID PRIMARY KEY`, `workspace_id UUID NOT NULL`, `work_order_id UUID NOT NULL`, `role_definition_id UUID NOT NULL REFERENCES agent_role_definitions(id)`, `work_item_id UUID NULL`, `office_state TEXT NOT NULL`, `waiting_on_work_item_id UUID NULL`, `latest_report_code TEXT NULL`, `created_at`, `updated_at`, `version`.
 - Unique constraint: `(work_order_id, role_definition_id)`.
 - Trigger `agent_assignments_check_chief_of_staff`: enforces Chief of Staff has `work_item_id IS NULL`; all other 5 roles must have `work_item_id IS NOT NULL`.
+
+### Sprint 3 Checkpoint B: Planning execution & content artifacts
+
+Migration `0009_workforce_planning_execution.sql` adds durable content artifacts and immutable planning revisions:
+
+#### `content_artifacts`
+Parent aggregate container representing a generated deliverable.
+- `id UUID PRIMARY KEY`, `workspace_id UUID NOT NULL REFERENCES workspaces(id)`, `product_id UUID NOT NULL`, `work_order_id UUID NOT NULL`, `work_item_id UUID NOT NULL`, `assignment_id UUID NOT NULL`, `author_role_key TEXT NOT NULL`, `artifact_type TEXT NOT NULL`, `current_revision_number INTEGER NOT NULL DEFAULT 1`, `created_at TIMESTAMPTZ NOT NULL`, `updated_at TIMESTAMPTZ NOT NULL`, `version BIGINT NOT NULL DEFAULT 1`.
+- Unique constraints: `(workspace_id, id)`, `(workspace_id, work_order_id, artifact_type)`.
+- Composite FKs: `(workspace_id, product_id)` to `products`, `(workspace_id, work_order_id, work_item_id)` to `work_items`, `(workspace_id, work_order_id, assignment_id)` to `agent_assignments`.
+- Artifact types: `product_campaign_plan`, `audience_insight_board`, `video_series_plan`, `script_package`, `compliance_report`.
+
+#### `content_artifact_revisions`
+Append-only immutable revisions of content artifacts.
+- `id UUID PRIMARY KEY`, `workspace_id UUID NOT NULL REFERENCES workspaces(id)`, `artifact_id UUID NOT NULL`, `revision_number INTEGER NOT NULL`, `schema_version INTEGER NOT NULL`, `content_json JSONB NOT NULL`, `content_hash BYTEA NOT NULL` (32 bytes), `ai_run_id UUID NULL`, `provider TEXT NULL`, `model TEXT NULL`, `prompt_template TEXT NULL`, `prompt_version TEXT NULL`, `token_input INTEGER NULL`, `token_output INTEGER NULL`, `cost_microunits BIGINT NULL`, `latency_ms INTEGER NULL`, `created_by_user_id UUID NOT NULL REFERENCES users(id)`, `created_at TIMESTAMPTZ NOT NULL`.
+- Unique constraints: `(workspace_id, id)`, `(workspace_id, artifact_id, revision_number)`.
+- Composite FK: `(workspace_id, artifact_id)` to `content_artifacts`.
+- Trigger `content_artifact_revisions_enforce_immutability`: blocks any `UPDATE` or `DELETE`.
+
+#### `artifact_evidence_refs`
+Immutable join table capturing verifiable evidence references for an artifact revision.
+- `id UUID PRIMARY KEY`, `workspace_id UUID NOT NULL REFERENCES workspaces(id)`, `artifact_id UUID NOT NULL`, `revision_number INTEGER NOT NULL`, `source_kind TEXT NOT NULL`, `source_id UUID NOT NULL`, `created_at TIMESTAMPTZ NOT NULL`.
+- Composite FK: `(workspace_id, artifact_id, revision_number)` to `content_artifact_revisions`.
+- Source kinds: `product_fact`, `analysis`.
+
+### Sprint 3 Checkpoint C: Content studio, script units & immutable revisions
+
+Migration `0010_content_studio_revisions.sql` adds script-generation units, content briefs, change requests, and immutable lineage:
+
+#### `content_briefs`
+Authoritative synthesized content brief freezing the 3 Checkpoint B planning artifact revisions, confirmed facts, accepted analyses, brand voice, and default disclosure before scriptwriting kicks off.
+- `id UUID PRIMARY KEY`, `workspace_id UUID NOT NULL REFERENCES workspaces(id)`, `product_id UUID NOT NULL`, `work_order_id UUID NOT NULL`, `brief_version INTEGER NOT NULL DEFAULT 1`, `brief_hash BYTEA NOT NULL` (32 bytes), `brief_json JSONB NOT NULL`, `created_at TIMESTAMPTZ NOT NULL`.
+- Unique constraints: `(workspace_id, id)`, `(workspace_id, work_order_id, brief_version)`.
+- Composite FKs: `(workspace_id, product_id)` to `products`, `(workspace_id, work_order_id)` to `work_orders`.
+- Trigger `content_briefs_enforce_immutability`: blocks any `UPDATE` or `DELETE`.
+
+#### `artifact_change_requests`
+Tracks human-requested changes against an exact base revision of a script package.
+- `id UUID PRIMARY KEY`, `workspace_id UUID NOT NULL REFERENCES workspaces(id)`, `artifact_id UUID NOT NULL`, `base_revision_number INTEGER NOT NULL`, `base_content_hash BYTEA NOT NULL` (32 bytes), `requested_by_user_id UUID NOT NULL REFERENCES users(id)`, `instruction_text TEXT NOT NULL` (1..2000 chars), `selected_video_numbers JSONB NOT NULL`, `target_variant_count INTEGER NOT NULL DEFAULT 1`, `status TEXT NOT NULL`, `resulting_revision_number INTEGER NULL`, `failure_reason TEXT NULL`, `created_at TIMESTAMPTZ NOT NULL`, `updated_at TIMESTAMPTZ NOT NULL`, `version BIGINT NOT NULL DEFAULT 1`.
+- Statuses: `pending`, `in_progress`, `completed`, `failed`, `canceled`.
+- Composite FKs: `(workspace_id, artifact_id)` to `content_artifacts`, `(workspace_id, artifact_id, base_revision_number)` to `content_artifact_revisions`.
+
+#### `script_generation_units`
+Durable tracking for each video script unit (1..5) generated by the scriptwriting stage under the workspace 3-concurrency capacity gate.
+- `id UUID PRIMARY KEY`, `workspace_id UUID NOT NULL REFERENCES workspaces(id)`, `product_id UUID NOT NULL`, `work_order_id UUID NOT NULL`, `work_item_id UUID NOT NULL`, `job_id UUID NOT NULL`, `operation_id UUID NOT NULL`, `ai_run_id UUID NOT NULL`, `video_number INTEGER NOT NULL` (1..5), `target_variant_count INTEGER NOT NULL DEFAULT 1` (1..3), `change_request_id UUID NULL REFERENCES artifact_change_requests(id)`, `status TEXT NOT NULL`, `output_json JSONB NULL`, `content_hash BYTEA NULL` (32 bytes), `error_category TEXT NULL`, `error_message TEXT NULL`, `created_at TIMESTAMPTZ NOT NULL`, `updated_at TIMESTAMPTZ NOT NULL`, `version BIGINT NOT NULL DEFAULT 1`.
+- Statuses: `queued`, `running`, `succeeded`, `retry_wait`, `failed`, `canceled`.
+- Composite FKs: `(workspace_id, product_id)` to `products`, `(workspace_id, work_order_id, work_item_id)` to `work_items`, `(workspace_id, job_id)` to `job_executions`.
+
+#### `content_artifact_lineage`
+Immutable lineage record for each revision of a script package, tracking parent revision, lineage type (`ai_generated`, `manual_edit`, `request_changes`), brief hash/version, planning revision IDs, source script units, and change request ID.
+- `id UUID PRIMARY KEY`, `workspace_id UUID NOT NULL REFERENCES workspaces(id)`, `artifact_id UUID NOT NULL`, `revision_number INTEGER NOT NULL`, `parent_revision_number INTEGER NULL`, `lineage_type TEXT NOT NULL`, `change_request_id UUID NULL REFERENCES artifact_change_requests(id)`, `content_brief_hash BYTEA NULL`, `content_brief_version INTEGER NULL`, `planning_revision_ids_json JSONB NOT NULL DEFAULT '[]'::jsonb`, `source_script_unit_ids_json JSONB NOT NULL DEFAULT '[]'::jsonb`, `metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb`, `created_at TIMESTAMPTZ NOT NULL`.
+- Unique constraints: `(workspace_id, id)`, `(artifact_id, revision_number)`.
+- Composite FKs: `(workspace_id, artifact_id)` to `content_artifacts`, `(workspace_id, artifact_id, revision_number)` to `content_artifact_revisions`.
+- Trigger `content_artifact_lineage_enforce_immutability`: blocks any `UPDATE` or `DELETE`.
 
 ## 6. Content and approval
 

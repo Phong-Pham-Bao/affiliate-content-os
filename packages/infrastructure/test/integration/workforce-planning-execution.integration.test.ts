@@ -221,6 +221,12 @@ describe('workforce-planning-execution.integration (Controlled Fake-Provider Sli
         };
         return { success: true, content, usage: fakeUsage, provenance: fakeProv };
       },
+
+      executeScriptVideo: async () => ({
+        success: false,
+        usage: fakeUsage,
+        provenance: fakeProv,
+      }),
     };
   }
 
@@ -385,15 +391,16 @@ describe('workforce-planning-execution.integration (Controlled Fake-Provider Sli
       expect(detail!.evidenceReferences.length).toBeGreaterThanOrEqual(1);
     }
 
-    // 3. Verify budget settlement: reserved released (back to 0), current spend increased by 3 * 45,000 = 135,000
+    // 3. Verify budget settlement: planning reserved released, current spend increased by 3 * 45,000 = 135,000,
+    // and Checkpoint C scriptwriting stage automatically reserved 50,000 (5 units * 10,000)
     const polResAfter = await pool.query(
       `SELECT reserved_spend_microunits, current_spend_microunits FROM workspace_ai_policies WHERE workspace_id = $1`,
       [wsId],
     );
-    expect(Number(polResAfter.rows[0].reserved_spend_microunits)).toBe(0);
+    expect(Number(polResAfter.rows[0].reserved_spend_microunits)).toBe(50000);
     expect(Number(polResAfter.rows[0].current_spend_microunits)).toBe(135000);
 
-    // 4. Verify work items state: 3 planning items completed, scriptwriting is now ready!
+    // 4. Verify work items state: 3 planning items completed, scriptwriting is now running with 5 enqueued units!
     const woDetail = await adapter.getWorkOrderById(wsId, params.workOrder.id);
     expect(woDetail).not.toBeNull();
 
@@ -407,11 +414,11 @@ describe('workforce-planning-execution.integration (Controlled Fake-Provider Sli
 
     const scriptwriterItem = woDetail!.workItems.find((w) => w.taskKey === 'scriptwriting');
     expect(scriptwriterItem).toBeDefined();
-    expect(scriptwriterItem!.status).toBe('ready'); // Unlocked!
+    expect(scriptwriterItem!.status).toBe('running'); // Auto-enqueued in Checkpoint C!
 
     const scriptwriterAssignment = woDetail!.assignments.find((a) => a.roleKey === 'scriptwriter');
     expect(scriptwriterAssignment).toBeDefined();
-    expect(scriptwriterAssignment!.officeState).toBe('preparing');
+    expect(scriptwriterAssignment!.officeState).toBe('running');
     expect(scriptwriterAssignment!.waitingOnWorkItemId).toBeNull();
 
     // 5. Compliance reviewer remains waiting on scriptwriter

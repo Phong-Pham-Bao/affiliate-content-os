@@ -143,10 +143,26 @@ export interface ArtifactEvidenceRefDTO {
   readonly createdAt: string;
 }
 
+export interface ContentArtifactLineageDTO {
+  readonly id: string;
+  readonly artifactId: string;
+  readonly revisionNumber: number;
+  readonly parentRevisionNumber: number | null;
+  readonly lineageType: 'ai_generated' | 'human_edited' | 'change_request';
+  readonly changeRequestId: string | null;
+  readonly contentBriefHashHex: string;
+  readonly contentBriefVersion: number;
+  readonly planningRevisionIds: Record<string, unknown>;
+  readonly sourceScriptUnitIds: readonly string[];
+  readonly metadata: Record<string, unknown>;
+  readonly createdAt: string;
+}
+
 export interface ContentArtifactDetailDTO {
   readonly artifact: ContentArtifactSummaryDTO;
   readonly latestRevision: ContentArtifactRevisionDTO;
   readonly evidenceReferences: readonly ArtifactEvidenceRefDTO[];
+  readonly lineage?: ContentArtifactLineageDTO | null | undefined;
 }
 
 export interface WorkOrderActivityDTO {

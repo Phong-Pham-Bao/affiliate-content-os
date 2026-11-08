@@ -211,3 +211,11 @@ export async function retryWorkOrderPlanningApi(
   const json = await parseSuccessfulJson(res);
   return validateRetryResult(json);
 }
+
+export {
+  fetchArtifactRevisionsApi,
+  fetchArtifactRevisionByNumberApi,
+  createManualRevisionApi,
+  requestScriptChangesApi,
+  fetchChangeRequestByIdApi,
+} from './workforce-api-client-revisions.js';

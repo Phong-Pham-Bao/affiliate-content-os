@@ -137,3 +137,49 @@ export {
   type VideoSeriesCreativeDirection,
   type VideoSeriesPlan,
 } from './video-series-plan-types.js';
+
+export {
+  type ScriptCallToAction,
+  type ScriptDisclosure,
+  type ScriptHook,
+  type ScriptOverlay,
+  type ScriptPackage,
+  type ScriptScene,
+  type ScriptShot,
+  type ScriptVariant,
+  type ScriptVideo,
+  type SingleVideoScript,
+} from './script-package-types.js';
+
+export {
+  validateCta,
+  validateDisclosure,
+  validateHook,
+  validateOverlays,
+  validateScenes,
+  validateShots,
+  validateTimeRange,
+  validateVariants,
+} from './script-package-validators.js';
+
+export {
+  validateScriptPackage,
+  validateScriptVideo,
+  validateSingleVideoScript,
+} from './script-video-validators.js';
+
+export {
+  computeContentBriefHash,
+  type ContentBrief,
+  type ContentBriefProductSummary,
+  type PlanningRevisionsMeta,
+} from './content-brief-types.js';
+
+export {
+  ARTIFACT_CHANGE_REQUEST_STATUSES,
+  ARTIFACT_LINEAGE_TYPES,
+  type ArtifactChangeRequest,
+  type ArtifactChangeRequestStatus,
+  type ArtifactLineageRecord,
+  type ArtifactLineageType,
+} from './artifact-lineage-types.js';

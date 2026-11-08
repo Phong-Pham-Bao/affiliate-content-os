@@ -167,6 +167,50 @@ export function createTestWorkforceDeps(options?: {
         retriedItemIds: ['wi-1'],
         cached: false,
       }),
+      getArtifactRevisions: vi.fn().mockResolvedValue([mockArtifactDetail.latestRevision]),
+      getArtifactRevisionByNumber: vi
+        .fn()
+        .mockImplementation((_ws, _artId, revNum) =>
+          revNum === 1 ? Promise.resolve(mockArtifactDetail) : Promise.resolve(null),
+        ),
+      getChangeRequestById: vi.fn().mockImplementation((_ws, _artId, crId) =>
+        crId === '019318b2-5f33-722e-a5df-036f007b89fc'
+          ? Promise.resolve({
+              id: '019318b2-5f33-722e-a5df-036f007b89fc',
+              artifactId: mockArtifactDetail.artifact.id,
+              baseRevisionNumber: 1,
+              baseContentHashHex: 'a'.repeat(64),
+              requestedByUserId: 'user-1',
+              instructionText: 'Instruction',
+              selectedVideoNumbers: [1],
+              targetVariantCount: 1,
+              status: 'in_progress',
+              resultingRevisionNumber: null,
+              failureReason: null,
+              createdAt: '2026-11-08T00:00:00.000Z',
+              updatedAt: '2026-11-08T00:00:00.000Z',
+              version: 1,
+            })
+          : Promise.resolve(null),
+      ),
+      createManualRevision: vi.fn().mockResolvedValue(mockArtifactDetail),
+      requestScriptChanges: vi.fn().mockResolvedValue({
+        id: '019318b2-5f33-722e-a5df-036f007b89fc',
+        artifactId: mockArtifactDetail.artifact.id,
+        baseRevisionNumber: 1,
+        baseContentHashHex: 'a'.repeat(64),
+        requestedByUserId: 'user-1',
+        instructionText: 'Instruction',
+        selectedVideoNumbers: [1],
+        targetVariantCount: 1,
+        status: 'in_progress',
+        resultingRevisionNumber: null,
+        failureReason: null,
+        createdAt: '2026-11-08T00:00:00.000Z',
+        updatedAt: '2026-11-08T00:00:00.000Z',
+        version: 1,
+      }),
+      listScriptUnits: vi.fn().mockResolvedValue([]),
     },
   };
 }

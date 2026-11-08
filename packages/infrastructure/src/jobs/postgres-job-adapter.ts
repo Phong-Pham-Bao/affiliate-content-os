@@ -57,7 +57,7 @@ export class PostgresJobAdapter implements DurableJobQueuePort {
               OR (j.status = 'running' AND j.lease_expires_at < NOW() AND j.attempt < j.max_attempts))
              AND j.next_attempt_at <= NOW()
              AND (
-               j.job_type <> 'workforce_planning'
+               j.job_type NOT IN ('workforce_planning', 'scriptwriting')
                OR j.workspace_id <> ALL($1::uuid[])
              )
            ORDER BY j.next_attempt_at ASC, j.id ASC
@@ -73,7 +73,7 @@ export class PostgresJobAdapter implements DurableJobQueuePort {
 
         const candidate = candidateRes.rows[0];
 
-        if (candidate.job_type === 'workforce_planning') {
+        if (candidate.job_type === 'workforce_planning' || candidate.job_type === 'scriptwriting') {
           // 3. Serialize workspace capacity decision atomically in PostgreSQL
           await client.query(
             `SELECT pg_advisory_xact_lock(hashtext('workforce_planning_workspace'), hashtext($1::text))`,
@@ -84,7 +84,7 @@ export class PostgresJobAdapter implements DurableJobQueuePort {
             `SELECT COUNT(*) AS running_count
              FROM job_executions
              WHERE workspace_id = $1
-               AND job_type = 'workforce_planning'
+               AND job_type IN ('workforce_planning', 'scriptwriting')
                AND status = 'running'
                AND lease_expires_at > NOW()
                AND id <> $2`,

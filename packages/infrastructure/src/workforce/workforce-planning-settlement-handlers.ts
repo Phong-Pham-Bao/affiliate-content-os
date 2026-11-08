@@ -6,6 +6,7 @@ import type {
   WorkforceSuccessOutcome,
 } from './workforce-planning-settlement-types.js';
 import { persistContentArtifactAndRevision } from './workforce-planning-artifact-persistence.js';
+import { prepareAndEnqueueScriptwritingStage } from './workforce-scriptwriting-kickoff.js';
 
 export {
   handleTransientFailure,
@@ -131,31 +132,24 @@ export async function handleSuccessSettlement(
   }
 
   // 9. Dependency release check: check if all 3 planning items are completed
-  const remainingRes = await client.query(
-    `SELECT count(*) AS remaining
+  const planningStatusRes = await client.query(
+    `SELECT
+       count(*) FILTER (WHERE status = 'completed') AS completed_count,
+       count(*) FILTER (WHERE status <> 'completed') AS non_completed_count
      FROM work_items
      WHERE workspace_id = $1 AND work_order_id = $2
-       AND task_key IN ('product_strategy', 'audience_strategy', 'creative_direction')
-       AND status <> 'completed'`,
+       AND task_key IN ('product_strategy', 'audience_strategy', 'creative_direction')`,
     [params.workspaceId, params.workOrderId],
   );
 
-  const remaining = Number(remainingRes.rows[0]?.remaining ?? 0);
-  if (remaining === 0) {
-    await client.query(
-      `UPDATE work_items
-       SET status = 'ready', updated_at = NOW(), version = version + 1
-       WHERE workspace_id = $1 AND work_order_id = $2 AND task_key = 'scriptwriting' AND status = 'waiting_dependency'`,
-      [params.workspaceId, params.workOrderId],
-    );
-    await client.query(
-      `UPDATE agent_assignments
-       SET office_state = 'preparing', waiting_on_work_item_id = NULL, updated_at = NOW(), version = version + 1
-       WHERE workspace_id = $1 AND work_order_id = $2 AND work_item_id = (
-         SELECT id FROM work_items WHERE workspace_id = $1 AND work_order_id = $2 AND task_key = 'scriptwriting'
-       )`,
-      [params.workspaceId, params.workOrderId],
-    );
+  const completedCount = Number(planningStatusRes.rows[0]?.completed_count ?? 0);
+  const nonCompletedCount = Number(planningStatusRes.rows[0]?.non_completed_count ?? 0);
+  if (completedCount === 3 && nonCompletedCount === 0) {
+    await prepareAndEnqueueScriptwritingStage(client, {
+      workspaceId: params.workspaceId,
+      productId: params.productId,
+      workOrderId: params.workOrderId,
+    });
   }
 
   // 10. Insert audit event

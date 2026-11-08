@@ -1,6 +1,6 @@
 # Affiliate Content OS - Architecture Baseline
 
-Status: Sprint 3 Checkpoint B implemented baseline with identity, catalog, intelligence, and workforce planning vertical slices
+Status: Sprint 3 Checkpoint C implemented baseline with identity, catalog, intelligence, workforce planning, content studio, and immutable revisions
 
 Last updated: 2026-11-08
 
@@ -423,3 +423,44 @@ A single transactional boundary in PostgreSQL (`kickoffWorkOrderAtomic`):
 2. Acquires an advisory lock on the idempotency key hash.
 3. Inserts 1 context package, M analysis junction rows, 1 work order, 5 work items, 6 agent assignments, 4 dependency edges, 1 idempotency key, and 1 audit event.
 4. The audit event (`creative.work_order.created`) uses an allowlisted safe payload with counts and hashes—never raw directive text, prompt content, or user secrets.
+
+## 23. AI Workforce Planning Execution (Sprint 3 Checkpoint B)
+
+Sprint 3 Checkpoint B implements parallel planning pod execution, content artifacts, and immutable planning revisions:
+- **Parallel Planning Execution**: Product Strategist (`product_strategy`), Audience Strategist (`audience_strategy`), and Creative Director (`creative_direction`) execute concurrently within workspace AI budget and provider rate limits.
+- **Content Artifacts & Revisions**: Generates 3 typed artifacts (`product_campaign_plan`, `audience_insight_board`, `video_series_plan`) stored in `content_artifacts` with immutable revisions in `content_artifact_revisions` and verified evidence links in `artifact_evidence_refs`.
+- **Durable Lifecycle & Fencing**: Leased workers execute tasks with optimistic version fencing and lease expiry recovery. Structured output repair is attempted at most once; terminal failures release reserved budget and mark assignments failed.
+
+## 24. Content Studio & Immutable Revisions (Sprint 3 Checkpoint C)
+
+Sprint 3 Checkpoint C turns the 3 Checkpoint B planning artifacts into a production-ready five-video Vietnamese script package:
+
+### 1. Script Package Contracts & Vietnamese-First Output
+- **Ordered Five-Video Package**: Generates exactly five ordered short-form video scripts derived from `video_series_plan`. Each video includes title, objective, hook, spoken voice-over, timed scene blocks, on-screen text overlays, call-to-action (CTA), disclosure placement/text, shot list, duration estimate, and evidence references.
+- **Bounded Variants**: Up to 3 bounded variants per video. Initial generation creates 1 primary variant per video; targeted change requests may generate additional variants up to 3.
+- **Vietnamese Language Support**: Vietnamese diacritics are preserved, honoring workspace `brand_voice` and `default_disclosure` without fabricating unsubstantiated product claims.
+- **Strict Size Bounds**: Enforces limits on text lengths, scene counts, shot counts, overlays, variants, and serialized JSON size.
+
+### 2. Content Brief Synthesis & Lineage
+- **Deterministic Brief Synthesis**: Atomically synthesizes a versioned `content_briefs` record from the current revisions of the 3 planning artifacts, confirmed facts, accepted analyses, and workspace brand preferences.
+- **Brief Hash & Lineage**: Computes a canonical SHA-256 `brief_hash`. All script revisions record lineage in `content_artifact_lineage`, linking to the brief hash, planning revision IDs, source script units, and parent revision.
+- **Closed Validation**: Fails closed if any planning artifact is missing, cross-tenant, or structurally invalid.
+
+### 3. Durable Unit Execution & 3-Concurrency Capacity Gate
+- **Per-Video Durable Units**: Generates the 5 video scripts as independent durable units (`script_generation_units`) backed by PostgreSQL `job_executions` and `operations`.
+- **Capacity Gate**: Strictly enforces a maximum of 3 concurrent executing AI provider calls per workspace across planning and scriptwriting stages using PostgreSQL transaction-level advisory locks (`pg_advisory_xact_lock`) and active lease counting.
+- **Budget Reservation & Settlement**: Reserves the exact bounded cost before enqueueing (10,000 microunits per unit) and settles actual costs per unit completion. Partial failures can be retried without regenerating successful units.
+- **Atomic Package Assembly**: When all 5 units succeed, transactionally assembles revision #1 of the `script_package` artifact, marks the scriptwriter work item and assignment `completed`, and releases `compliance_review` to `ready`.
+
+### 4. Human Edit & Request-Changes Workflows
+- **Immutable Revisions**: Every revision is permanently immutable. Human edits create a new revision; prior revisions are never mutated.
+- **Optimistic Concurrency**: All mutations require artifact `version`, `baseRevisionNumber`, and `baseContentHashHex` matching the current state, returning `409 Conflict` on stale preconditions.
+- **Targeted Change Requests**: An editor/owner can request changes with instruction text for selected video numbers (e.g. videos 2 and 4). Only selected units are regenerated; untouched videos are carried forward from the base revision.
+- **Accessible Web Studio**: Complete five-video navigation rail, focused script reader/editor, revision history, and visual diff comparison.
+
+### 5. Explicit Checkpoint D Boundary
+Checkpoint C stops at assembling the `script_package` artifact and unlocking the `compliance_review` work item to `ready`. It strictly does NOT:
+- Enqueue or execute Compliance Reviewer jobs;
+- Create `compliance_evaluations` or `compliance_findings`;
+- Provide human approval or rejection actions;
+- Snapshot approvals or schedule publications.

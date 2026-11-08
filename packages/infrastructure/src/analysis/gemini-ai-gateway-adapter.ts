@@ -5,12 +5,14 @@ import type {
   AINicheAnalysisInput,
   AIPlanningRoleInput,
   AIProductAnalysisInput,
+  AIScriptVideoInput,
 } from '@affiliate-content-os/application';
 import type {
   AudienceInsightBoard,
   NicheAnalysisContent,
   ProductAnalysisContent,
   ProductCampaignPlan,
+  SingleVideoScript,
   VideoSeriesPlan,
 } from '@affiliate-content-os/domain';
 import type { AIConfig } from '@affiliate-content-os/config';
@@ -24,12 +26,14 @@ import {
   buildProductCampaignPlanPrompt,
   buildVideoSeriesPlanPrompt,
 } from './gemini-planning-prompt-builder.js';
+import { buildScriptVideoPrompt } from './gemini-script-prompt-builder.js';
 import { productAnalysisJsonSchema, nicheAnalysisJsonSchema } from './gemini-schemas.js';
 import {
   audienceInsightBoardJsonSchema,
   productCampaignPlanJsonSchema,
   videoSeriesPlanJsonSchema,
 } from './gemini-planning-schemas.js';
+import { singleVideoScriptJsonSchema } from './gemini-script-schemas.js';
 import { executeGeminiCall } from './gemini-call-executor.js';
 import type { GeminiClientLike } from './gemini-adapter-helpers.js';
 
@@ -128,6 +132,21 @@ export class GeminiAIGatewayAdapter implements AIGatewayPort {
       prompt,
       videoSeriesPlanJsonSchema,
       'video_series_plan_v1',
+      options?.signal,
+    );
+  }
+
+  public async executeScriptVideo(
+    input: AIScriptVideoInput,
+    repairFeedback?: { readonly errorCategory: string; readonly errorPath?: string },
+    options?: { readonly signal?: AbortSignal },
+  ): Promise<AIAnalysisGatewayResult<SingleVideoScript>> {
+    const basePrompt = buildScriptVideoPrompt(input);
+    const prompt = repairFeedback ? buildRepairPrompt(basePrompt, repairFeedback) : basePrompt;
+    return this.call<SingleVideoScript>(
+      prompt,
+      singleVideoScriptJsonSchema,
+      'script_video_v1',
       options?.signal,
     );
   }

@@ -29,10 +29,23 @@ export { kickoffWorkOrder } from './kickoff-work-order.js';
 export { listWorkOrders } from './list-work-orders.js';
 export { listWorkOrderArtifacts } from './list-work-order-artifacts.js';
 export { getArtifactById } from './get-artifact-by-id.js';
+export { getArtifactRevisions } from './get-artifact-revisions.js';
+export { getArtifactRevisionByNumber } from './get-artifact-revision-by-number.js';
+export { getChangeRequestById } from './get-change-request-by-id.js';
+export {
+  createManualRevision,
+  type ExecuteCreateManualRevisionParams,
+} from './create-manual-revision.js';
+export {
+  requestScriptChanges,
+  type ExecuteRequestScriptChangesParams,
+} from './request-script-changes.js';
 export { listWorkOrderActivities } from './list-work-order-activities.js';
 export { retryWorkOrderPlanning } from './retry-work-order.js';
 
 export {
+  type CreateManualRevisionParams,
+  type RequestScriptChangesParams,
   type KickoffAtomicAssignmentParam,
   type KickoffAtomicDependencyParam,
   type KickoffAtomicPlanningJobParam,
@@ -46,6 +59,9 @@ export {
 } from './ports.js';
 
 export {
+  type ArtifactChangeRequestDTO,
+  type ContentArtifactLineageDTO,
+  type ScriptGenerationUnitDTO,
   type AgentAssignmentSummaryDTO,
   type ArtifactEvidenceRefDTO,
   type ContentArtifactDetailDTO,

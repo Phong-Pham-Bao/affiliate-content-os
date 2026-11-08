@@ -6,6 +6,7 @@ import type {
 } from '@affiliate-content-os/application';
 import { DatabaseError } from '../database/errors.js';
 import { mapWorkOrderRowToSummaryDTO } from './workforce-mappers.js';
+import { retryFailedScriptUnits } from './workforce-script-retry.js';
 
 export async function executeRetryWorkOrderTransaction(
   client: pg.PoolClient,
@@ -47,7 +48,29 @@ export async function executeRetryWorkOrderTransaction(
     [workspaceId, workOrderId],
   );
 
+  const scriptRetriedCount = await retryFailedScriptUnits(client, workspaceId, workOrderId);
+
   if (failedItemsRes.rowCount === 0) {
+    if (scriptRetriedCount > 0) {
+      if (woRow.status === 'failed') {
+        await client.query(
+          `UPDATE work_orders
+           SET status = 'in_progress', completed_at = NULL, failure_category = NULL, updated_at = NOW(), version = version + 1
+           WHERE id = $1 AND workspace_id = $2`,
+          [workOrderId, workspaceId],
+        );
+      }
+      const updatedWoRes = await client.query(
+        `SELECT * FROM work_orders WHERE workspace_id = $1 AND id = $2`,
+        [workspaceId, workOrderId],
+      );
+      return {
+        workOrder: mapWorkOrderRowToSummaryDTO(updatedWoRes.rows[0]),
+        retriedItemIds: [],
+        cached: false,
+      };
+    }
+
     return {
       workOrder: mapWorkOrderRowToSummaryDTO(woRow),
       retriedItemIds: [],

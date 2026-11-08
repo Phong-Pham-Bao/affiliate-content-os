@@ -136,6 +136,7 @@ describe('Worker Execution Loop', () => {
       executeProductCampaignPlan: vi.fn(),
       executeAudienceInsightBoard: vi.fn(),
       executeVideoSeriesPlan: vi.fn(),
+      executeScriptVideo: vi.fn(),
     };
 
     let persistedOutcome: PersistExecutionOutcome | null = null;
@@ -211,6 +212,7 @@ describe('Worker Execution Loop', () => {
       executeProductCampaignPlan: vi.fn(),
       executeAudienceInsightBoard: vi.fn(),
       executeVideoSeriesPlan: vi.fn(),
+      executeScriptVideo: vi.fn(),
     };
 
     let persistedOutcome: PersistExecutionOutcome | null = null;
@@ -283,6 +285,7 @@ describe('Worker Execution Loop', () => {
       executeProductCampaignPlan: vi.fn(),
       executeAudienceInsightBoard: vi.fn(),
       executeVideoSeriesPlan: vi.fn(),
+      executeScriptVideo: vi.fn(),
     };
 
     let persistedOutcome: PersistExecutionOutcome | null = null;

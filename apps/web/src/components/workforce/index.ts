@@ -4,3 +4,4 @@ export { WorkOrderTimeline } from './work-order-timeline.js';
 export { EmployeeInspectorModal } from './employee-inspector-modal.js';
 export { ArtifactViewerModal } from './artifact-viewer-modal.js';
 export { PlanningArtifactCard } from './planning-artifact-card.js';
+export { ContentStudio } from './content-studio/content-studio.js';

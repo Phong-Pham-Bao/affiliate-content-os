@@ -21,6 +21,10 @@ const ARTIFACT_TITLES: Record<string, { title: string; role: string }> = {
     title: '5-Video Series Plan',
     role: 'Creative Director',
   },
+  script_package: {
+    title: 'Gói kịch bản 5 video (Script Package)',
+    role: 'Scriptwriter',
+  },
 };
 
 export function PlanningArtifactCard({

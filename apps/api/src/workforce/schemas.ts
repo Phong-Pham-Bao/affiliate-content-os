@@ -106,3 +106,101 @@ export const retryWorkOrderPlanningRouteSchema = {
     additionalProperties: false,
   },
 } as const;
+
+export const getArtifactRevisionsRouteSchema = {
+  params: {
+    type: 'object',
+    required: ['workspaceId', 'artifactId'],
+    properties: {
+      workspaceId: { type: 'string', pattern: uuidPattern },
+      artifactId: { type: 'string', pattern: uuidPattern },
+    },
+    additionalProperties: false,
+  },
+} as const;
+
+export const getArtifactRevisionByNumberRouteSchema = {
+  params: {
+    type: 'object',
+    required: ['workspaceId', 'artifactId', 'revisionNumber'],
+    properties: {
+      workspaceId: { type: 'string', pattern: uuidPattern },
+      artifactId: { type: 'string', pattern: uuidPattern },
+      revisionNumber: { type: 'integer', minimum: 1 },
+    },
+    additionalProperties: false,
+  },
+} as const;
+
+export const createManualRevisionRouteSchema = {
+  params: {
+    type: 'object',
+    required: ['workspaceId', 'artifactId'],
+    properties: {
+      workspaceId: { type: 'string', pattern: uuidPattern },
+      artifactId: { type: 'string', pattern: uuidPattern },
+    },
+    additionalProperties: false,
+  },
+  body: {
+    type: 'object',
+    required: ['expectedVersion', 'baseRevisionNumber', 'baseContentHashHex', 'rawContent'],
+    properties: {
+      expectedVersion: { type: 'integer', minimum: 1 },
+      baseRevisionNumber: { type: 'integer', minimum: 1 },
+      baseContentHashHex: { type: 'string', pattern: '^[0-9a-fA-F]{64}$' },
+      rawContent: { type: 'object' },
+      note: { type: 'string', maxLength: 500 },
+    },
+    additionalProperties: false,
+  },
+} as const;
+
+export const requestScriptChangesRouteSchema = {
+  params: {
+    type: 'object',
+    required: ['workspaceId', 'artifactId'],
+    properties: {
+      workspaceId: { type: 'string', pattern: uuidPattern },
+      artifactId: { type: 'string', pattern: uuidPattern },
+    },
+    additionalProperties: false,
+  },
+  body: {
+    type: 'object',
+    required: [
+      'expectedVersion',
+      'baseRevisionNumber',
+      'baseContentHashHex',
+      'instructionText',
+      'selectedVideoNumbers',
+    ],
+    properties: {
+      expectedVersion: { type: 'integer', minimum: 1 },
+      baseRevisionNumber: { type: 'integer', minimum: 1 },
+      baseContentHashHex: { type: 'string', pattern: '^[0-9a-fA-F]{64}$' },
+      instructionText: { type: 'string', minLength: 1, maxLength: 2000 },
+      selectedVideoNumbers: {
+        type: 'array',
+        items: { type: 'integer', minimum: 1, maximum: 5 },
+        minItems: 1,
+        maxItems: 5,
+      },
+      targetVariantCount: { type: 'integer', minimum: 1, maximum: 3 },
+    },
+    additionalProperties: false,
+  },
+} as const;
+
+export const getChangeRequestByIdRouteSchema = {
+  params: {
+    type: 'object',
+    required: ['workspaceId', 'artifactId', 'changeRequestId'],
+    properties: {
+      workspaceId: { type: 'string', pattern: uuidPattern },
+      artifactId: { type: 'string', pattern: uuidPattern },
+      changeRequestId: { type: 'string', pattern: uuidPattern },
+    },
+    additionalProperties: false,
+  },
+} as const;

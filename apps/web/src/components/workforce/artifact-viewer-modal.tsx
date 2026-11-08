@@ -9,6 +9,7 @@ import {
   RenderProductCampaignPlan,
   RenderVideoSeriesPlan,
 } from './artifact-content-renderers.js';
+import { ContentStudio } from './content-studio/content-studio.js';
 
 interface ArtifactViewerModalProps {
   readonly isOpen: boolean;
@@ -56,6 +57,27 @@ export function ArtifactViewerModal({
   }, [isOpen, workspaceId, artifactId]);
 
   if (!isOpen) return null;
+
+  if (detail?.artifact.artifactType === 'script_package') {
+    return (
+      <div className="modal-backdrop" role="presentation">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="artifact-modal-title"
+          className="modal-content workforce-artifact-modal content-studio-modal-wrapper"
+          style={{ maxWidth: '1100px', width: '95vw', maxHeight: '92vh', overflowY: 'auto' }}
+        >
+          <ContentStudio
+            workspaceId={workspaceId}
+            artifactId={detail.artifact.id}
+            initialDetail={detail}
+            onClose={onClose}
+          />
+        </div>
+      </div>
+    );
+  }
 
   const renderContent = () => {
     if (!detail) return null;

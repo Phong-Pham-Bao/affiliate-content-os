@@ -52,6 +52,11 @@ describe('workforce-processor.integration (Production Worker Processor Path)', (
         usage: {} as never,
         provenance: {} as never,
       }),
+      executeScriptVideo: async () => ({
+        success: false,
+        usage: {} as never,
+        provenance: {} as never,
+      }),
       executeProductCampaignPlan: async (): Promise<
         AIAnalysisGatewayResult<ProductCampaignPlan>
       > => ({

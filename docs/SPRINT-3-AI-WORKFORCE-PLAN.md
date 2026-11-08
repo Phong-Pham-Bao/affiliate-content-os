@@ -1,6 +1,6 @@
 # Sprint 3 Proposed Plan — AI Creative Office
 
-Status: Checkpoint A and Checkpoint B implemented; Checkpoints C, D, E pending
+Status: Checkpoint A, Checkpoint B, and Checkpoint C implemented; Checkpoints D and E pending
 
 Last updated: 2026-11-08
 
@@ -264,23 +264,27 @@ Exit evidence:
 - Provider failure is visible and recoverable without fake completion.
 - Owner can read useful planning outputs before later content-production work is finished.
 
-### Checkpoint C — Content studio and immutable revisions
+### Checkpoint C — Content studio and immutable revisions (Implemented)
 
 Goal: turn accepted planning into production-ready written assets.
 
-Deliverables:
+Deliverables (Completed):
 
-- Content brief synthesis.
-- Scriptwriter role and bounded parallel variant generation.
-- Short-video scripts, hooks, voice-over, overlays, CTA, disclosure placement, and shot lists.
-- Immutable artifact revisions, diff/compare view, request-changes workflow, and lineage.
-- Vietnamese-first outputs with workspace brand voice.
+- Content brief synthesis: deterministic synthesis from the 3 planning artifacts, confirmed facts, accepted analyses, and workspace brand preferences into immutable `content_briefs`.
+- Scriptwriter role execution: durable generation of a 5-video Vietnamese `script_package` as independent units (`script_generation_units`).
+- 3-concurrency capacity gate: strict limit of maximum 3 concurrent running AI provider jobs per workspace across planning and scriptwriting stages.
+- Short-video scripts, hooks, voice-over, scene breakdown, overlays, CTA, disclosure placement, and shot lists with bounded variants (1..3).
+- Immutable artifact revisions (`content_artifact_revisions`), explicit lineage (`content_artifact_lineage`), and SHA-256 content verification.
+- Human edit and request-changes workflows: full manual revision and targeted regeneration of selected videos (e.g. videos 2 & 4) with optimistic concurrency checks (`expectedVersion`, `baseRevisionNumber`, `baseContentHashHex`).
+- Content Studio web UX: accessible five-video navigation rail, focused script reader/editor, revision history, and visual compare view.
+- Explicit Checkpoint D boundary: Checkpoint C stops at assembling the `script_package` artifact and releasing `compliance_review` to `ready`. It stays strictly out of Checkpoint D (compliance rule engine, compliance reports, compliance findings, approval decisions, approval snapshots, and publishing).
 
 Exit evidence:
 
 - A five-video series has structured scripts and shot lists.
 - Editing creates a new revision and never mutates an approved snapshot.
 - Every affirmative product claim resolves to allowed evidence.
+- Full quality gates pass clean: `pnpm format`, `pnpm check`, `pnpm test:integration`, `pnpm db:migrate:validate` (twice), `git diff --check`, secret scan.
 
 ### Checkpoint D — Compliance and human approval
 

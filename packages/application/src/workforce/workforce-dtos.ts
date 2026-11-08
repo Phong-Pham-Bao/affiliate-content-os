@@ -139,10 +139,56 @@ export interface ArtifactEvidenceRefDTO {
   readonly createdAt: IsoTimestamp;
 }
 
+export interface ContentArtifactLineageDTO {
+  readonly id: string;
+  readonly artifactId: string;
+  readonly revisionNumber: number;
+  readonly parentRevisionNumber: number | null;
+  readonly lineageType: 'ai_generated' | 'human_edited' | 'change_request';
+  readonly changeRequestId: string | null;
+  readonly contentBriefHashHex: string;
+  readonly contentBriefVersion: number;
+  readonly planningRevisionIds: Record<string, unknown>;
+  readonly sourceScriptUnitIds: readonly string[];
+  readonly metadata: Record<string, unknown>;
+  readonly createdAt: IsoTimestamp;
+}
+
+export interface ArtifactChangeRequestDTO {
+  readonly id: string;
+  readonly artifactId: string;
+  readonly baseRevisionNumber: number;
+  readonly baseContentHashHex: string;
+  readonly requestedByUserId: string;
+  readonly instructionText: string;
+  readonly selectedVideoNumbers: readonly (1 | 2 | 3 | 4 | 5)[];
+  readonly targetVariantCount: number;
+  readonly status: string;
+  readonly resultingRevisionNumber: number | null;
+  readonly failureReason: string | null;
+  readonly createdAt: IsoTimestamp;
+  readonly updatedAt: IsoTimestamp;
+  readonly version: number;
+}
+
+export interface ScriptGenerationUnitDTO {
+  readonly id: string;
+  readonly workOrderId: string;
+  readonly workItemId: string;
+  readonly videoNumber: number;
+  readonly targetVariantCount: number;
+  readonly status: string;
+  readonly errorCategory: string | null;
+  readonly errorMessage: string | null;
+  readonly createdAt: IsoTimestamp;
+  readonly updatedAt: IsoTimestamp;
+}
+
 export interface ContentArtifactDetailDTO {
   readonly artifact: ContentArtifactSummaryDTO;
   readonly latestRevision: ContentArtifactRevisionDTO;
   readonly evidenceReferences: readonly ArtifactEvidenceRefDTO[];
+  readonly lineage?: ContentArtifactLineageDTO | null | undefined;
 }
 
 export interface WorkOrderActivityDTO {
