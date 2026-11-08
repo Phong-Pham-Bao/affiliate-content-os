@@ -55,6 +55,10 @@ describe('kickoffWorkOrder Application Use Case', () => {
         getWorkOrderById: vi.fn(),
         listWorkOrders: vi.fn(),
         findReadyWorkItems: vi.fn(),
+        listWorkOrderArtifacts: vi.fn().mockResolvedValue([]),
+        getArtifactById: vi.fn().mockResolvedValue(null),
+        listWorkOrderActivities: vi.fn().mockResolvedValue([]),
+        retryWorkOrderPlanningAtomic: vi.fn(),
       },
       workspaceAuthorization: {
         findMembership: vi.fn().mockResolvedValue({
@@ -166,6 +170,10 @@ describe('kickoffWorkOrder Application Use Case', () => {
         getWorkOrderById: vi.fn(),
         listWorkOrders: vi.fn(),
         findReadyWorkItems: vi.fn(),
+        listWorkOrderArtifacts: vi.fn().mockResolvedValue([]),
+        getArtifactById: vi.fn().mockResolvedValue(null),
+        listWorkOrderActivities: vi.fn().mockResolvedValue([]),
+        retryWorkOrderPlanningAtomic: vi.fn(),
       },
     });
 

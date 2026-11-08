@@ -4,6 +4,8 @@ export {
 } from './kickoff-work-order-transaction.js';
 
 export { insertKickoffEntities } from './kickoff-work-order-row-inserts.js';
+export { executeRetryWorkOrderTransaction } from './retry-work-order-transaction.js';
+export { settleWorkforcePlanningJobAtomic } from './workforce-planning-settlement.js';
 
 export { PostgresWorkforceAdapter } from './postgres-workforce-adapter.js';
 
@@ -15,6 +17,13 @@ export {
   mapWorkItemRowToSummaryDTO,
   mapWorkOrderRowToSummaryDTO,
 } from './workforce-mappers.js';
+
+export {
+  mapContentArtifactRowToSummaryDTO,
+  mapArtifactEvidenceRefRowToDTO,
+  mapContentArtifactRevisionRowToDTO,
+  mapWorkOrderActivityRowToDTO,
+} from './workforce-artifact-mappers.js';
 
 export {
   type KickoffInsertStage,

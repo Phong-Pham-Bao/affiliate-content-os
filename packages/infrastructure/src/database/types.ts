@@ -25,6 +25,9 @@ export interface Database {
   isClosing(): boolean;
 }
 
+export type DatabasePool = pg.Pool;
+export type DatabasePoolClient = pg.PoolClient;
+
 export interface CreateDatabaseOptions {
   readonly caContent?: string | undefined;
   readonly sslCaContent?: string | undefined;

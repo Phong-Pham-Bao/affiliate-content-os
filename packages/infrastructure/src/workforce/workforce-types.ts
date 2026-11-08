@@ -1,6 +1,7 @@
 import type {
   KickoffAtomicAssignmentParam,
   KickoffAtomicDependencyParam,
+  KickoffAtomicPlanningJobParam,
   KickoffAtomicWorkItemParam,
 } from '@affiliate-content-os/application';
 import type {
@@ -24,6 +25,7 @@ export type KickoffInsertStage =
   | 'work_items'
   | 'work_item_dependencies'
   | 'agent_assignments'
+  | 'planning_jobs'
   | 'idempotency_keys'
   | 'audit_events';
 
@@ -64,6 +66,8 @@ export interface KickoffPersistenceSnapshot {
   readonly workItems: readonly KickoffAtomicWorkItemParam[];
   readonly assignments: readonly KickoffAtomicAssignmentParam[];
   readonly dependencies: readonly KickoffAtomicDependencyParam[];
+  readonly planningJobs: readonly KickoffAtomicPlanningJobParam[];
+  readonly totalEstimatedCostMicrounits: number;
   readonly idempotency: {
     readonly id: IdempotencyKeyId;
     readonly keyHash: Uint8Array;

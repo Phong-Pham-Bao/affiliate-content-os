@@ -15,6 +15,7 @@ import { createAuthRoutes, type AuthDependencies } from './auth/index.js';
 import { createWorkspaceRoutes, type WorkspaceRouteDependencies } from './workspaces/index.js';
 import { createCatalogRoutes, type CatalogRouteDependencies } from './catalog/index.js';
 import { createAnalysisRoutes, type AnalysisRouteDependencies } from './analysis/index.js';
+import { createWorkforceRoutes, type WorkforceRouteDependencies } from './workforce/index.js';
 
 export interface CreateAppOptions {
   readonly config?: AppConfig | undefined;
@@ -22,6 +23,7 @@ export interface CreateAppOptions {
   readonly workspaces?: WorkspaceRouteDependencies | undefined;
   readonly catalog?: CatalogRouteDependencies | undefined;
   readonly analysis?: AnalysisRouteDependencies | undefined;
+  readonly workforce?: WorkforceRouteDependencies | undefined;
 }
 
 const defaultDisabledAuthConfig: AuthConfig = Object.freeze({
@@ -81,6 +83,10 @@ export function createApp(options?: CreateAppOptions): FastifyInstance {
 
   if (options?.analysis) {
     void app.register(createAnalysisRoutes(options.analysis));
+  }
+
+  if (options?.workforce) {
+    void app.register(createWorkforceRoutes(options.workforce));
   }
 
   return app;

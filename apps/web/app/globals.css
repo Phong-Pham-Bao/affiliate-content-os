@@ -1069,3 +1069,127 @@ button:disabled,
   line-height: 1.4;
   margin-bottom: 1.5rem;
 }
+
+/* Workforce Command Center Styles */
+.workforce-command-center {
+  margin-top: 2rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--card-border);
+}
+
+.timeline-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 1rem;
+}
+
+.timeline-card {
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: var(--border-radius);
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  transition:
+    transform 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.timeline-card:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.07);
+}
+
+.timeline-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.timeline-card.status-completed {
+  border-left: 4px solid var(--success-fg);
+}
+
+.timeline-card.status-working,
+.timeline-card.status-queued {
+  border-left: 4px solid var(--primary);
+}
+
+.timeline-card.status-waiting {
+  border-left: 4px solid #f59e0b;
+}
+
+.timeline-card.status-failed {
+  border-left: 4px solid var(--danger);
+}
+
+.planning-artifact-card {
+  flex: 1 1 300px;
+  max-width: 380px;
+}
+
+.artifact-cards-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.context-preview-box {
+  background: var(--secondary-bg);
+  border-radius: var(--border-radius);
+  padding: 0.75rem 1rem;
+  font-size: 0.85rem;
+}
+
+.context-preview-box ul {
+  margin: 0.5rem 0 0 1rem;
+  padding: 0;
+}
+
+.analysis-checkbox-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-height: 140px;
+  overflow-y: auto;
+  border: 1px solid var(--card-border);
+  border-radius: var(--border-radius);
+  padding: 0.5rem;
+  background: #ffffff;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+.video-ideas-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.video-card {
+  border: 1px solid var(--card-border);
+  border-radius: var(--border-radius);
+  padding: 0.75rem 1rem;
+  background: #ffffff;
+}
+
+/* Reduced motion compliance */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}

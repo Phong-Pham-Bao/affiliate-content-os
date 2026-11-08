@@ -3,6 +3,7 @@ import { buildOpenApiApiPaths } from './openapi-api-paths.js';
 import { buildOpenApiWorkspacePaths } from '../workspaces/openapi.js';
 import { buildOpenApiCatalogPaths } from '../catalog/openapi.js';
 import { buildOpenApiAnalysisPaths } from '../analysis/openapi.js';
+import { buildOpenApiWorkforcePaths } from '../workforce/openapi.js';
 
 export { commonHeaders, problemDetailsContent } from './openapi-auth-paths.js';
 
@@ -13,5 +14,6 @@ export function buildOpenApiPaths(): Record<string, unknown> {
     ...buildOpenApiWorkspacePaths(),
     ...buildOpenApiCatalogPaths(),
     ...buildOpenApiAnalysisPaths(),
+    ...buildOpenApiWorkforcePaths(),
   };
 }

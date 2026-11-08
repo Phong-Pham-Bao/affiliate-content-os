@@ -1,8 +1,8 @@
 # Affiliate Content OS - Architecture Baseline
 
-Status: Sprint 2 implemented baseline with identity, catalog, and intelligence vertical slice
+Status: Sprint 3 Checkpoint B implemented baseline with identity, catalog, intelligence, and workforce planning vertical slices
 
-Last updated: 2026-11-07
+Last updated: 2026-11-08
 
 ## 1. Architecture goals
 

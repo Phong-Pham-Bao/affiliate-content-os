@@ -2,6 +2,7 @@ import type pg from 'pg';
 import type { WorkOrderSummaryDTO } from '@affiliate-content-os/application';
 import { DatabaseError } from '../database/errors.js';
 import { mapWorkOrderRowToSummaryDTO } from './workforce-mappers.js';
+import { insertKickoffPlanningJobs } from './kickoff-planning-job-inserts.js';
 import type { KickoffPersistenceSnapshot, KickoffTestHooks } from './workforce-types.js';
 
 export async function insertKickoffEntities(
@@ -133,9 +134,12 @@ export async function insertKickoffEntities(
     await testHooks.onAfterStage('agent_assignments');
   }
 
+  // 7. Insert planning jobs (operations, ai_runs, job_executions, outbox_events)
+  await insertKickoffPlanningJobs(client, snapshot, testHooks);
+
   const createdOrder = mapWorkOrderRowToSummaryDTO(orderRes.rows[0]);
 
-  // 7. Insert idempotency_keys
+  // 8. Insert idempotency_keys
   await client.query(
     `INSERT INTO idempotency_keys (
        id, workspace_id, principal_id, route_key, key_hash, request_hash,

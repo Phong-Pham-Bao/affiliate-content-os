@@ -2,10 +2,13 @@ import type {
   AIProvenanceSnapshot,
   AIUsageSnapshot,
   AnalysisSnapshot,
+  AudienceInsightBoard,
   NicheAnalysisContent,
   ProductAnalysisContent,
+  ProductCampaignPlan,
   ProductFactSnapshot,
   SafeFailureCategory,
+  VideoSeriesPlan,
   WorkspaceId,
 } from '@affiliate-content-os/domain';
 import type { ProductId } from '@affiliate-content-os/domain';
@@ -29,6 +32,23 @@ export interface AINicheAnalysisInput {
   readonly category: string;
   readonly sourceAnalyses: readonly AnalysisSnapshot[];
   readonly facts: readonly ProductFactSnapshot[];
+}
+
+export interface AIPlanningRoleInput {
+  readonly workspaceId: WorkspaceId;
+  readonly productId: ProductId;
+  readonly productName: string;
+  readonly merchantName: string;
+  readonly category: string;
+  readonly description: string;
+  readonly audienceNotes?: string | null | undefined;
+  readonly allowedClaimsNotes?: string | null | undefined;
+  readonly prohibitedClaimsNotes?: string | null | undefined;
+  readonly directiveText: string;
+  readonly facts: readonly ProductFactSnapshot[];
+  readonly sourceAnalyses: readonly AnalysisSnapshot[];
+  readonly brandVoice?: string | null | undefined;
+  readonly disclosureRequirement?: string | null | undefined;
 }
 
 export interface AIAnalysisGatewayResult<T> {
@@ -55,4 +75,22 @@ export interface AIGatewayPort {
     repairFeedback?: { readonly errorCategory: string; readonly errorPath?: string | undefined },
     options?: { readonly signal?: AbortSignal },
   ): Promise<AIAnalysisGatewayResult<NicheAnalysisContent>>;
+
+  executeProductCampaignPlan(
+    input: AIPlanningRoleInput,
+    repairFeedback?: { readonly errorCategory: string; readonly errorPath?: string | undefined },
+    options?: { readonly signal?: AbortSignal },
+  ): Promise<AIAnalysisGatewayResult<ProductCampaignPlan>>;
+
+  executeAudienceInsightBoard(
+    input: AIPlanningRoleInput,
+    repairFeedback?: { readonly errorCategory: string; readonly errorPath?: string | undefined },
+    options?: { readonly signal?: AbortSignal },
+  ): Promise<AIAnalysisGatewayResult<AudienceInsightBoard>>;
+
+  executeVideoSeriesPlan(
+    input: AIPlanningRoleInput,
+    repairFeedback?: { readonly errorCategory: string; readonly errorPath?: string | undefined },
+    options?: { readonly signal?: AbortSignal },
+  ): Promise<AIAnalysisGatewayResult<VideoSeriesPlan>>;
 }

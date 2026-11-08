@@ -94,3 +94,63 @@ export interface WorkOrderDetailDTO {
   readonly assignments: readonly AgentAssignmentSummaryDTO[];
   readonly dependencies: readonly WorkItemDependencySummaryDTO[];
 }
+
+export interface ContentArtifactSummaryDTO {
+  readonly id: string;
+  readonly workspaceId: WorkspaceId;
+  readonly productId: ProductId;
+  readonly workOrderId: WorkOrderId;
+  readonly workItemId: WorkItemId;
+  readonly assignmentId: AgentAssignmentId;
+  readonly authorRoleKey: AgentRoleKey;
+  readonly artifactType: string;
+  readonly lifecycleStatus: string;
+  readonly currentRevisionNumber: number;
+  readonly createdAt: IsoTimestamp;
+  readonly updatedAt: IsoTimestamp;
+  readonly version: number;
+}
+
+export interface ContentArtifactRevisionDTO {
+  readonly id: string;
+  readonly workspaceId: WorkspaceId;
+  readonly artifactId: string;
+  readonly revisionNumber: number;
+  readonly contentJson: Record<string, unknown>;
+  readonly contentHashHex: string;
+  readonly schemaVersion: number;
+  readonly promptTemplate: string;
+  readonly promptVersion: string;
+  readonly provider: string;
+  readonly model: string;
+  readonly tokenInput: number | null;
+  readonly tokenOutput: number | null;
+  readonly costMicrounits: number | null;
+  readonly costCurrency: string | null;
+  readonly latencyMs: number | null;
+  readonly authorRoleKey: AgentRoleKey;
+  readonly createdAt: IsoTimestamp;
+}
+
+export interface ArtifactEvidenceRefDTO {
+  readonly id: string;
+  readonly sourceKind: 'product_fact' | 'analysis';
+  readonly sourceId: string;
+  readonly createdAt: IsoTimestamp;
+}
+
+export interface ContentArtifactDetailDTO {
+  readonly artifact: ContentArtifactSummaryDTO;
+  readonly latestRevision: ContentArtifactRevisionDTO;
+  readonly evidenceReferences: readonly ArtifactEvidenceRefDTO[];
+}
+
+export interface WorkOrderActivityDTO {
+  readonly id: string;
+  readonly action: string;
+  readonly resourceType: string;
+  readonly resourceId: string;
+  readonly result: string;
+  readonly occurredAt: IsoTimestamp;
+  readonly changesJson: Record<string, unknown>;
+}

@@ -14,6 +14,7 @@ import type {
 import { AffiliateDestinationsSection } from './affiliate-destinations-section.js';
 import { FactSetsSection } from './fact-sets-section.js';
 import { AnalysesSection } from './analyses-section.js';
+import { WorkforceCommandCenter } from '../workforce/index.js';
 import { ApiError } from '../../lib/api-validators-common.js';
 
 interface ProductDetailViewProps {
@@ -404,6 +405,14 @@ export function ProductDetailView(props: ProductDetailViewProps): ReactElement {
         productId={product.id}
         factSetId={product.currentFactSetId}
         canManage={canManage}
+      />
+
+      <WorkforceCommandCenter
+        workspaceId={product.workspaceId}
+        productId={product.id}
+        canManage={canManage}
+        hasConfirmedFacts={Boolean(product.currentFactSetId)}
+        confirmedFacts={props.selectedRevisionFacts}
       />
 
       {showArchiveConfirm && (

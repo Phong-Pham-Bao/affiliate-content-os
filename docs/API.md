@@ -1,8 +1,8 @@
 # Affiliate Content OS - HTTP API Contract
 
-Status: Sprint 2 implemented contract for identity, workspace, catalog, and intelligence slices
+Status: Sprint 3 Checkpoint B implemented contract for identity, catalog, intelligence, and workforce planning slices
 
-Last updated: 2026-11-07
+Last updated: 2026-11-08
 
 ## Implemented Sprint 2 surface
 
@@ -18,9 +18,17 @@ Runtime schemas and `openapi/openapi.json` are authoritative for these implement
 
 AI output remains `generated` until human review. Responses may expose safe provider/model provenance and evidence IDs, but never prompts, raw provider bodies, API keys, OAuth secrets, or chain-of-thought.
 
-### Sprint 3 Checkpoint A note
+### Sprint 3 Checkpoint B: AI Planning Pod Vertical Slice
 
-The AI workforce orchestration foundation (domain models, migration `0008_ai_workforce_foundation.sql`, atomic kickoff persistence, and application queries) is implemented as internal domain/application/infrastructure modules. Public HTTP routes (`POST /api/v1/workspaces/{workspaceId}/products/{productId}/work-orders`, work order polling, and detail endpoints) are intentionally deferred to Checkpoint B when worker execution and user-visible recovery exist. The OpenAPI specification remains unchanged in Checkpoint A.
+The AI workforce planning HTTP routes and runtime schemas are implemented and documented in OpenAPI (`openapi/openapi.json`):
+
+- `POST /api/v1/workspaces/{workspaceId}/products/{productId}/work-orders`: Kicks off a planning mission with `Idempotency-Key`, creating 3 parallel planning jobs and reserving budget. Returns `201 Created` with `WorkOrderSummary`.
+- `GET /api/v1/workspaces/{workspaceId}/work-orders`: Cursor-paginated listing of work orders for the workspace.
+- `GET /api/v1/workspaces/{workspaceId}/work-orders/{workOrderId}`: Authoritative work order detail with context package descriptor, 5 work items, 6 employee assignments, and dependencies.
+- `GET /api/v1/workspaces/{workspaceId}/work-orders/{workOrderId}/artifacts`: Lists generated content artifacts for the work order.
+- `GET /api/v1/workspaces/{workspaceId}/artifacts/{artifactId}`: Returns validated artifact detail, latest revision, and verified evidence references.
+- `GET /api/v1/workspaces/{workspaceId}/work-orders/{workOrderId}/activity`: Lists audit activity events for the work order.
+- `POST /api/v1/workspaces/{workspaceId}/work-orders/{workOrderId}/retry`: Bounded manual retry for recoverable failed planning items.
 
 ## 1. Contract principles
 

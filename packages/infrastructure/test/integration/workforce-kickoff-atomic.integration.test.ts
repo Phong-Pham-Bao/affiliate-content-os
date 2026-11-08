@@ -46,7 +46,7 @@ describe('workforce-kickoff-atomic.integration', () => {
     expect(result.cached).toBe(false);
     expect(result.workOrder).toBeDefined();
     expect(result.workOrder.id).toBe(params.workOrder.id);
-    expect(result.workOrder.status).toBe('preparing');
+    expect(result.workOrder.status).toBe('in_progress');
 
     // Query detail DTO via adapter
     const detail = await adapter.getWorkOrderById(
@@ -81,9 +81,9 @@ describe('workforce-kickoff-atomic.integration', () => {
       [params.workOrder.id],
     );
     expect(wiRes.rows).toHaveLength(5);
-    const readyItems = wiRes.rows.filter((w) => w.status === 'ready');
+    const queuedItems = wiRes.rows.filter((w) => w.status === 'queued');
     const waitingItems = wiRes.rows.filter((w) => w.status === 'waiting_dependency');
-    expect(readyItems).toHaveLength(3);
+    expect(queuedItems).toHaveLength(3);
     expect(waitingItems).toHaveLength(2);
 
     const aaRes = await pool.query(
@@ -94,10 +94,18 @@ describe('workforce-kickoff-atomic.integration', () => {
     );
     expect(aaRes.rows).toHaveLength(6);
     for (const a of aaRes.rows) {
-      expect(a.office_state).toBe('preparing');
       if (a.role_key === 'chief_of_staff') {
+        expect(a.office_state).toBe('preparing');
         expect(a.work_item_id).toBeNull();
+      } else if (
+        a.role_key === 'product_strategist' ||
+        a.role_key === 'audience_strategist' ||
+        a.role_key === 'creative_director'
+      ) {
+        expect(a.office_state).toBe('queued');
+        expect(a.work_item_id).not.toBeNull();
       } else {
+        expect(a.office_state).toBe('waiting_dependency');
         expect(a.work_item_id).not.toBeNull();
       }
     }

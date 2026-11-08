@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import { MessageChannel } from 'node:worker_threads';
 import { ConfigurationError, type AppConfig, type AIConfig } from '@affiliate-content-os/config';
-import type { Database } from '@affiliate-content-os/infrastructure/database';
+import type { Database, DatabasePool } from '@affiliate-content-os/infrastructure/database';
 import {
   PostgresAnalysisAdapter,
   GeminiAIGatewayAdapter,
@@ -29,6 +29,7 @@ export interface WorkerDependencies {
   readonly aiConfig?: AIConfig | undefined;
   readonly signal: AbortSignal;
   readonly database?: Database | undefined;
+  readonly pool?: DatabasePool | undefined;
   readonly workerId?: string | undefined;
   readonly gatewayPort?: AIGatewayPort | undefined;
   readonly jobAdapter?: DurableJobQueuePort | undefined;
@@ -104,7 +105,7 @@ export async function runWorker(deps: WorkerDependencies): Promise<void> {
   const leaseDurationSeconds = deps.aiConfig?.workerLeaseDurationSeconds ?? 30;
   const pollingIntervalMs = deps.aiConfig?.workerPollingIntervalMs ?? 2000;
 
-  const pool = deps.database?.pool;
+  const pool = deps.pool ?? deps.database?.pool;
   const jobAdapter = deps.jobAdapter ?? (pool ? new PostgresJobAdapter(pool) : undefined);
   const catalogPort =
     deps.catalogPort ?? (deps.database ? new PostgresCatalogAdapter(deps.database) : undefined);
@@ -153,35 +154,38 @@ export async function runWorker(deps: WorkerDependencies): Promise<void> {
           aiRunPort,
           operationPort,
           persistTxPort,
+          pool,
         });
       } catch {
-        await persistTxPort.persistExecutionResultAtomic({
-          workspaceId: claimedJob.workspaceId,
-          operationId: claimedJob.operationId,
-          aiRunId: claimedJob.aiRunId,
-          jobId: claimedJob.id,
-          jobVersion: claimedJob.version,
-          workerId,
-          outcome: {
-            kind: 'terminal_failure',
-            errorCategory: 'internal_error',
-            errorCode: 'UNHANDLED_PROCESS_FAILURE',
-            errorMessage: 'An unexpected process error occurred during job execution',
-            reservedMicrounits: claimedJob.reservedSpendMicrounits,
-            actualSpendMicrounits: 0,
-            auditEvent: {
-              id: crypto.randomUUID(),
-              workspaceId: claimedJob.workspaceId,
-              actorUserId: null,
-              actorType: 'system',
-              action: 'ai_analysis.failed',
-              resourceType: 'operation',
-              resourceId: claimedJob.operationId,
-              result: 'failed',
-              changesJson: { error_code: 'UNHANDLED_PROCESS_FAILURE' },
+        if (claimedJob.jobType !== 'workforce_planning') {
+          await persistTxPort.persistExecutionResultAtomic({
+            workspaceId: claimedJob.workspaceId,
+            operationId: claimedJob.operationId,
+            aiRunId: claimedJob.aiRunId,
+            jobId: claimedJob.id,
+            jobVersion: claimedJob.version,
+            workerId,
+            outcome: {
+              kind: 'terminal_failure',
+              errorCategory: 'internal_error',
+              errorCode: 'UNHANDLED_PROCESS_FAILURE',
+              errorMessage: 'An unexpected process error occurred during job execution',
+              reservedMicrounits: claimedJob.reservedSpendMicrounits,
+              actualSpendMicrounits: 0,
+              auditEvent: {
+                id: crypto.randomUUID(),
+                workspaceId: claimedJob.workspaceId,
+                actorUserId: null,
+                actorType: 'system',
+                action: 'ai_analysis.failed',
+                resourceType: 'operation',
+                resourceId: claimedJob.operationId,
+                result: 'failed',
+                changesJson: { error_code: 'UNHANDLED_PROCESS_FAILURE' },
+              },
             },
-          },
-        });
+          });
+        }
       }
       if (deps.once) break;
       continue;

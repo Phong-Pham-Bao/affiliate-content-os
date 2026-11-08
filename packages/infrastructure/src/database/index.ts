@@ -19,6 +19,8 @@ export type {
   CreateDatabaseOptions,
   Database,
   DatabaseConfig,
+  DatabasePool,
+  DatabasePoolClient,
   DatabaseQueryResult,
   DatabaseSslMode,
   TransactionExecutor,

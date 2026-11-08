@@ -77,3 +77,63 @@ export {
 } from './graph-template.js';
 
 export { validateDirectiveText, validateWorkOrderPriority } from './validation.js';
+
+export {
+  isArtifactEvidenceRefId,
+  isContentArtifactId,
+  isContentArtifactRevisionId,
+  parseArtifactEvidenceRefId,
+  parseContentArtifactId,
+  parseContentArtifactRevisionId,
+  type ArtifactEvidenceRefId,
+  type ContentArtifactId,
+  type ContentArtifactRevisionId,
+} from './artifact-ids.js';
+
+export {
+  CONTENT_ARTIFACT_LIFECYCLE_STATUSES,
+  CONTENT_ARTIFACT_TYPES,
+  PLANNING_ARTIFACT_TYPES,
+  isContentArtifactLifecycleStatus,
+  isContentArtifactType,
+  isPlanningArtifactType,
+  type ArtifactEvidenceRefSnapshot,
+  type ArtifactEvidenceSourceKind,
+  type ContentArtifactLifecycleStatus,
+  type ContentArtifactRevisionSnapshot,
+  type ContentArtifactSnapshot,
+  type ContentArtifactType,
+  type PlanningArtifactType,
+} from './artifact-types.js';
+
+export {
+  sanitizeBoundedText,
+  validateEvidenceReferenceItem,
+  validateEvidenceReferencesArray,
+  validateStringArray,
+  type DomainEvidenceReference,
+} from './artifact-validation-common.js';
+
+export {
+  validateProductCampaignPlan,
+  type ProductCampaignBenefit,
+  type ProductCampaignCreativeHypothesis,
+  type ProductCampaignObjection,
+  type ProductCampaignPlan,
+} from './product-campaign-plan-types.js';
+
+export {
+  AWARENESS_STAGES,
+  validateAudienceInsightBoard,
+  type AudienceContentAngle,
+  type AudienceInsightBoard,
+  type AudienceSegment,
+  type AwarenessStage,
+} from './audience-insight-board-types.js';
+
+export {
+  validateVideoSeriesPlan,
+  type VideoEpisodePlan,
+  type VideoSeriesCreativeDirection,
+  type VideoSeriesPlan,
+} from './video-series-plan-types.js';

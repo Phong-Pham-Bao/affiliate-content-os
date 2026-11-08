@@ -7,4 +7,7 @@ export * from './gemini-schemas.js';
 export * from './gemini-prompt-builder.js';
 export * from './gemini-error-classifier.js';
 export * from './gemini-adapter-helpers.js';
+export * from './gemini-planning-schemas.js';
+export * from './gemini-planning-prompt-builder.js';
+export * from './gemini-call-executor.js';
 export * from './gemini-ai-gateway-adapter.js';

@@ -77,6 +77,18 @@ export async function seedWorkforceBaseData(pool: pg.Pool): Promise<WorkforceSee
     [wsId, ws2Id],
   );
 
+  // AI Policy for wsId
+  await pool.query(
+    `INSERT INTO workspace_ai_policies (
+       workspace_id, ai_enabled, rate_limit_per_minute, minute_request_count,
+       monthly_budget_microunits, current_spend_microunits,
+       reserved_spend_microunits, updated_at
+     ) VALUES ($1, true, 60, 0, 1000000000, 0, 0, NOW())
+     ON CONFLICT (workspace_id) DO UPDATE
+     SET ai_enabled = true, monthly_budget_microunits = 1000000000`,
+    [wsId],
+  );
+
   // Memberships: userId is owner in wsId, viewerId is viewer in wsId
   await pool.query(
     `INSERT INTO workspace_memberships (id, workspace_id, user_id, role, status, joined_at, created_at, updated_at, version)
@@ -94,13 +106,33 @@ export async function seedWorkforceBaseData(pool: pg.Pool): Promise<WorkforceSee
     [prodId, wsId, Buffer.alloc(32, 1)],
   );
 
-  // Confirmed fact set in wsId
+  // Proposed fact set in wsId
   await pool.query(
     `INSERT INTO product_fact_sets (
        id, workspace_id, product_id, revision_number, status, created_by_user_id,
        confirmed_by_user_id, confirmed_at, created_at, updated_at, version
-     ) VALUES ($1, $2, $3, 1, 'confirmed', $4, $4, NOW(), NOW(), NOW(), 1)`,
+     ) VALUES ($1, $2, $3, 1, 'proposed', $4, null, null, NOW(), NOW(), 1)`,
     [factSetId, wsId, prodId, userId],
+  );
+
+  // Fact in factSetId while draft
+  await pool.query(
+    `INSERT INTO product_facts (
+       id, workspace_id, product_id, fact_set_id, fact_key, value_text,
+       source_type, source_url, source_excerpt, confidence, claim_usage, created_at
+     ) VALUES (
+       '018f6c5b-21a4-789a-8def-00000000000c', $1, $2, $3, 'battery.life', '30-day battery life on a single charge',
+       'merchant_page', 'https://example.com/spec', 'Lasts up to 30 days', 'confirmed', 'allowed', NOW()
+     )`,
+    [wsId, prodId, factSetId],
+  );
+
+  // Confirm fact set
+  await pool.query(
+    `UPDATE product_fact_sets
+     SET status = 'confirmed', confirmed_by_user_id = $1, confirmed_at = NOW(), updated_at = NOW()
+     WHERE id = $2`,
+    [userId, factSetId],
   );
 
   // Link product current_fact_set_id to confirmed fact set

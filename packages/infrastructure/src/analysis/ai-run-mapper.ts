@@ -53,6 +53,8 @@ const AI_RUN_COLS = [
   'created_at',
   'updated_at',
   'version',
+  'work_order_id',
+  'work_item_id',
 ] as const;
 
 export function mapAIRunRow(row: unknown): AIRunSnapshot {

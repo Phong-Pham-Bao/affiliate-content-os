@@ -133,6 +133,9 @@ describe('Worker Execution Loop', () => {
         },
       }),
       executeNicheAnalysis: vi.fn(),
+      executeProductCampaignPlan: vi.fn(),
+      executeAudienceInsightBoard: vi.fn(),
+      executeVideoSeriesPlan: vi.fn(),
     };
 
     let persistedOutcome: PersistExecutionOutcome | null = null;
@@ -205,6 +208,9 @@ describe('Worker Execution Loop', () => {
         },
       }),
       executeNicheAnalysis: vi.fn(),
+      executeProductCampaignPlan: vi.fn(),
+      executeAudienceInsightBoard: vi.fn(),
+      executeVideoSeriesPlan: vi.fn(),
     };
 
     let persistedOutcome: PersistExecutionOutcome | null = null;
@@ -274,6 +280,9 @@ describe('Worker Execution Loop', () => {
         },
       }),
       executeNicheAnalysis: vi.fn(),
+      executeProductCampaignPlan: vi.fn(),
+      executeAudienceInsightBoard: vi.fn(),
+      executeVideoSeriesPlan: vi.fn(),
     };
 
     let persistedOutcome: PersistExecutionOutcome | null = null;

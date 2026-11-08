@@ -1,34 +1,25 @@
 import {
   computeCanonicalContextHash,
-  CREATIVE_OFFICE_V1_SPEC,
   dateToIsoTimestamp,
   GRAPH_TEMPLATE_CREATIVE_OFFICE_V1,
   GRAPH_VERSION_CREATIVE_OFFICE_V1,
-  parseAgentAssignmentId,
-  parseAgentRoleDefinitionId,
   parseAnalysisId,
   parseAuditEventId,
   parseContextPackageId,
   parseIdempotencyKeyId,
-  parseWorkItemDependencyId,
-  parseWorkItemId,
   parseWorkOrderId,
-  SEEDED_ROLE_DEFINITIONS,
-  validateAcyclicGraph,
-  type AgentRoleKey,
   type AnalysisId,
   type ProductId,
   type UserId,
-  type WorkItemId,
   type WorkOrderMissionType,
   type WorkspaceId,
 } from '@affiliate-content-os/domain';
-import type {
-  KickoffAtomicAssignmentParam,
-  KickoffAtomicDependencyParam,
-  KickoffAtomicWorkItemParam,
-  KickoffWorkOrderAtomicParams,
-} from './ports.js';
+import {
+  buildKickoffGraph,
+  TOTAL_PLANNING_CALLS,
+  TOTAL_PLANNING_RESERVED_MICROUNITS,
+} from './build-kickoff-graph.js';
+import type { KickoffWorkOrderAtomicParams } from './ports.js';
 
 export interface BuildKickoffPayloadInput {
   readonly wsId: WorkspaceId;
@@ -71,7 +62,6 @@ export function buildKickoffAtomicPayload(
       .sort((a, b) => a.id.localeCompare(b.id)),
   );
 
-  // 1. Context package ID and canonical hash
   const contextPackageId = parseContextPackageId(generateId());
   const contextHash = computeCanonicalContextHash({
     workspaceId: wsId,
@@ -86,91 +76,9 @@ export function buildKickoffAtomicPayload(
     schemaVersion: 1,
   });
 
-  // 2. Work order ID
   const workOrderId = parseWorkOrderId(generateId());
+  const graph = buildKickoffGraph(wsId, workOrderId, generateId);
 
-  // 3. Map role key to role definition ID from seeded definitions
-  const roleIdMap = new Map<AgentRoleKey, ReturnType<typeof parseAgentRoleDefinitionId>>();
-  for (const roleDef of SEEDED_ROLE_DEFINITIONS) {
-    roleIdMap.set(roleDef.roleKey, roleDef.id);
-  }
-
-  // 4. Build work items from approved template
-  const taskKeyToItemId = new Map<string, WorkItemId>();
-  const workItems: KickoffAtomicWorkItemParam[] = [];
-
-  for (const spec of CREATIVE_OFFICE_V1_SPEC) {
-    const itemId = parseWorkItemId(generateId());
-    taskKeyToItemId.set(spec.taskKey, itemId);
-    const roleDefId = roleIdMap.get(spec.roleKey)!;
-
-    workItems.push({
-      id: itemId,
-      workspaceId: wsId,
-      workOrderId,
-      roleDefinitionId: roleDefId,
-      taskKey: spec.taskKey,
-      expectedArtifactType: spec.expectedArtifactType,
-      status: spec.initialStatus,
-    });
-  }
-
-  // 5. Build and validate dependencies
-  const dependencies: KickoffAtomicDependencyParam[] = [];
-  const edgeValidationInputs: { fromId: string; toId: string }[] = [];
-
-  for (const spec of CREATIVE_OFFICE_V1_SPEC) {
-    const targetItemId = taskKeyToItemId.get(spec.taskKey)!;
-    for (const prereqTaskKey of spec.dependsOnTaskKeys) {
-      const sourceItemId = taskKeyToItemId.get(prereqTaskKey)!;
-      dependencies.push({
-        id: parseWorkItemDependencyId(generateId()),
-        workspaceId: wsId,
-        workOrderId,
-        workItemId: targetItemId,
-        dependsOnWorkItemId: sourceItemId,
-      });
-      edgeValidationInputs.push({
-        fromId: targetItemId,
-        toId: sourceItemId,
-      });
-    }
-  }
-
-  // Acyclic validation
-  validateAcyclicGraph(Array.from(taskKeyToItemId.values()), edgeValidationInputs);
-
-  // 6. Build assignments for all 6 roles
-  const assignments: KickoffAtomicAssignmentParam[] = [];
-
-  // Chief of Staff has no work item and begins in preparing
-  const cosRoleId = roleIdMap.get('chief_of_staff')!;
-  assignments.push({
-    id: parseAgentAssignmentId(generateId()),
-    workspaceId: wsId,
-    workOrderId,
-    roleDefinitionId: cosRoleId,
-    workItemId: null,
-    officeState: 'preparing',
-    waitingOnWorkItemId: null,
-  });
-
-  // Other 5 roles are assigned to their work item and begin in preparing
-  for (const spec of CREATIVE_OFFICE_V1_SPEC) {
-    const roleDefId = roleIdMap.get(spec.roleKey)!;
-    const workItemId = taskKeyToItemId.get(spec.taskKey)!;
-    assignments.push({
-      id: parseAgentAssignmentId(generateId()),
-      workspaceId: wsId,
-      workOrderId,
-      roleDefinitionId: roleDefId,
-      workItemId,
-      officeState: 'preparing',
-      waitingOnWorkItemId: null,
-    });
-  }
-
-  // 7. Audit event (strictly safe fields, no directive or content)
   const auditEventId = parseAuditEventId(generateId());
   const auditChanges = {
     workOrderId,
@@ -182,7 +90,9 @@ export function buildKickoffAtomicPayload(
     roleCount: 6,
     workItemCount: 5,
     dependencyCount: 4,
-    initialStatus: 'preparing',
+    initialStatus: 'in_progress',
+    planningJobCount: TOTAL_PLANNING_CALLS,
+    reservedSpendMicrounits: TOTAL_PLANNING_RESERVED_MICROUNITS,
   };
 
   const responseSummary = Object.freeze({
@@ -193,7 +103,7 @@ export function buildKickoffAtomicPayload(
     missionType: input.missionType,
     graphTemplate: GRAPH_TEMPLATE_CREATIVE_OFFICE_V1,
     graphVersion: GRAPH_VERSION_CREATIVE_OFFICE_V1,
-    status: 'preparing' as const,
+    status: 'in_progress' as const,
     priority: input.priority,
     createdByUserId: actorId,
     failureCategory: null,
@@ -215,7 +125,7 @@ export function buildKickoffAtomicPayload(
       directiveText: input.directiveText,
       graphTemplate: GRAPH_TEMPLATE_CREATIVE_OFFICE_V1,
       graphVersion: GRAPH_VERSION_CREATIVE_OFFICE_V1,
-      status: 'preparing' as const,
+      status: 'in_progress' as const,
       priority: input.priority,
       createdByUserId: actorId,
     }),
@@ -231,9 +141,11 @@ export function buildKickoffAtomicPayload(
       factSetVersion: input.factSetVersion,
       sourceAnalyses: normalizedSourceAnalyses,
     }),
-    workItems: Object.freeze(workItems.map((item) => Object.freeze({ ...item }))),
-    assignments: Object.freeze(assignments.map((a) => Object.freeze({ ...a }))),
-    dependencies: Object.freeze(dependencies.map((d) => Object.freeze({ ...d }))),
+    workItems: Object.freeze(graph.workItems.map((item) => Object.freeze({ ...item }))),
+    assignments: Object.freeze(graph.assignments.map((a) => Object.freeze({ ...a }))),
+    dependencies: Object.freeze(graph.dependencies.map((d) => Object.freeze({ ...d }))),
+    planningJobs: Object.freeze(graph.planningJobs.map((j) => Object.freeze({ ...j }))),
+    totalEstimatedCostMicrounits: TOTAL_PLANNING_RESERVED_MICROUNITS,
     idempotency: Object.freeze({
       id: parseIdempotencyKeyId(generateId()),
       keyHash: copiedKeyHash,

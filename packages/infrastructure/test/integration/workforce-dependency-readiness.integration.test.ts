@@ -33,11 +33,19 @@ describe('workforce-dependency-readiness.integration', () => {
     const kickoffRes = await adapter.kickoffWorkOrderAtomic(params);
     const orderId = parseWorkOrderId(kickoffRes.workOrder.id);
 
-    // 2. Query initial ready items
+    // 2. Query initial queued planning items and verify no unblocked items are in ready state
+    const queuedRes = await pool.query(
+      `SELECT task_key FROM work_items WHERE work_order_id = $1 AND status = 'queued' ORDER BY task_key`,
+      [orderId],
+    );
+    expect(queuedRes.rows.map((r: { task_key: string }) => r.task_key)).toEqual([
+      'audience_strategy',
+      'creative_direction',
+      'product_strategy',
+    ]);
+
     const readyItems = await adapter.findReadyWorkItems(FIXTURE_IDS.wsId, orderId);
-    expect(readyItems).toHaveLength(3);
-    const readyKeys = readyItems.map((i) => i.taskKey).sort();
-    expect(readyKeys).toEqual(['audience_strategy', 'creative_direction', 'product_strategy']);
+    expect(readyItems).toHaveLength(0);
 
     // 3. Test initial readiness with domain logic over detail
     let detail = await adapter.getWorkOrderById(FIXTURE_IDS.wsId, orderId);

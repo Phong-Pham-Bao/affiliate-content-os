@@ -3,26 +3,35 @@ import type {
   AIAnalysisGatewayResult,
   AIGatewayPort,
   AINicheAnalysisInput,
+  AIPlanningRoleInput,
   AIProductAnalysisInput,
 } from '@affiliate-content-os/application';
-import type { NicheAnalysisContent, ProductAnalysisContent } from '@affiliate-content-os/domain';
+import type {
+  AudienceInsightBoard,
+  NicheAnalysisContent,
+  ProductAnalysisContent,
+  ProductCampaignPlan,
+  VideoSeriesPlan,
+} from '@affiliate-content-os/domain';
 import type { AIConfig } from '@affiliate-content-os/config';
 import {
   buildNicheAnalysisPrompt,
   buildProductAnalysisPrompt,
   buildRepairPrompt,
 } from './gemini-prompt-builder.js';
-import { productAnalysisJsonSchema, nicheAnalysisJsonSchema } from './gemini-schemas.js';
-import { classifyGeminiError } from './gemini-error-classifier.js';
 import {
-  buildProvenanceSnapshot,
-  buildUsageSnapshot,
-  computeCanonicalJsonHash,
-  extractResponseText,
-  MAX_RAW_RESPONSE_BYTES,
-  type GeminiClientLike,
-  type GeminiResponseLike,
-} from './gemini-adapter-helpers.js';
+  buildAudienceInsightBoardPrompt,
+  buildProductCampaignPlanPrompt,
+  buildVideoSeriesPlanPrompt,
+} from './gemini-planning-prompt-builder.js';
+import { productAnalysisJsonSchema, nicheAnalysisJsonSchema } from './gemini-schemas.js';
+import {
+  audienceInsightBoardJsonSchema,
+  productCampaignPlanJsonSchema,
+  videoSeriesPlanJsonSchema,
+} from './gemini-planning-schemas.js';
+import { executeGeminiCall } from './gemini-call-executor.js';
+import type { GeminiClientLike } from './gemini-adapter-helpers.js';
 
 export interface GeminiAdapterOptions {
   readonly config: AIConfig;
@@ -55,11 +64,11 @@ export class GeminiAIGatewayAdapter implements AIGatewayPort {
   ): Promise<AIAnalysisGatewayResult<ProductAnalysisContent>> {
     const basePrompt = buildProductAnalysisPrompt(input);
     const prompt = repairFeedback ? buildRepairPrompt(basePrompt, repairFeedback) : basePrompt;
-    return this.executeCall<ProductAnalysisContent>(
+    return this.call<ProductAnalysisContent>(
       prompt,
       productAnalysisJsonSchema,
       'product_analysis_v1',
-      options,
+      options?.signal,
     );
   }
 
@@ -70,118 +79,72 @@ export class GeminiAIGatewayAdapter implements AIGatewayPort {
   ): Promise<AIAnalysisGatewayResult<NicheAnalysisContent>> {
     const basePrompt = buildNicheAnalysisPrompt(input);
     const prompt = repairFeedback ? buildRepairPrompt(basePrompt, repairFeedback) : basePrompt;
-    return this.executeCall<NicheAnalysisContent>(
+    return this.call<NicheAnalysisContent>(
       prompt,
       nicheAnalysisJsonSchema,
       'niche_analysis_v1',
-      options,
+      options?.signal,
     );
   }
 
-  private async executeCall<T>(
+  public async executeProductCampaignPlan(
+    input: AIPlanningRoleInput,
+    repairFeedback?: { readonly errorCategory: string; readonly errorPath?: string },
+    options?: { readonly signal?: AbortSignal },
+  ): Promise<AIAnalysisGatewayResult<ProductCampaignPlan>> {
+    const basePrompt = buildProductCampaignPlanPrompt(input);
+    const prompt = repairFeedback ? buildRepairPrompt(basePrompt, repairFeedback) : basePrompt;
+    return this.call<ProductCampaignPlan>(
+      prompt,
+      productCampaignPlanJsonSchema,
+      'product_campaign_plan_v1',
+      options?.signal,
+    );
+  }
+
+  public async executeAudienceInsightBoard(
+    input: AIPlanningRoleInput,
+    repairFeedback?: { readonly errorCategory: string; readonly errorPath?: string },
+    options?: { readonly signal?: AbortSignal },
+  ): Promise<AIAnalysisGatewayResult<AudienceInsightBoard>> {
+    const basePrompt = buildAudienceInsightBoardPrompt(input);
+    const prompt = repairFeedback ? buildRepairPrompt(basePrompt, repairFeedback) : basePrompt;
+    return this.call<AudienceInsightBoard>(
+      prompt,
+      audienceInsightBoardJsonSchema,
+      'audience_insight_board_v1',
+      options?.signal,
+    );
+  }
+
+  public async executeVideoSeriesPlan(
+    input: AIPlanningRoleInput,
+    repairFeedback?: { readonly errorCategory: string; readonly errorPath?: string },
+    options?: { readonly signal?: AbortSignal },
+  ): Promise<AIAnalysisGatewayResult<VideoSeriesPlan>> {
+    const basePrompt = buildVideoSeriesPlanPrompt(input);
+    const prompt = repairFeedback ? buildRepairPrompt(basePrompt, repairFeedback) : basePrompt;
+    return this.call<VideoSeriesPlan>(
+      prompt,
+      videoSeriesPlanJsonSchema,
+      'video_series_plan_v1',
+      options?.signal,
+    );
+  }
+
+  private call<T>(
     prompt: string,
     schema: unknown,
     template: string,
-    options?: { readonly signal?: AbortSignal },
+    signal?: AbortSignal,
   ): Promise<AIAnalysisGatewayResult<T>> {
-    const provenance = buildProvenanceSnapshot(this.config.geminiModel, template);
-    const startTime = Date.now();
-
-    if (options?.signal?.aborted) {
-      return {
-        success: false,
-        usage: buildUsageSnapshot(undefined, 0),
-        provenance,
-        errorCategory: 'provider_timeout',
-        errorMessage: 'Operation aborted prior to execution',
-        isTransient: false,
-      };
-    }
-
-    try {
-      const response: GeminiResponseLike = await this.client.models.generateContent({
-        model: this.config.geminiModel,
-        contents: prompt,
-        config: {
-          responseMimeType: 'application/json',
-          responseJsonSchema: schema,
-          thinkingConfig: {
-            thinkingLevel: this.config.geminiThinkingLevel.toUpperCase(),
-          },
-          maxOutputTokens: this.config.geminiMaxOutputTokens,
-          httpOptions: {
-            timeout: this.config.geminiTimeoutMs,
-            // The durable worker owns bounded retry/backoff. Disable the SDK's
-            // default retry loop so one leased attempt maps to one provider call.
-            retryOptions: { attempts: 1 },
-          },
-          ...(options?.signal ? { abortSignal: options.signal } : {}),
-        },
-      });
-
-      const latencyMs = Date.now() - startTime;
-      const usage = buildUsageSnapshot(response.usageMetadata, latencyMs);
-      const finishReason = response.candidates?.[0]?.finishReason;
-      if (finishReason === 'SAFETY' || finishReason === 'BLOCKLIST') {
-        return {
-          success: false,
-          usage,
-          provenance,
-          safetyResult: finishReason,
-          errorCategory: 'invalid_output',
-          errorMessage: 'Generation blocked by provider safety policy',
-          isTransient: false,
-        };
-      }
-
-      const rawText = extractResponseText(response);
-      if (Buffer.byteLength(rawText, 'utf8') > MAX_RAW_RESPONSE_BYTES) {
-        return {
-          success: false,
-          usage,
-          provenance,
-          errorCategory: 'invalid_output',
-          errorMessage: 'Response exceeded maximum allowed body size',
-          isTransient: false,
-        };
-      }
-
-      let parsed: T;
-      try {
-        parsed = JSON.parse(rawText) as T;
-      } catch {
-        return {
-          success: false,
-          rawOutputHash: undefined,
-          usage,
-          provenance,
-          errorCategory: 'invalid_output',
-          errorMessage: 'Failed to parse JSON response from AI provider',
-          isTransient: false,
-        };
-      }
-
-      const rawOutputHash = computeCanonicalJsonHash(parsed);
-
-      return {
-        success: true,
-        content: parsed,
-        rawOutputHash,
-        usage,
-        provenance,
-      };
-    } catch (err) {
-      const latencyMs = Date.now() - startTime;
-      const usage = buildUsageSnapshot(undefined, latencyMs);
-      const classified = classifyGeminiError(err);
-      return {
-        success: false,
-        usage,
-        provenance,
-        errorCategory: classified.category,
-        errorMessage: classified.message,
-        isTransient: classified.isTransient,
-      };
-    }
+    return executeGeminiCall<T>({
+      client: this.client,
+      config: this.config,
+      prompt,
+      schema,
+      template,
+      signal,
+    });
   }
 }

@@ -6,6 +6,7 @@ import type { AuthDependencies } from './auth/index.js';
 import type { WorkspaceRouteDependencies } from './workspaces/index.js';
 import type { CatalogRouteDependencies } from './catalog/index.js';
 import type { AnalysisRouteDependencies } from './analysis/index.js';
+import type { WorkforceRouteDependencies } from './workforce/index.js';
 import {
   raceWithDeadline,
   type ClearTimerFn,
@@ -37,6 +38,10 @@ export interface StartServerOptions {
     | AnalysisRouteDependencies
     | ((signal: AbortSignal) => Promise<AnalysisRouteDependencies>)
     | undefined;
+  readonly workforce?:
+    | WorkforceRouteDependencies
+    | ((signal: AbortSignal) => Promise<WorkforceRouteDependencies>)
+    | undefined;
   readonly app?: FastifyInstance | undefined;
   readonly installSignalHandlers?: boolean | undefined;
   readonly shutdownTimeoutMs?: number | undefined;
@@ -63,13 +68,15 @@ export async function startApiServer(options: StartServerOptions): Promise<ApiSe
     (typeof options.auth !== 'function' &&
     typeof options.workspaces !== 'function' &&
     typeof options.catalog !== 'function' &&
-    typeof options.analysis !== 'function'
+    typeof options.analysis !== 'function' &&
+    typeof options.workforce !== 'function'
       ? createApp({
           config,
           auth: options.auth,
           workspaces: options.workspaces,
           catalog: options.catalog,
           analysis: options.analysis,
+          workforce: options.workforce,
         })
       : undefined);
 
@@ -238,7 +245,8 @@ export async function startApiServer(options: StartServerOptions): Promise<ApiSe
       typeof options.auth === 'function' ||
       typeof options.workspaces === 'function' ||
       typeof options.catalog === 'function' ||
-      typeof options.analysis === 'function'
+      typeof options.analysis === 'function' ||
+      typeof options.workforce === 'function'
     ) {
       if (startupAbortController.signal.aborted) {
         throw new Error('API server startup aborted before dependency resolution');
@@ -247,6 +255,7 @@ export async function startApiServer(options: StartServerOptions): Promise<ApiSe
       let workspaceDeps = typeof options.workspaces !== 'function' ? options.workspaces : undefined;
       let catalogDeps = typeof options.catalog !== 'function' ? options.catalog : undefined;
       let analysisDeps = typeof options.analysis !== 'function' ? options.analysis : undefined;
+      let workforceDeps = typeof options.workforce !== 'function' ? options.workforce : undefined;
 
       if (typeof options.auth === 'function') {
         const authPromise = options.auth(startupAbortController.signal);
@@ -264,12 +273,17 @@ export async function startApiServer(options: StartServerOptions): Promise<ApiSe
         const analysisPromise = options.analysis(startupAbortController.signal);
         analysisDeps = await Promise.race([analysisPromise, startupAbortPromise]);
       }
+      if (typeof options.workforce === 'function') {
+        const workforcePromise = options.workforce(startupAbortController.signal);
+        workforceDeps = await Promise.race([workforcePromise, startupAbortPromise]);
+      }
       app = createApp({
         config,
         auth: authDeps,
         workspaces: workspaceDeps,
         catalog: catalogDeps,
         analysis: analysisDeps,
+        workforce: workforceDeps,
       });
     }
 

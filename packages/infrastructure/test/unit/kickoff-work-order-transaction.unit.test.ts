@@ -72,8 +72,49 @@ function createParams(
 function createMockClient(handlers: {
   query?: (sql: string, params?: unknown[]) => Promise<{ rowCount: number; rows: unknown[] }>;
 }): pg.PoolClient {
+  const customQuery = handlers.query;
+  const defaultPolicyRow = {
+    ai_enabled: true,
+    monthly_budget_microunits: '100000000',
+    current_spend_microunits: '0',
+    reserved_spend_microunits: '0',
+    rate_limit_per_minute: 100,
+    budget_period_start: '2026-11-01T00:00:00.000Z',
+    minute_window_start: '2026-11-08T00:00:00.000Z',
+    minute_request_count: 0,
+    version: 1,
+    tx_now: new Date('2026-11-08T00:00:00.000Z'),
+    current_month_start: new Date('2026-11-01T00:00:00.000Z'),
+    recorded_month_start: new Date('2026-11-01T00:00:00.000Z'),
+  };
+
   return {
-    query: handlers.query ?? (async () => ({ rowCount: 0, rows: [] })),
+    query: async (sql: string, params?: unknown[]) => {
+      if (customQuery) {
+        const res = await customQuery(sql, params);
+        if (
+          sql.includes('agent_role_definitions') &&
+          (res.rows.length === 0 || (res.rows[0] as Record<string, unknown>)?.count === undefined)
+        ) {
+          return { rowCount: 1, rows: [{ count: 6 }] };
+        }
+        if (
+          sql.includes('workspace_ai_policies') &&
+          sql.includes('SELECT') &&
+          res.rows.length === 0
+        ) {
+          return { rowCount: 1, rows: [defaultPolicyRow] };
+        }
+        return res;
+      }
+      if (sql.includes('agent_role_definitions')) {
+        return { rowCount: 1, rows: [{ count: 6 }] };
+      }
+      if (sql.includes('workspace_ai_policies') && sql.includes('SELECT')) {
+        return { rowCount: 1, rows: [defaultPolicyRow] };
+      }
+      return { rowCount: 0, rows: [] };
+    },
   } as unknown as pg.PoolClient;
 }
 

@@ -1,8 +1,8 @@
 # Affiliate Content OS - Database Specification
 
-Status: Sprint 3 Checkpoint A implemented through migration `0008_ai_workforce_foundation.sql`
+Status: Sprint 3 Checkpoint B implemented through migration `0009_workforce_planning_execution.sql`
 
-Last updated: 2026-11-07
+Last updated: 2026-11-08
 
 ## 1. Conventions
 

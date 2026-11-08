@@ -29,6 +29,8 @@ import type { AuthDependencies } from './auth/index.js';
 import type { WorkspaceRouteDependencies } from './workspaces/index.js';
 import type { CatalogRouteDependencies } from './catalog/index.js';
 import type { AnalysisRouteDependencies } from './analysis/index.js';
+import { PostgresWorkforceAdapter } from '@affiliate-content-os/infrastructure/workforce';
+import type { WorkforceRouteDependencies } from './workforce/index.js';
 
 async function main(): Promise<void> {
   let config: AppConfig;
@@ -55,6 +57,7 @@ async function main(): Promise<void> {
   const tenancyAdapter = createPostgresTenancyAdapter(database);
   const catalogAdapter = new PostgresCatalogAdapter(database);
   const analysisAdapter = new PostgresAnalysisAdapter(database.pool!);
+  const workforceAdapter = new PostgresWorkforceAdapter(database.pool!);
   const clock = new SystemClock();
   const idGenerator = new DefaultIdGenerator();
 
@@ -158,6 +161,19 @@ async function main(): Promise<void> {
     };
   };
 
+  const workforceProvider = async (signal: AbortSignal): Promise<WorkforceRouteDependencies> => {
+    const authDeps = resolvedAuthDeps ?? (await authProvider(signal));
+    return {
+      auth: authDeps,
+      workforcePersistence: workforceAdapter,
+      workspaceAuthorization: tenancyAdapter,
+      catalogPersistence: catalogAdapter,
+      analysisPersistence: analysisAdapter,
+      idGenerator,
+      clock,
+    };
+  };
+
   try {
     await startApiServer({
       config,
@@ -166,12 +182,13 @@ async function main(): Promise<void> {
       workspaces: workspaceProvider,
       catalog: catalogProvider,
       analysis: analysisProvider,
+      workforce: workforceProvider,
     });
-    const metadata = getRedactedConfigMetadata(config);
-    const dbMetadata = getRedactedDatabaseMetadata(databaseConfig);
-    const authMetadata = getRedactedAuthConfigMetadata(authConfig);
+    const meta = getRedactedConfigMetadata(config);
+    const dbMeta = getRedactedDatabaseMetadata(databaseConfig);
+    const authMeta = getRedactedAuthConfigMetadata(authConfig);
     console.log(
-      `API process started on http://${metadata.apiHost}:${metadata.apiPort} (nodeEnv: ${metadata.nodeEnv}, db: ${dbMetadata.hasDatabaseUrl}, auth: ${authMetadata.enabled})`,
+      `API process started on http://${meta.apiHost}:${meta.apiPort} (nodeEnv: ${meta.nodeEnv}, db: ${dbMeta.hasDatabaseUrl}, auth: ${authMeta.enabled})`,
     );
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';

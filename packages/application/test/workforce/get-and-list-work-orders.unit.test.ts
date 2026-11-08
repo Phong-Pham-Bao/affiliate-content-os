@@ -69,6 +69,10 @@ describe('getWorkOrder and listWorkOrders Application Use Cases', () => {
         getWorkOrderById: vi.fn().mockResolvedValue(mockDetail),
         listWorkOrders: vi.fn().mockResolvedValue([mockSummary]),
         findReadyWorkItems: vi.fn(),
+        listWorkOrderArtifacts: vi.fn().mockResolvedValue([]),
+        getArtifactById: vi.fn().mockResolvedValue(null),
+        listWorkOrderActivities: vi.fn().mockResolvedValue([]),
+        retryWorkOrderPlanningAtomic: vi.fn(),
       },
       workspaceAuthorization: {
         findMembership: vi.fn().mockResolvedValue({

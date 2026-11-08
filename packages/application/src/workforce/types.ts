@@ -40,6 +40,37 @@ export interface ListWorkOrdersResult {
   readonly nextCursor: string | null;
 }
 
+export interface ListWorkOrderArtifactsQuery {
+  readonly workspaceId: string;
+  readonly workOrderId: string;
+  readonly actorUserId: string;
+}
+
+export interface GetArtifactByIdQuery {
+  readonly workspaceId: string;
+  readonly artifactId: string;
+  readonly actorUserId: string;
+}
+
+export interface ListWorkOrderActivitiesQuery {
+  readonly workspaceId: string;
+  readonly workOrderId: string;
+  readonly actorUserId: string;
+}
+
+export interface RetryWorkOrderPlanningCommand {
+  readonly workspaceId: string;
+  readonly workOrderId: string;
+  readonly actorUserId: string;
+  readonly idempotencyKey?: string | undefined;
+}
+
+export interface RetryWorkOrderPlanningResultDTO {
+  readonly workOrder: WorkOrderSummaryDTO;
+  readonly retriedItemIds: readonly string[];
+  readonly replayed: boolean;
+}
+
 export interface WorkforceCatalogProductInfo {
   readonly id: ProductId;
   readonly workspaceId: WorkspaceId;
