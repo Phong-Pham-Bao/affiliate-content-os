@@ -148,6 +148,19 @@ export function validateScriptPackage(raw: unknown): ScriptPackage {
     'evidenceReferences',
   );
 
+  const pkgEvidenceKeys = new Set(evidenceReferences.map((e) => `${e.sourceKind}:${e.sourceId}`));
+  for (const video of validatedVideos) {
+    for (const ref of video.evidenceReferences ?? []) {
+      const key = `${ref.sourceKind}:${ref.sourceId}`;
+      if (!pkgEvidenceKeys.has(key)) {
+        throw new DomainValidationError(
+          `Video ${video.videoNumber} evidence reference ${key} is not declared in package-level evidenceReferences`,
+          'evidenceReferences',
+        );
+      }
+    }
+  }
+
   return Object.freeze({
     schemaVersion: 1 as const,
     seriesTitle,

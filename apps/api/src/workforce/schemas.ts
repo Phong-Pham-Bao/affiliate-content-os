@@ -133,6 +133,14 @@ export const getArtifactRevisionByNumberRouteSchema = {
 } as const;
 
 export const createManualRevisionRouteSchema = {
+  headers: {
+    type: 'object',
+    required: ['idempotency-key'],
+    properties: {
+      'idempotency-key': { type: 'string', pattern: '^[!-~]{1,128}$' },
+      origin: { type: 'string' },
+    },
+  },
   params: {
     type: 'object',
     required: ['workspaceId', 'artifactId'],
@@ -157,6 +165,14 @@ export const createManualRevisionRouteSchema = {
 } as const;
 
 export const requestScriptChangesRouteSchema = {
+  headers: {
+    type: 'object',
+    required: ['idempotency-key'],
+    properties: {
+      'idempotency-key': { type: 'string', pattern: '^[!-~]{1,128}$' },
+      origin: { type: 'string' },
+    },
+  },
   params: {
     type: 'object',
     required: ['workspaceId', 'artifactId'],

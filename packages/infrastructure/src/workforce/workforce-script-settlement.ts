@@ -72,6 +72,7 @@ export async function settleScriptUnitAtomic(
     jobVersion,
     operationId,
     aiRunId,
+    workerId,
     videoNumber,
     reservedMicrounits,
     outcome,
@@ -79,39 +80,47 @@ export async function settleScriptUnitAtomic(
   } = params;
 
   if (outcome.kind === 'success') {
+    // 1. Lease fencing on job_executions FIRST before any durable side effect or budget settlement
+    const jobRes = await client.query(
+      `UPDATE job_executions
+       SET status = 'succeeded', completed_at = NOW(), lease_owner = NULL,
+           lease_expires_at = NULL, last_error_category = NULL, reserved_spend_microunits = 0,
+           updated_at = NOW(), version = version + 1
+       WHERE id = $1 AND workspace_id = $2 AND version = $3 AND status = 'running' AND lease_owner = $4`,
+      [jobId, workspaceId, jobVersion, workerId],
+    );
+    if (jobRes.rowCount !== 1) {
+      throw new DatabaseError(
+        `Lease fencing conflict on job ${jobId}: stale lease, wrong status, or wrong owner`,
+      );
+    }
+
     const actualCost = outcome.usage.costMicrounits ?? 0;
     if (actualCost < 0 || !Number.isSafeInteger(actualCost) || actualCost > reservedMicrounits) {
       throw new DatabaseError(
         `Invalid actualCost ${actualCost} for reserved ${reservedMicrounits}`,
       );
     }
-    // Settle budget
-    await client.query(
+
+    // 2. Settle budget atomically (prevent negative reserved spend, exactly 1 row)
+    const policyRes = await client.query(
       `UPDATE workspace_ai_policies
        SET current_spend_microunits = current_spend_microunits + $1,
            reserved_spend_microunits = reserved_spend_microunits - $2,
            updated_at = NOW(),
            version = version + 1
-       WHERE workspace_id = $3`,
+       WHERE workspace_id = $3 AND reserved_spend_microunits >= $2`,
       [actualCost, reservedMicrounits, workspaceId],
     );
-
-    // Update job
-    const jobRes = await client.query(
-      `UPDATE job_executions
-       SET status = 'succeeded', completed_at = NOW(), lease_owner = NULL,
-           lease_expires_at = NULL, last_error_category = NULL, reserved_spend_microunits = 0,
-           updated_at = NOW(), version = version + 1
-       WHERE id = $1 AND workspace_id = $2 AND version = $3`,
-      [jobId, workspaceId, jobVersion],
-    );
-    if (jobRes.rowCount === 0) {
-      throw new DatabaseError(`Lease fencing conflict on job ${jobId}`);
+    if (policyRes.rowCount !== 1) {
+      throw new DatabaseError(
+        `Failed to settle workspace AI policy reservation: insufficient reserved spend in workspace ${workspaceId}`,
+      );
     }
 
-    // Update operation & ai_run
+    // 3. Update operation & ai_run with exact provider provenance
     const resultLocation = `/workspaces/${workspaceId}/products/${productId}/script-units/video-${videoNumber}`;
-    await client.query(
+    const opRes = await client.query(
       `UPDATE operations
        SET status = 'succeeded',
            progress_percent = 100,
@@ -123,26 +132,37 @@ export async function settleScriptUnitAtomic(
            error_message = NULL,
            updated_at = NOW(),
            version = version + 1
-       WHERE id = $2 AND workspace_id = $3`,
+       WHERE id = $2 AND workspace_id = $3 AND status IN ('queued', 'running', 'pending')`,
       [resultLocation, operationId, workspaceId],
     );
+    if (opRes.rowCount !== 1) {
+      throw new DatabaseError(`Failed to update operation ${operationId} to succeeded`);
+    }
 
-    await client.query(
+    const runRes = await client.query(
       `UPDATE ai_runs
        SET status = 'succeeded',
-           output_hash = $1,
-           token_input = $2,
-           token_output = $3,
-           cost_microunits = $4,
-           cost_currency = $5,
-           latency_ms = $6,
+           provider = $1,
+           model = $2,
+           prompt_template = $3,
+           prompt_version = $4,
+           output_hash = $5,
+           token_input = $6,
+           token_output = $7,
+           cost_microunits = $8,
+           cost_currency = $9,
+           latency_ms = $10,
            started_at = COALESCE(started_at, NOW()),
            completed_at = NOW(),
            error_category = NULL,
            updated_at = NOW(),
            version = version + 1
-       WHERE id = $7 AND workspace_id = $8`,
+       WHERE id = $11 AND workspace_id = $12 AND status IN ('queued', 'running')`,
       [
+        outcome.provider,
+        outcome.model,
+        outcome.promptTemplate,
+        outcome.promptVersion,
         Buffer.from(outcome.contentHash),
         outcome.usage.tokenInput ?? null,
         outcome.usage.tokenOutput ?? null,
@@ -153,17 +173,25 @@ export async function settleScriptUnitAtomic(
         workspaceId,
       ],
     );
+    if (runRes.rowCount !== 1) {
+      throw new DatabaseError(`Failed to update ai_run ${aiRunId} to succeeded`);
+    }
 
-    // Update script_generation_units
-    await client.query(
+    // 4. Update script_generation_units
+    const unitRes = await client.query(
       `UPDATE script_generation_units
        SET status = 'succeeded', output_json = $1::jsonb, content_hash = $2,
            updated_at = NOW(), version = version + 1
-       WHERE job_id = $3 AND workspace_id = $4`,
+       WHERE job_id = $3 AND workspace_id = $4 AND status IN ('queued', 'running', 'retry_wait')`,
       [JSON.stringify(outcome.contentJson), Buffer.from(outcome.contentHash), jobId, workspaceId],
     );
+    if (unitRes.rowCount !== 1) {
+      throw new DatabaseError(
+        `Failed to update script_generation_unit for job ${jobId} to succeeded`,
+      );
+    }
 
-    // Attempt assembly
+    // 5. Attempt assembly
     if (changeRequestId) {
       await assembleScriptPackageChangeRequestAtomic(client, { workspaceId, changeRequestId });
     } else {
@@ -176,91 +204,143 @@ export async function settleScriptUnitAtomic(
       });
     }
   } else if (outcome.kind === 'transient_failure') {
-    await client.query(
+    // Lease fencing on job_executions FIRST
+    const jobRes = await client.query(
       `UPDATE job_executions
        SET status = 'retry_wait', attempt = attempt + 1, next_attempt_at = $1,
            lease_owner = NULL, lease_expires_at = NULL, last_error_category = $2,
            updated_at = NOW(), version = version + 1
-       WHERE id = $3 AND workspace_id = $4 AND version = $5`,
-      [outcome.nextAttemptAt, outcome.errorCategory, jobId, workspaceId, jobVersion],
+       WHERE id = $3 AND workspace_id = $4 AND version = $5 AND status = 'running' AND lease_owner = $6`,
+      [outcome.nextAttemptAt, outcome.errorCategory, jobId, workspaceId, jobVersion, workerId],
     );
+    if (jobRes.rowCount !== 1) {
+      throw new DatabaseError(
+        `Lease fencing conflict on job ${jobId}: stale lease, wrong status, or wrong owner`,
+      );
+    }
 
-    await client.query(
+    const unitRes = await client.query(
       `UPDATE script_generation_units
        SET status = 'retry_wait', error_category = $1, error_message = $2, updated_at = NOW(), version = version + 1
-       WHERE job_id = $3 AND workspace_id = $4`,
+       WHERE job_id = $3 AND workspace_id = $4 AND status IN ('queued', 'running', 'retry_wait')`,
       [outcome.errorCategory, outcome.errorMessage, jobId, workspaceId],
     );
+    if (unitRes.rowCount !== 1) {
+      throw new DatabaseError(
+        `Failed to update script_generation_unit for job ${jobId} to retry_wait`,
+      );
+    }
   } else if (outcome.kind === 'repair') {
-    await client.query(
+    // Lease fencing on job_executions FIRST
+    const jobRes = await client.query(
       `UPDATE job_executions
        SET status = 'queued', repair_attempt = repair_attempt + 1,
            next_attempt_at = NOW() + ($1 || ' seconds')::interval,
            lease_owner = NULL, lease_expires_at = NULL, last_error_category = $2,
            updated_at = NOW(), version = version + 1
-       WHERE id = $3 AND workspace_id = $4 AND version = $5`,
-      [outcome.repairDelaySeconds, outcome.errorCategory, jobId, workspaceId, jobVersion],
+       WHERE id = $3 AND workspace_id = $4 AND version = $5 AND status = 'running' AND lease_owner = $6`,
+      [outcome.repairDelaySeconds, outcome.errorCategory, jobId, workspaceId, jobVersion, workerId],
     );
+    if (jobRes.rowCount !== 1) {
+      throw new DatabaseError(
+        `Lease fencing conflict on job ${jobId}: stale lease, wrong status, or wrong owner`,
+      );
+    }
 
-    await client.query(
+    const unitRes = await client.query(
       `UPDATE script_generation_units
        SET status = 'queued', error_category = $1, error_message = $2, updated_at = NOW(), version = version + 1
-       WHERE job_id = $3 AND workspace_id = $4`,
+       WHERE job_id = $3 AND workspace_id = $4 AND status IN ('queued', 'running', 'retry_wait')`,
       [outcome.errorCategory, outcome.errorMessage, jobId, workspaceId],
     );
+    if (unitRes.rowCount !== 1) {
+      throw new DatabaseError(
+        `Failed to update script_generation_unit for job ${jobId} to queued (repair)`,
+      );
+    }
   } else {
     // terminal_failure
-    await client.query(
-      `UPDATE workspace_ai_policies
-       SET reserved_spend_microunits = reserved_spend_microunits - $1,
-           updated_at = NOW(), version = version + 1
-       WHERE workspace_id = $2`,
-      [reservedMicrounits, workspaceId],
-    );
-
-    await client.query(
+    // 1. Lease fencing on job_executions FIRST before ANY budget release or side effect
+    const jobRes = await client.query(
       `UPDATE job_executions
        SET status = 'failed', completed_at = NOW(), lease_owner = NULL,
            lease_expires_at = NULL, reserved_spend_microunits = 0, last_error_category = $1,
            updated_at = NOW(), version = version + 1
-       WHERE id = $2 AND workspace_id = $3 AND version = $4`,
-      [outcome.errorCategory, jobId, workspaceId, jobVersion],
+       WHERE id = $2 AND workspace_id = $3 AND version = $4 AND status = 'running' AND lease_owner = $5`,
+      [outcome.errorCategory, jobId, workspaceId, jobVersion, workerId],
     );
+    if (jobRes.rowCount !== 1) {
+      throw new DatabaseError(
+        `Lease fencing conflict on job ${jobId}: stale lease, wrong status, or wrong owner`,
+      );
+    }
 
-    await client.query(
+    // 2. Release budget atomically (prevent negative reserved spend, exactly 1 row)
+    const policyRes = await client.query(
+      `UPDATE workspace_ai_policies
+       SET reserved_spend_microunits = reserved_spend_microunits - $1,
+           updated_at = NOW(), version = version + 1
+       WHERE workspace_id = $2 AND reserved_spend_microunits >= $1`,
+      [reservedMicrounits, workspaceId],
+    );
+    if (policyRes.rowCount !== 1) {
+      throw new DatabaseError(
+        `Failed to release workspace AI policy reservation: insufficient reserved spend in workspace ${workspaceId}`,
+      );
+    }
+
+    // 3. Update operations
+    const opRes = await client.query(
       `UPDATE operations
        SET status = 'failed', started_at = COALESCE(started_at, NOW()), completed_at = NOW(), error_category = $1, error_code = $2,
            error_message = $3, updated_at = NOW(), version = version + 1
-       WHERE id = $4 AND workspace_id = $5`,
+       WHERE id = $4 AND workspace_id = $5 AND status IN ('queued', 'running', 'pending')`,
       [outcome.errorCategory, outcome.errorCode, outcome.errorMessage, operationId, workspaceId],
     );
+    if (opRes.rowCount !== 1) {
+      throw new DatabaseError(`Failed to update operation ${operationId} to failed`);
+    }
 
-    await client.query(
+    // 4. Update ai_runs
+    const runRes = await client.query(
       `UPDATE ai_runs
        SET status = 'failed', started_at = COALESCE(started_at, NOW()), completed_at = NOW(), error_category = $1, updated_at = NOW(), version = version + 1
-       WHERE id = $2 AND workspace_id = $3`,
+       WHERE id = $2 AND workspace_id = $3 AND status IN ('queued', 'running')`,
       [outcome.errorCategory, aiRunId, workspaceId],
     );
+    if (runRes.rowCount !== 1) {
+      throw new DatabaseError(`Failed to update ai_run ${aiRunId} to failed`);
+    }
 
-    await client.query(
+    // 5. Update script_generation_units
+    const unitRes = await client.query(
       `UPDATE script_generation_units
        SET status = 'failed', error_category = $1, error_message = $2, updated_at = NOW(), version = version + 1
-       WHERE job_id = $3 AND workspace_id = $4`,
+       WHERE job_id = $3 AND workspace_id = $4 AND status IN ('queued', 'running', 'retry_wait')`,
       [outcome.errorCategory, outcome.errorMessage, jobId, workspaceId],
     );
+    if (unitRes.rowCount !== 1) {
+      throw new DatabaseError(`Failed to update script_generation_unit for job ${jobId} to failed`);
+    }
 
+    // 6. Update change request OR work order
     if (changeRequestId) {
-      await client.query(
+      const crRes = await client.query(
         `UPDATE artifact_change_requests
          SET status = 'failed', failure_reason = $1, updated_at = NOW(), version = version + 1
-         WHERE id = $2 AND workspace_id = $3`,
+         WHERE id = $2 AND workspace_id = $3 AND status = 'in_progress'`,
         [outcome.errorMessage, changeRequestId, workspaceId],
       );
+      if (crRes.rowCount !== 1) {
+        throw new DatabaseError(
+          `Failed to update artifact_change_request ${changeRequestId} to failed`,
+        );
+      }
     } else {
       await client.query(
         `UPDATE work_items
          SET status = 'failed', completed_at = NOW(), updated_at = NOW(), version = version + 1
-         WHERE id = $1 AND workspace_id = $2`,
+         WHERE id = $1 AND workspace_id = $2 AND status IN ('queued', 'running', 'pending')`,
         [workItemId, workspaceId],
       );
 

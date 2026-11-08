@@ -73,6 +73,7 @@ export async function createManualRevisionApi(
   workspaceId: string,
   artifactId: string,
   payload: CreateManualRevisionPayload,
+  idempotencyKey?: string,
   signal?: AbortSignal,
 ): Promise<ContentArtifactDetailDTO> {
   let res: Response;
@@ -84,6 +85,7 @@ export async function createManualRevisionApi(
         headers: {
           'Content-Type': 'application/json',
           Accept: 'application/json',
+          ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
         },
         credentials: 'include',
         body: JSON.stringify(payload),

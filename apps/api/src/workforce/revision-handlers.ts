@@ -9,7 +9,7 @@ import {
 } from '@affiliate-content-os/application';
 import { parseUserId, parseWorkspaceId } from '@affiliate-content-os/domain';
 import { requireAuthenticatedSession } from '../auth/session-auth.js';
-import { validateMutationOrigin } from '../catalog/helpers.js';
+import { extractIdempotencyKey, validateMutationOrigin } from '../catalog/helpers.js';
 import type { CatalogRouteDependencies } from '../catalog/types.js';
 import type { WorkforceRouteDependencies } from './types.js';
 
@@ -116,6 +116,7 @@ export async function handleCreateManualRevision(
 ): Promise<void> {
   const authContext = await requireAuthenticatedSession(request, reply, deps.auth);
   validateMutationOrigin(request, { auth: deps.auth } as unknown as CatalogRouteDependencies);
+  const { rawKey } = extractIdempotencyKey(request);
   const { workspaceId, artifactId } = request.params as {
     readonly workspaceId: string;
     readonly artifactId: string;
@@ -146,6 +147,7 @@ export async function handleCreateManualRevision(
       baseContentHashHex: body.baseContentHashHex,
       rawContent: body.rawContent,
       note: body.note,
+      idempotencyKey: rawKey,
     });
     return reply.status(201).send(detail);
   } catch (err) {
@@ -169,6 +171,7 @@ export async function handleRequestScriptChanges(
 ): Promise<void> {
   const authContext = await requireAuthenticatedSession(request, reply, deps.auth);
   validateMutationOrigin(request, { auth: deps.auth } as unknown as CatalogRouteDependencies);
+  const { rawKey } = extractIdempotencyKey(request);
   const { workspaceId, artifactId } = request.params as {
     readonly workspaceId: string;
     readonly artifactId: string;
@@ -201,6 +204,7 @@ export async function handleRequestScriptChanges(
       instructionText: body.instructionText,
       selectedVideoNumbers: body.selectedVideoNumbers,
       targetVariantCount: body.targetVariantCount,
+      idempotencyKey: rawKey,
     });
     return reply.status(202).send(changeRequest);
   } catch (err) {

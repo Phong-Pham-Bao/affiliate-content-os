@@ -214,10 +214,10 @@ describe('workforce-checkpoint-c-execution.integration (Execution, Capacity, Ide
     }
 
     // 5. Settle jobs 2, 3, 4 successfully
-    for (const [claimed, vNum] of [
-      [claimedJob2, 2],
-      [claimedJob3, 3],
-      [claimedJob4After, 4],
+    for (const [claimed, vNum, workerId] of [
+      [claimedJob2, 2, 'worker-2'],
+      [claimedJob3, 3, 'worker-3'],
+      [claimedJob4After, 4, 'worker-4'],
     ] as const) {
       const p = claimed!.payloadJson as typeof p1;
       const s = createFakeSingleVideoScript(vNum as 1 | 2 | 3 | 4 | 5, factId);
@@ -237,7 +237,7 @@ describe('workforce-checkpoint-c-execution.integration (Execution, Capacity, Ide
           jobVersion: claimed!.version,
           operationId: p.operationId,
           aiRunId: p.aiRunId,
-          workerId: 'worker-test',
+          workerId,
           videoNumber: vNum,
           changeRequestId: null,
           reservedMicrounits: p.reservedMicrounits,

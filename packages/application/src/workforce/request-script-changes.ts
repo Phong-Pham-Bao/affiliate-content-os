@@ -1,5 +1,10 @@
-import { DomainValidationError } from '@affiliate-content-os/domain';
-import type { UserId, WorkspaceId } from '@affiliate-content-os/domain';
+import { createHash } from 'node:crypto';
+import {
+  DomainValidationError,
+  validateIdempotencyKey,
+  type UserId,
+  type WorkspaceId,
+} from '@affiliate-content-os/domain';
 import type { WorkforcePersistencePort } from './ports.js';
 import type { ArtifactChangeRequestDTO } from './workforce-dtos.js';
 
@@ -13,12 +18,37 @@ export interface ExecuteRequestScriptChangesParams {
   readonly instructionText: string;
   readonly selectedVideoNumbers: readonly number[];
   readonly targetVariantCount?: number | undefined;
+  readonly idempotencyKey: string;
+}
+
+export function computeCanonicalRequestChangesRequestHash(params: {
+  readonly workspaceId: string;
+  readonly artifactId: string;
+  readonly expectedVersion: number;
+  readonly baseRevisionNumber: number;
+  readonly baseContentHashHex: string;
+  readonly instructionText: string;
+  readonly selectedVideoNumbers: readonly number[];
+  readonly targetVariantCount: number;
+}): Uint8Array {
+  const canonical = {
+    artifactId: params.artifactId,
+    baseContentHashHex: params.baseContentHashHex.toLowerCase(),
+    baseRevisionNumber: params.baseRevisionNumber,
+    expectedVersion: params.expectedVersion,
+    instructionText: params.instructionText,
+    selectedVideoNumbers: [...params.selectedVideoNumbers].sort((a, b) => a - b),
+    targetVariantCount: params.targetVariantCount,
+    workspaceId: params.workspaceId,
+  };
+  return new Uint8Array(createHash('sha256').update(JSON.stringify(canonical), 'utf8').digest());
 }
 
 export async function requestScriptChanges(
   persistencePort: WorkforcePersistencePort,
   params: ExecuteRequestScriptChangesParams,
 ): Promise<ArtifactChangeRequestDTO> {
+  const validKey = validateIdempotencyKey(params.idempotencyKey);
   const instruction = params.instructionText.trim();
   if (instruction.length === 0 || instruction.length > 2000) {
     throw new DomainValidationError(
@@ -61,6 +91,19 @@ export async function requestScriptChanges(
     );
   }
 
+  const keyHash = new Uint8Array(createHash('sha256').update(validKey, 'utf8').digest());
+  const requestHash = computeCanonicalRequestChangesRequestHash({
+    workspaceId: params.workspaceId,
+    artifactId: params.artifactId,
+    expectedVersion: params.expectedVersion,
+    baseRevisionNumber: params.baseRevisionNumber,
+    baseContentHashHex: params.baseContentHashHex,
+    instructionText: instruction,
+    selectedVideoNumbers: selectedVideos,
+    targetVariantCount: variantCount,
+  });
+  const routeKey = `POST /api/v1/workspaces/${params.workspaceId}/artifacts/${params.artifactId}/request-changes`;
+
   return persistencePort.requestScriptChanges({
     workspaceId: params.workspaceId,
     artifactId: params.artifactId,
@@ -71,5 +114,11 @@ export async function requestScriptChanges(
     instructionText: instruction,
     selectedVideoNumbers: selectedVideos,
     targetVariantCount: variantCount,
+    idempotency: {
+      rawKey: validKey,
+      keyHash,
+      requestHash,
+      routeKey,
+    },
   });
 }

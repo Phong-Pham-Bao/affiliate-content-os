@@ -14,6 +14,7 @@ import {
   requestScriptChangesApi,
 } from '../../../lib/workforce-api-client.js';
 import { validateScriptPackage } from '../../../lib/workforce-validators-script.js';
+import { generateCryptoIdempotencyKey } from '../../../lib/crypto-idempotency.js';
 import type { ContentStudioStatusState } from './content-studio-status-banner.js';
 
 export function useContentStudioState(
@@ -94,14 +95,20 @@ export function useContentStudioState(
     if (!detail || !activeRevision) return;
     setIsSubmitting(true);
     setError(null);
+    const key = generateCryptoIdempotencyKey() ?? globalThis.crypto?.randomUUID?.() ?? 'key';
     try {
-      const res = await createManualRevisionApi(workspaceId, artifactId, {
-        expectedVersion: detail.artifact.version,
-        baseRevisionNumber: activeRevision.revisionNumber,
-        baseContentHashHex: activeRevision.contentHashHex,
-        rawContent: updatedPackage,
-        note: note || undefined,
-      });
+      const res = await createManualRevisionApi(
+        workspaceId,
+        artifactId,
+        {
+          expectedVersion: detail.artifact.version,
+          baseRevisionNumber: activeRevision.revisionNumber,
+          baseContentHashHex: activeRevision.contentHashHex,
+          rawContent: updatedPackage,
+          note: note || undefined,
+        },
+        key,
+      );
       setDetail(res);
       setActiveRevision(res.latestRevision);
       setIsEditing(false);
@@ -127,15 +134,21 @@ export function useContentStudioState(
     if (!detail || !activeRevision) return;
     setIsSubmitting(true);
     setError(null);
+    const key = generateCryptoIdempotencyKey() ?? globalThis.crypto?.randomUUID?.() ?? 'key';
     try {
-      await requestScriptChangesApi(workspaceId, artifactId, {
-        expectedVersion: detail.artifact.version,
-        baseRevisionNumber: activeRevision.revisionNumber,
-        baseContentHashHex: activeRevision.contentHashHex,
-        instructionText: instruction,
-        selectedVideoNumbers: selectedVideos,
-        targetVariantCount: variants,
-      });
+      await requestScriptChangesApi(
+        workspaceId,
+        artifactId,
+        {
+          expectedVersion: detail.artifact.version,
+          baseRevisionNumber: activeRevision.revisionNumber,
+          baseContentHashHex: activeRevision.contentHashHex,
+          instructionText: instruction,
+          selectedVideoNumbers: selectedVideos,
+          targetVariantCount: variants,
+        },
+        key,
+      );
       setIsRequestChangesOpen(false);
       setStatusState('running');
     } catch (err) {

@@ -140,9 +140,17 @@ describe('Checkpoint C Application Use Cases', () => {
       baseContentHashHex: hashHex,
       rawContent: validPackage,
       note: 'Human polish',
+      idempotencyKey: 'idemp-manual-rev-1',
     });
 
-    expect(mockPersistence.createManualRevision).toHaveBeenCalledOnce();
+    expect(mockPersistence.createManualRevision).toHaveBeenCalledWith(
+      expect.objectContaining({
+        idempotency: expect.objectContaining({
+          rawKey: 'idemp-manual-rev-1',
+          routeKey: `POST /api/v1/workspaces/${wsId}/artifacts/${artId}/revisions`,
+        }),
+      }),
+    );
     expect(res.artifact.currentRevisionNumber).toBe(2);
   });
 
@@ -165,6 +173,7 @@ describe('Checkpoint C Application Use Cases', () => {
       instructionText: 'Làm nổi bật tính năng tiết kiệm năng lượng hơn',
       selectedVideoNumbers: [3, 1], // Unsorted with duplicate check
       targetVariantCount: 2,
+      idempotencyKey: 'idemp-req-changes-1',
     });
 
     expect(mockPersistence.requestScriptChanges).toHaveBeenCalledWith(
@@ -172,6 +181,10 @@ describe('Checkpoint C Application Use Cases', () => {
         instructionText: 'Làm nổi bật tính năng tiết kiệm năng lượng hơn',
         selectedVideoNumbers: [1, 3], // Sorted and unique
         targetVariantCount: 2,
+        idempotency: expect.objectContaining({
+          rawKey: 'idemp-req-changes-1',
+          routeKey: `POST /api/v1/workspaces/${wsId}/artifacts/${artId}/request-changes`,
+        }),
       }),
     );
     expect(res.status).toBe('in_progress');
@@ -192,6 +205,7 @@ describe('Checkpoint C Application Use Cases', () => {
         baseContentHashHex: hashHex,
         instructionText: '   ',
         selectedVideoNumbers: [1],
+        idempotencyKey: 'idemp-invalid-1',
       }),
     ).rejects.toThrow(DomainValidationError);
 
@@ -205,6 +219,56 @@ describe('Checkpoint C Application Use Cases', () => {
         baseContentHashHex: hashHex,
         instructionText: 'Valid instruction',
         selectedVideoNumbers: [0 as unknown as 1],
+        idempotencyKey: 'idemp-invalid-2',
+      }),
+    ).rejects.toThrow(DomainValidationError);
+  });
+
+  it('rejects createManualRevision and requestScriptChanges with invalid idempotency key', async () => {
+    const mockPersistence = {
+      createManualRevision: vi.fn(),
+      requestScriptChanges: vi.fn(),
+    } as unknown as WorkforcePersistencePort;
+
+    const samplePackage = {
+      schemaVersion: 1,
+      seriesTitle: 'Series 5 Video',
+      targetAudienceSummary: 'Audience summary',
+      creativeDirectionSummary: 'Creative direction summary',
+      videos: [
+        makeFakeVideo(1),
+        makeFakeVideo(2),
+        makeFakeVideo(3),
+        makeFakeVideo(4),
+        makeFakeVideo(5),
+      ],
+      evidenceReferences: [],
+    };
+
+    await expect(
+      createManualRevision(mockPersistence, {
+        workspaceId: wsId,
+        artifactId: artId,
+        actorUserId: userId,
+        expectedVersion: 1,
+        baseRevisionNumber: 1,
+        baseContentHashHex: hashHex,
+        rawContent: samplePackage,
+        idempotencyKey: '   ',
+      }),
+    ).rejects.toThrow(DomainValidationError);
+
+    await expect(
+      requestScriptChanges(mockPersistence, {
+        workspaceId: wsId,
+        artifactId: artId,
+        actorUserId: userId,
+        expectedVersion: 1,
+        baseRevisionNumber: 1,
+        baseContentHashHex: hashHex,
+        instructionText: 'Valid',
+        selectedVideoNumbers: [1],
+        idempotencyKey: '',
       }),
     ).rejects.toThrow(DomainValidationError);
   });

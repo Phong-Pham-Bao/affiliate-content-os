@@ -115,10 +115,14 @@ export function validateEvidenceReferencesArray(
   for (let i = 0; i < raw.length; i++) {
     const item = validateEvidenceReferenceItem(raw[i], `${fieldName}[${i}]`);
     const key = `${item.sourceKind}:${item.sourceId}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      result.push(item);
+    if (seen.has(key)) {
+      throw new DomainValidationError(
+        `Duplicate evidence reference at ${fieldName}[${i}]: ${key}`,
+        `${fieldName}[${i}]`,
+      );
     }
+    seen.add(key);
+    result.push(item);
   }
   return Object.freeze(result);
 }

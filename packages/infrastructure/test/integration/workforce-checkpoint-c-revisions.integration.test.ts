@@ -209,6 +209,13 @@ describe('workforce-checkpoint-c-revisions.integration (Immutability, Tenants, S
     };
 
     const client = await pool.connect();
+    const makeIdemp = (key: string) => ({
+      rawKey: key,
+      keyHash: new Uint8Array(crypto.createHash('sha256').update(key).digest()),
+      requestHash: new Uint8Array(crypto.createHash('sha256').update(key).digest()),
+      routeKey: `POST /api/v1/workspaces/${wsId}/artifacts/${artifactId}/revisions`,
+    });
+
     try {
       // 1. Mismatched version -> Precondition failed
       await expect(
@@ -221,6 +228,7 @@ describe('workforce-checkpoint-c-revisions.integration (Immutability, Tenants, S
           baseContentHashHex: initialRev1HashHex,
           content: modifiedPkg,
           note: 'Stale edit',
+          idempotency: makeIdemp('stale-version-key'),
         }),
       ).rejects.toThrow(/Precondition failed: artifact version mismatch/);
 
@@ -235,6 +243,7 @@ describe('workforce-checkpoint-c-revisions.integration (Immutability, Tenants, S
           baseContentHashHex: '0000000000000000000000000000000000000000000000000000000000000000', // Stale!
           content: modifiedPkg,
           note: 'Stale edit',
+          idempotency: makeIdemp('stale-hash-key'),
         }),
       ).rejects.toThrow(/Precondition failed: base revision content hash mismatch/);
 
@@ -249,6 +258,7 @@ describe('workforce-checkpoint-c-revisions.integration (Immutability, Tenants, S
         baseContentHashHex: initialRev1HashHex,
         content: modifiedPkg,
         note: 'Bản chỉnh sửa thủ công đầu tiên',
+        idempotency: makeIdemp('valid-rev-2-key'),
       });
       await client.query('COMMIT');
 
@@ -309,6 +319,12 @@ describe('workforce-checkpoint-c-revisions.integration (Immutability, Tenants, S
           'Tập trung vào nỗi đau đau lưng và đưa ra dẫn chứng giảm 40% áp lực cột sống',
         selectedVideoNumbers: [2, 4],
         targetVariantCount: 1,
+        idempotency: {
+          rawKey: 'cr-key-1',
+          keyHash: new Uint8Array(crypto.createHash('sha256').update('cr-key-1').digest()),
+          requestHash: new Uint8Array(crypto.createHash('sha256').update('cr-key-1').digest()),
+          routeKey: `POST /api/v1/workspaces/${wsId}/artifacts/${artifactId}/request-changes`,
+        },
       });
       await client.query('COMMIT');
       changeRequestId = cr.id;

@@ -1,6 +1,6 @@
 # Affiliate Content OS - Database Specification
 
-Status: Sprint 3 Checkpoint C implemented through migration `0010_content_studio_revisions.sql`
+Status: Sprint 3 Checkpoint C implemented through migration `0010_content_studio_revisions.sql` and hardened in `0011_checkpoint_c_hardening.sql`
 
 Last updated: 2026-11-08
 
@@ -285,6 +285,19 @@ Immutable lineage record for each revision of a script package, tracking parent 
 - Unique constraints: `(workspace_id, id)`, `(artifact_id, revision_number)`.
 - Composite FKs: `(workspace_id, artifact_id)` to `content_artifacts`, `(workspace_id, artifact_id, revision_number)` to `content_artifact_revisions`.
 - Trigger `content_artifact_lineage_enforce_immutability`: blocks any `UPDATE` or `DELETE`.
+
+#### Checkpoint C Hardening (`0011_checkpoint_c_hardening.sql`)
+Migration `0011_checkpoint_c_hardening.sql` hardens tenant isolation and data integrity:
+- Composite foreign keys on `script_generation_units`:
+  - `(workspace_id, operation_id)` to `operations(workspace_id, id)`
+  - `(workspace_id, ai_run_id)` to `ai_runs(workspace_id, id)`
+- Null-aware uniqueness indexes on `script_generation_units`:
+  - `uq_script_gen_units_initial`: `UNIQUE (workspace_id, work_order_id, video_number) WHERE change_request_id IS NULL`
+  - `uq_script_gen_units_change_request`: `UNIQUE (workspace_id, change_request_id, video_number) WHERE change_request_id IS NOT NULL`
+- Artifact-scoped foreign keys and composite uniqueness:
+  - `uq_artifact_change_requests_composite`: `UNIQUE (workspace_id, artifact_id, id)` on `artifact_change_requests`
+  - `fk_artifact_change_requests_resulting_rev`: `(workspace_id, artifact_id, resulting_revision_number)` to `content_artifact_revisions(workspace_id, artifact_id, revision_number)`
+  - `fk_content_artifact_lineage_change_request`: `(workspace_id, artifact_id, change_request_id)` to `artifact_change_requests(workspace_id, artifact_id, id)`
 
 ## 6. Content and approval
 

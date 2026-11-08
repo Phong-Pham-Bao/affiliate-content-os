@@ -7,6 +7,7 @@ import { createTestWorkforceDeps, mockArtifactDetail } from './helpers/workforce
 describe('Workforce Revision Routes (Checkpoint C)', () => {
   const sessionCookie = 'A'.repeat(43);
   const validOrigin = 'http://127.0.0.1:3000';
+  const idempotencyKey = '0192b012-3456-789a-8bcd-ef0123456789';
   const artifactId = mockArtifactDetail.artifact.id;
   const changeRequestId = '019318b2-5f33-722e-a5df-036f007b89fc';
   const notFoundChangeRequestId = '019318b2-5f33-722e-a5df-036f007b8999';
@@ -86,7 +87,7 @@ describe('Workforce Revision Routes (Checkpoint C)', () => {
     const postRev = await app.inject({
       method: 'POST',
       url: `/api/v1/workspaces/${TEST_WORKSPACE_ID}/artifacts/${artifactId}/revisions`,
-      headers: { origin: validOrigin },
+      headers: { origin: validOrigin, 'idempotency-key': idempotencyKey },
       payload: validManualRevisionPayload,
     });
     expect(postRev.statusCode).toBe(401);
@@ -94,7 +95,7 @@ describe('Workforce Revision Routes (Checkpoint C)', () => {
     const postChanges = await app.inject({
       method: 'POST',
       url: `/api/v1/workspaces/${TEST_WORKSPACE_ID}/artifacts/${artifactId}/request-changes`,
-      headers: { origin: validOrigin },
+      headers: { origin: validOrigin, 'idempotency-key': idempotencyKey },
       payload: validRequestChangesPayload,
     });
     expect(postChanges.statusCode).toBe(401);
@@ -121,7 +122,7 @@ describe('Workforce Revision Routes (Checkpoint C)', () => {
       method: 'POST',
       url: `/api/v1/workspaces/${TEST_WORKSPACE_ID}/artifacts/${artifactId}/revisions`,
       cookies: { [COOKIE_SESSION]: sessionCookie },
-      headers: { origin: validOrigin },
+      headers: { origin: validOrigin, 'idempotency-key': idempotencyKey },
       payload: validManualRevisionPayload,
     });
     expect(postRev.statusCode).toBe(404);
@@ -131,7 +132,7 @@ describe('Workforce Revision Routes (Checkpoint C)', () => {
       method: 'POST',
       url: `/api/v1/workspaces/${TEST_WORKSPACE_ID}/artifacts/${artifactId}/request-changes`,
       cookies: { [COOKIE_SESSION]: sessionCookie },
-      headers: { origin: validOrigin },
+      headers: { origin: validOrigin, 'idempotency-key': idempotencyKey },
       payload: validRequestChangesPayload,
     });
     expect(postChanges.statusCode).toBe(404);
@@ -146,7 +147,7 @@ describe('Workforce Revision Routes (Checkpoint C)', () => {
       method: 'POST',
       url: `/api/v1/workspaces/${TEST_WORKSPACE_ID}/artifacts/${artifactId}/revisions`,
       cookies: { [COOKIE_SESSION]: sessionCookie },
-      headers: { origin: 'https://evil.com' },
+      headers: { origin: 'https://evil.com', 'idempotency-key': idempotencyKey },
       payload: validManualRevisionPayload,
     });
     expect(postRev.statusCode).toBe(403);
@@ -155,7 +156,7 @@ describe('Workforce Revision Routes (Checkpoint C)', () => {
       method: 'POST',
       url: `/api/v1/workspaces/${TEST_WORKSPACE_ID}/artifacts/${artifactId}/request-changes`,
       cookies: { [COOKIE_SESSION]: sessionCookie },
-      headers: { origin: 'https://evil.com' },
+      headers: { origin: 'https://evil.com', 'idempotency-key': idempotencyKey },
       payload: validRequestChangesPayload,
     });
     expect(postChanges.statusCode).toBe(403);
@@ -213,7 +214,7 @@ describe('Workforce Revision Routes (Checkpoint C)', () => {
       method: 'POST',
       url: `/api/v1/workspaces/${TEST_WORKSPACE_ID}/artifacts/${artifactId}/revisions`,
       cookies: { [COOKIE_SESSION]: sessionCookie },
-      headers: { origin: validOrigin },
+      headers: { origin: validOrigin, 'idempotency-key': idempotencyKey },
       payload: validManualRevisionPayload,
     });
     expect(res.statusCode).toBe(201);
@@ -229,7 +230,7 @@ describe('Workforce Revision Routes (Checkpoint C)', () => {
       method: 'POST',
       url: `/api/v1/workspaces/${TEST_WORKSPACE_ID}/artifacts/${artifactId}/request-changes`,
       cookies: { [COOKIE_SESSION]: sessionCookie },
-      headers: { origin: validOrigin },
+      headers: { origin: validOrigin, 'idempotency-key': idempotencyKey },
       payload: validRequestChangesPayload,
     });
     expect(res.statusCode).toBe(202);
@@ -248,5 +249,28 @@ describe('Workforce Revision Routes (Checkpoint C)', () => {
     });
     expect(res.statusCode).toBe(404);
     expect(res.json().code).toBe('WORKSPACE_NOT_FOUND');
+  });
+
+  it('rejects mutation routes when idempotency-key is missing or malformed', async () => {
+    const deps = createTestWorkforceDeps();
+    const app = createApp({ auth: deps.auth, workforce: deps });
+
+    const missingKeyRes = await app.inject({
+      method: 'POST',
+      url: `/api/v1/workspaces/${TEST_WORKSPACE_ID}/artifacts/${artifactId}/revisions`,
+      cookies: { [COOKIE_SESSION]: sessionCookie },
+      headers: { origin: validOrigin },
+      payload: validManualRevisionPayload,
+    });
+    expect(missingKeyRes.statusCode).toBe(400);
+
+    const malformedKeyRes = await app.inject({
+      method: 'POST',
+      url: `/api/v1/workspaces/${TEST_WORKSPACE_ID}/artifacts/${artifactId}/request-changes`,
+      cookies: { [COOKIE_SESSION]: sessionCookie },
+      headers: { origin: validOrigin, 'idempotency-key': 'has space key' },
+      payload: validRequestChangesPayload,
+    });
+    expect(malformedKeyRes.statusCode).toBe(400);
   });
 });
