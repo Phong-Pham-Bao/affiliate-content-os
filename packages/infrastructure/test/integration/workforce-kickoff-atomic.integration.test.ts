@@ -9,9 +9,9 @@ import {
 } from './helpers/workforce-fixtures.js';
 import { PostgresWorkforceAdapter } from '../../src/workforce/postgres-workforce-adapter.js';
 import {
-  StaleVersionConflictError,
   WorkforceAnalysisNotAcceptedError,
   WorkforceFactSetNotConfirmedError,
+  WorkforceStaleContextError,
 } from '@affiliate-content-os/application';
 import {
   parseAIRunId,
@@ -188,7 +188,13 @@ describe('workforce-kickoff-atomic.integration', () => {
       productVersion: 99,
     });
 
-    await expect(adapter.kickoffWorkOrderAtomic(params)).rejects.toThrow(StaleVersionConflictError);
+    const errorPromise = adapter.kickoffWorkOrderAtomic(params);
+    await expect(errorPromise).rejects.toThrow(WorkforceStaleContextError);
+    await expect(errorPromise).rejects.toMatchObject({
+      code: 'WORKFORCE_STALE_CONTEXT',
+      expectedVersion: 99,
+      actualVersion: 1,
+    });
 
     const woRes = await pool.query(`SELECT * FROM work_orders WHERE id = $1`, [
       params.workOrder.id,
@@ -206,7 +212,13 @@ describe('workforce-kickoff-atomic.integration', () => {
       factSetVersion: 99,
     });
 
-    await expect(adapter.kickoffWorkOrderAtomic(params)).rejects.toThrow(StaleVersionConflictError);
+    const errorPromise = adapter.kickoffWorkOrderAtomic(params);
+    await expect(errorPromise).rejects.toThrow(WorkforceStaleContextError);
+    await expect(errorPromise).rejects.toMatchObject({
+      code: 'WORKFORCE_STALE_CONTEXT',
+      expectedVersion: 99,
+      actualVersion: 1,
+    });
 
     const woRes = await pool.query(`SELECT * FROM work_orders WHERE id = $1`, [
       params.workOrder.id,
@@ -220,7 +232,13 @@ describe('workforce-kickoff-atomic.integration', () => {
       sourceAnalyses: [{ id: FIXTURE_IDS.analysisId1, version: 99 }],
     });
 
-    await expect(adapter.kickoffWorkOrderAtomic(params)).rejects.toThrow(StaleVersionConflictError);
+    const errorPromise = adapter.kickoffWorkOrderAtomic(params);
+    await expect(errorPromise).rejects.toThrow(WorkforceStaleContextError);
+    await expect(errorPromise).rejects.toMatchObject({
+      code: 'WORKFORCE_STALE_CONTEXT',
+      expectedVersion: 99,
+      actualVersion: 1,
+    });
 
     const woRes = await pool.query(`SELECT * FROM work_orders WHERE id = $1`, [
       params.workOrder.id,

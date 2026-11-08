@@ -125,7 +125,8 @@ describe('workforce-idempotency-concurrency.integration', () => {
     // Manually expire the idempotency row in real PostgreSQL
     await pool.query(
       `UPDATE idempotency_keys
-       SET expires_at = NOW() - INTERVAL '1 hour'
+       SET created_at = NOW() - INTERVAL '2 hours',
+           expires_at = NOW() - INTERVAL '1 hour'
        WHERE workspace_id = $1 AND key_hash = $2`,
       [params1.workOrder.workspaceId, Buffer.from(keyHash)],
     );
@@ -204,10 +205,11 @@ describe('workforce-idempotency-concurrency.integration', () => {
     const res1 = await adapter.kickoffWorkOrderAtomic(params1);
     expect(res1.cached).toBe(false);
 
-    // 2. Set expires_at in the past relative to database time (5 seconds ago)
+    // 2. Set created_at and expires_at in the past relative to database time so created_at < expires_at < NOW()
     await pool.query(
       `UPDATE idempotency_keys
-       SET expires_at = NOW() - INTERVAL '5 seconds'
+       SET created_at = NOW() - INTERVAL '10 seconds',
+           expires_at = NOW() - INTERVAL '5 seconds'
        WHERE workspace_id = $1 AND key_hash = $2`,
       [params1.workOrder.workspaceId, Buffer.from(keyHash)],
     );
