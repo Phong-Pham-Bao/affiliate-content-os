@@ -82,32 +82,49 @@ export async function sweepExhaustedJobs(client: pg.PoolClient): Promise<void> {
       }
     }
 
+    let isChangeRequestJob = false;
     if (row.job_type === 'scriptwriting') {
-      await client.query(
+      const crCheck = await client.query<{ change_request_id: string | null }>(
         `UPDATE script_generation_units
          SET status = 'failed',
              error_category = 'provider_timeout',
              error_message = 'Job execution attempts exhausted after worker timeout',
              updated_at = NOW(),
              version = version + 1
-         WHERE job_id = $1 AND workspace_id = $2`,
+         WHERE job_id = $1 AND workspace_id = $2
+         RETURNING change_request_id`,
         [row.id, row.workspace_id],
       );
 
-      await client.query(
-        `UPDATE artifact_change_requests
-         SET status = 'failed',
-             failure_reason = 'Script unit execution exhausted',
-             updated_at = NOW(),
-             version = version + 1
-         WHERE id IN (
-           SELECT change_request_id FROM script_generation_units WHERE job_id = $1 AND change_request_id IS NOT NULL
-         ) AND workspace_id = $2 AND status = 'in_progress'`,
-        [row.id, row.workspace_id],
-      );
+      if (crCheck.rowCount && crCheck.rowCount > 0 && crCheck.rows[0]?.change_request_id) {
+        isChangeRequestJob = true;
+        await client.query(
+          `UPDATE artifact_change_requests
+           SET status = 'failed',
+               failure_code = 'timeout',
+               failure_reason = 'Script unit execution exhausted',
+               updated_at = NOW(),
+               version = version + 1
+           WHERE id = $1 AND workspace_id = $2 AND status = 'in_progress'`,
+          [crCheck.rows[0].change_request_id, row.workspace_id],
+        );
+
+        await client.query(
+          `UPDATE agent_assignments aa
+           SET office_state = 'failed', updated_at = NOW(), version = aa.version + 1
+           FROM agent_role_definitions rd
+           WHERE aa.role_definition_id = rd.id
+             AND aa.workspace_id = $1
+             AND aa.work_order_id = $2
+             AND rd.role_key = 'scriptwriter'
+             AND aa.office_state = 'running'`,
+          [row.workspace_id, row.work_order_id],
+        );
+      }
     }
 
     if (
+      !isChangeRequestJob &&
       (row.job_type === 'workforce_planning' || row.job_type === 'scriptwriting') &&
       row.work_item_id &&
       row.work_order_id

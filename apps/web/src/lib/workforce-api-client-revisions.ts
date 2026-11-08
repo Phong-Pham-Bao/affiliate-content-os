@@ -73,9 +73,14 @@ export async function createManualRevisionApi(
   workspaceId: string,
   artifactId: string,
   payload: CreateManualRevisionPayload,
-  idempotencyKey?: string,
+  idempotencyKey: string,
   signal?: AbortSignal,
 ): Promise<ContentArtifactDetailDTO> {
+  const trimmedKey = idempotencyKey?.trim();
+  if (!trimmedKey) {
+    throw new Error('Idempotency key is required for manual revision');
+  }
+
   let res: Response;
   try {
     res = await fetch(
@@ -85,7 +90,7 @@ export async function createManualRevisionApi(
         headers: {
           'Content-Type': 'application/json',
           Accept: 'application/json',
-          ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
+          'Idempotency-Key': trimmedKey,
         },
         credentials: 'include',
         body: JSON.stringify(payload),
@@ -105,9 +110,14 @@ export async function requestScriptChangesApi(
   workspaceId: string,
   artifactId: string,
   payload: RequestScriptChangesPayload,
-  idempotencyKey?: string,
+  idempotencyKey: string,
   signal?: AbortSignal,
 ): Promise<ArtifactChangeRequestDTO> {
+  const trimmedKey = idempotencyKey?.trim();
+  if (!trimmedKey) {
+    throw new Error('Idempotency key is required for script changes');
+  }
+
   let res: Response;
   try {
     res = await fetch(
@@ -117,7 +127,7 @@ export async function requestScriptChangesApi(
         headers: {
           'Content-Type': 'application/json',
           Accept: 'application/json',
-          ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
+          'Idempotency-Key': trimmedKey,
         },
         credentials: 'include',
         body: JSON.stringify(payload),

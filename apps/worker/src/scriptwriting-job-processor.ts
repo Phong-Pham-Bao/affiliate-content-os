@@ -123,6 +123,75 @@ export async function processScriptwritingJob(
     }
 
     const brief = briefRes.rows[0].brief_json as ContentBrief;
+
+    if (payload.changeRequestId) {
+      const crCheck = await client.query<{ status: string }>(
+        `SELECT status FROM artifact_change_requests WHERE id = $1 AND workspace_id = $2`,
+        [payload.changeRequestId, payload.workspaceId],
+      );
+      if (crCheck.rowCount === 0 || !crCheck.rows[0] || crCheck.rows[0].status !== 'in_progress') {
+        await failScriptwritingSafely(
+          client,
+          job,
+          deps.workerId,
+          'CHANGE_REQUEST_NOT_IN_PROGRESS',
+          'internal_error',
+          'Change request is no longer in_progress',
+          payload,
+        );
+        return;
+      }
+    }
+
+    // Pre-provider authoritative-context check: planning revisions must still match brief
+    const planningCheck = await client.query<{
+      artifact_type: string;
+      current_revision_number: number;
+      current_revision_id: string;
+    }>(
+      `SELECT a.artifact_type, a.current_revision_number, r.id AS current_revision_id
+       FROM content_artifacts a
+       JOIN content_artifact_revisions r
+         ON r.artifact_id = a.id
+        AND r.revision_number = a.current_revision_number
+        AND r.workspace_id = a.workspace_id
+       WHERE a.workspace_id = $1 AND a.work_order_id = $2 AND a.product_id = $3
+         AND a.artifact_type IN ('product_campaign_plan', 'audience_insight_board', 'video_series_plan')`,
+      [payload.workspaceId, payload.workOrderId, payload.productId],
+    );
+
+    const planningMap = new Map(planningCheck.rows.map((r) => [r.artifact_type, r]));
+    const campaignRow = planningMap.get('product_campaign_plan');
+    const audienceRow = planningMap.get('audience_insight_board');
+    const seriesRow = planningMap.get('video_series_plan');
+
+    const isContextDrift =
+      planningCheck.rowCount !== 3 ||
+      !campaignRow ||
+      campaignRow.current_revision_id !== brief.planningRevisions.productCampaignPlanRevisionId ||
+      campaignRow.current_revision_number !==
+        brief.planningRevisions.productCampaignPlanRevisionNumber ||
+      !audienceRow ||
+      audienceRow.current_revision_id !== brief.planningRevisions.audienceInsightBoardRevisionId ||
+      audienceRow.current_revision_number !==
+        brief.planningRevisions.audienceInsightBoardRevisionNumber ||
+      !seriesRow ||
+      seriesRow.current_revision_id !== brief.planningRevisions.videoSeriesPlanRevisionId ||
+      seriesRow.current_revision_number !== brief.planningRevisions.videoSeriesPlanRevisionNumber;
+
+    if (isContextDrift) {
+      await failScriptwritingSafely(
+        client,
+        job,
+        deps.workerId,
+        'AUTHORITATIVE_CONTEXT_DRIFT',
+        'invalid_evidence',
+        'Planning revisions changed after content brief synthesis',
+        payload,
+      );
+      return;
+    }
+
     const input: AIScriptVideoInput = {
       workspaceId: payload.workspaceId,
       productId: payload.productId,

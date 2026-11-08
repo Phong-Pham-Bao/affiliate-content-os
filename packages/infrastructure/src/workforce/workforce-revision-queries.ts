@@ -172,7 +172,7 @@ export async function getChangeRequestByIdQuery(
     `SELECT id, artifact_id, base_revision_number, base_content_hash,
             requested_by_user_id, instruction_text, selected_video_numbers,
             target_variant_count, status, resulting_revision_number,
-            failure_reason, created_at, updated_at, version
+            failure_reason, failure_code, created_at, updated_at, version
      FROM artifact_change_requests
      WHERE workspace_id = $1 AND artifact_id = $2 AND id = $3`,
     [workspaceId, artifactId, changeRequestId],
@@ -193,6 +193,7 @@ export async function getChangeRequestByIdQuery(
     status: r.status,
     resultingRevisionNumber: r.resulting_revision_number,
     failureReason: r.failure_reason,
+    failureCode: r.failure_code ? String(r.failure_code) : null,
     createdAt: mapSafeTimestamp(r.created_at, 'created_at'),
     updatedAt: mapSafeTimestamp(r.updated_at, 'updated_at'),
     version: Number(r.version),

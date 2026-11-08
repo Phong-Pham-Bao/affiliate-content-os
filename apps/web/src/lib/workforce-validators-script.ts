@@ -67,6 +67,8 @@ export function validateArtifactChangeRequest(val: unknown): ArtifactChangeReque
         ? Number(val.resultingRevisionNumber)
         : null,
     failureReason: val.failureReason ? String(val.failureReason) : null,
+    failureCode:
+      typeof val.failureCode === 'string' && val.failureCode.trim() ? val.failureCode.trim() : null,
     createdAt: String(val.createdAt ?? ''),
     updatedAt: String(val.updatedAt ?? ''),
     version: Number(val.version ?? 1),

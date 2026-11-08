@@ -195,19 +195,46 @@ export async function settleScriptUnitAtomic(
     if (changeRequestId) {
       await assembleScriptPackageChangeRequestAtomic(client, { workspaceId, changeRequestId });
     } else {
-      await assembleScriptPackageInitialAtomic(client, {
-        workspaceId,
-        productId,
-        workOrderId,
-        workItemId,
-        assignmentId,
-      });
+      try {
+        await assembleScriptPackageInitialAtomic(client, {
+          workspaceId,
+          productId,
+          workOrderId,
+          workItemId,
+          assignmentId,
+        });
+      } catch (asmErr) {
+        if (asmErr instanceof Error && asmErr.message.includes('Authoritative context drift')) {
+          await client.query(
+            `UPDATE work_items
+             SET status = 'failed', completed_at = NOW(), updated_at = NOW(), version = version + 1
+             WHERE id = $1 AND workspace_id = $2 AND status IN ('queued', 'running', 'pending')`,
+            [workItemId, workspaceId],
+          );
+          await client.query(
+            `UPDATE agent_assignments
+             SET office_state = 'failed', updated_at = NOW(), version = version + 1
+             WHERE id = $1 AND workspace_id = $2 AND office_state = 'running'`,
+            [assignmentId, workspaceId],
+          );
+          await client.query(
+            `UPDATE work_orders
+             SET status = 'failed', completed_at = NOW(), failure_category = 'invalid_evidence',
+                 failure_reason = 'Authoritative context drift: planning revisions changed after content brief synthesis',
+                 updated_at = NOW(), version = version + 1
+             WHERE id = $1 AND workspace_id = $2 AND status = 'in_progress'`,
+            [workOrderId, workspaceId],
+          );
+          return;
+        }
+        throw asmErr;
+      }
     }
   } else if (outcome.kind === 'transient_failure') {
     // Lease fencing on job_executions FIRST
     const jobRes = await client.query(
       `UPDATE job_executions
-       SET status = 'retry_wait', attempt = attempt + 1, next_attempt_at = $1,
+       SET status = 'retry_wait', next_attempt_at = $1,
            lease_owner = NULL, lease_expires_at = NULL, last_error_category = $2,
            updated_at = NOW(), version = version + 1
        WHERE id = $3 AND workspace_id = $4 AND version = $5 AND status = 'running' AND lease_owner = $6`,
@@ -325,17 +352,30 @@ export async function settleScriptUnitAtomic(
 
     // 6. Update change request OR work order
     if (changeRequestId) {
-      const crRes = await client.query(
+      const crCode =
+        outcome.errorCategory === 'provider_timeout'
+          ? 'timeout'
+          : outcome.errorCode === 'AUTHORITATIVE_CONTEXT_DRIFT'
+            ? 'context_drift'
+            : 'provider_failure';
+      await client.query(
         `UPDATE artifact_change_requests
-         SET status = 'failed', failure_reason = $1, updated_at = NOW(), version = version + 1
-         WHERE id = $2 AND workspace_id = $3 AND status = 'in_progress'`,
-        [outcome.errorMessage, changeRequestId, workspaceId],
+         SET status = 'failed', failure_code = $1, failure_reason = $2, updated_at = NOW(), version = version + 1
+         WHERE id = $3 AND workspace_id = $4 AND status = 'in_progress'`,
+        [crCode, outcome.errorMessage, changeRequestId, workspaceId],
       );
-      if (crRes.rowCount !== 1) {
-        throw new DatabaseError(
-          `Failed to update artifact_change_request ${changeRequestId} to failed`,
-        );
-      }
+
+      await client.query(
+        `UPDATE agent_assignments aa
+         SET office_state = 'failed', updated_at = NOW(), version = aa.version + 1
+         FROM agent_role_definitions rd
+         WHERE aa.role_definition_id = rd.id
+           AND aa.workspace_id = $1
+           AND aa.work_order_id = $2
+           AND rd.role_key = 'scriptwriter'
+           AND aa.office_state = 'running'`,
+        [workspaceId, workOrderId],
+      );
     } else {
       await client.query(
         `UPDATE work_items

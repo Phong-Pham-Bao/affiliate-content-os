@@ -96,11 +96,24 @@ export async function assembleScriptPackageChangeRequestAtomic(
     await client.query(
       `UPDATE artifact_change_requests
        SET status = 'failed',
+           failure_code = 'stale_base_conflict',
            failure_reason = 'Stale base revision: artifact was updated by another revision prior to change request completion',
            updated_at = NOW(),
            version = version + 1
        WHERE workspace_id = $1 AND id = $2 AND status = 'in_progress'`,
       [workspaceId, changeRequestId],
+    );
+
+    await client.query(
+      `UPDATE agent_assignments aa
+       SET office_state = 'review_required', updated_at = NOW(), version = aa.version + 1
+       FROM agent_role_definitions rd
+       WHERE aa.role_definition_id = rd.id
+         AND aa.workspace_id = $1
+         AND aa.work_order_id = $2
+         AND rd.role_key = 'scriptwriter'
+         AND aa.office_state = 'running'`,
+      [workspaceId, workOrderId],
     );
     return false;
   }
@@ -146,18 +159,13 @@ export async function assembleScriptPackageChangeRequestAtomic(
     [workspaceId, workOrderId, productId],
   );
 
-  if (planningCheck.rowCount !== 3) {
-    throw new DatabaseError(
-      `Authoritative context drift: missing planning artifacts for work order ${workOrderId}`,
-    );
-  }
-
   const planningMap = new Map(planningCheck.rows.map((r) => [r.artifact_type, r]));
   const campaignRow = planningMap.get('product_campaign_plan');
   const audienceRow = planningMap.get('audience_insight_board');
   const seriesRow = planningMap.get('video_series_plan');
 
-  if (
+  const isContextDrift =
+    planningCheck.rowCount !== 3 ||
     !campaignRow ||
     campaignRow.current_revision_id !== brief.planningRevisions.productCampaignPlanRevisionId ||
     campaignRow.current_revision_number !==
@@ -168,11 +176,32 @@ export async function assembleScriptPackageChangeRequestAtomic(
       brief.planningRevisions.audienceInsightBoardRevisionNumber ||
     !seriesRow ||
     seriesRow.current_revision_id !== brief.planningRevisions.videoSeriesPlanRevisionId ||
-    seriesRow.current_revision_number !== brief.planningRevisions.videoSeriesPlanRevisionNumber
-  ) {
-    throw new DatabaseError(
-      `Authoritative context drift: planning revisions changed after content brief synthesis for work order ${workOrderId}`,
+    seriesRow.current_revision_number !== brief.planningRevisions.videoSeriesPlanRevisionNumber;
+
+  if (isContextDrift) {
+    await client.query(
+      `UPDATE artifact_change_requests
+       SET status = 'failed',
+           failure_code = 'context_drift',
+           failure_reason = 'Authoritative context drift: planning revisions changed after content brief synthesis',
+           updated_at = NOW(),
+           version = version + 1
+       WHERE workspace_id = $1 AND id = $2 AND status = 'in_progress'`,
+      [workspaceId, changeRequestId],
     );
+
+    await client.query(
+      `UPDATE agent_assignments aa
+       SET office_state = 'failed', updated_at = NOW(), version = aa.version + 1
+       FROM agent_role_definitions rd
+       WHERE aa.role_definition_id = rd.id
+         AND aa.workspace_id = $1
+         AND aa.work_order_id = $2
+         AND rd.role_key = 'scriptwriter'
+         AND aa.office_state = 'running'`,
+      [workspaceId, workOrderId],
+    );
+    return false;
   }
 
   const baseContent = currentRevRes.rows[0].content_json as ScriptPackage;
@@ -380,7 +409,8 @@ export async function assembleScriptPackageChangeRequestAtomic(
      WHERE aa.role_definition_id = rd.id
        AND aa.workspace_id = $1
        AND aa.work_order_id = $2
-       AND rd.role_key = 'scriptwriter'`,
+       AND rd.role_key = 'scriptwriter'
+       AND aa.office_state = 'running'`,
     [workspaceId, workOrderId],
   );
 

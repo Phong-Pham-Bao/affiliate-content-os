@@ -1,6 +1,6 @@
 # Affiliate Content OS - Database Specification
 
-Status: Sprint 3 Checkpoint C implemented through migration `0010_content_studio_revisions.sql` and hardened in `0011_checkpoint_c_hardening.sql`
+Status: Sprint 3 Checkpoint C implemented through migration `0010_content_studio_revisions.sql`, hardened in `0011_checkpoint_c_hardening.sql`, and terminalized in `0012_change_request_failure_code.sql`
 
 Last updated: 2026-11-08
 
@@ -298,6 +298,11 @@ Migration `0011_checkpoint_c_hardening.sql` hardens tenant isolation and data in
   - `uq_artifact_change_requests_composite`: `UNIQUE (workspace_id, artifact_id, id)` on `artifact_change_requests`
   - `fk_artifact_change_requests_resulting_rev`: `(workspace_id, artifact_id, resulting_revision_number)` to `content_artifact_revisions(workspace_id, artifact_id, revision_number)`
   - `fk_content_artifact_lineage_change_request`: `(workspace_id, artifact_id, change_request_id)` to `artifact_change_requests(workspace_id, artifact_id, id)`
+
+#### Change Request Failure Code (`0012_change_request_failure_code.sql`)
+Migration `0012_change_request_failure_code.sql` adds bounded failure classification to change requests:
+- `failure_code TEXT NULL` with check constraint: `failure_code IS NULL OR failure_code IN ('stale_base_conflict', 'provider_failure', 'context_drift', 'budget_exhausted', 'timeout', 'validation_failed')`.
+- Distinguishes stale-base conflicts and context drift from generic provider outages without brittle free-text string parsing.
 
 ## 6. Content and approval
 

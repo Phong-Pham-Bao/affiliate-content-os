@@ -48,7 +48,9 @@ export function ContentStudio({
     activePackage,
     comparePackage,
     handleSaveManualEdit,
+    handleCancelManualEdit,
     handleRequestChanges,
+    handleCloseRequestChanges,
     handleSelectRevision,
     handleCompareRevision,
   } = useContentStudioState(workspaceId, artifactId, initialDetail);
@@ -113,7 +115,7 @@ export function ContentStudio({
           isSubmitting={isSubmitting}
           error={error}
           onSave={handleSaveManualEdit}
-          onCancel={() => setIsEditing(false)}
+          onCancel={handleCancelManualEdit}
         />
       )}
 
@@ -137,7 +139,7 @@ export function ContentStudio({
         isSubmitting={isSubmitting}
         error={error}
         onSubmit={handleRequestChanges}
-        onClose={() => setIsRequestChangesOpen(false)}
+        onClose={handleCloseRequestChanges}
       />
     </div>
   );

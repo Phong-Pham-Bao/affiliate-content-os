@@ -166,6 +166,7 @@ export interface ArtifactChangeRequestDTO {
   readonly status: string;
   readonly resultingRevisionNumber: number | null;
   readonly failureReason: string | null;
+  readonly failureCode: string | null;
   readonly createdAt: IsoTimestamp;
   readonly updatedAt: IsoTimestamp;
   readonly version: number;

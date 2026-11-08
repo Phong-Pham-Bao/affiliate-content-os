@@ -170,16 +170,38 @@ describe('Workforce API Client & Validators - Checkpoint C Revisions', () => {
       json: async () => mockResponse,
     } as Response);
 
-    const res = await createManualRevisionApi('ws-1', 'art-1', {
-      expectedVersion: 1,
-      baseRevisionNumber: 1,
-      baseContentHashHex: 'hash1',
-      rawContent: mockPkg,
-      note: 'Updated voiceover',
-    });
+    const res = await createManualRevisionApi(
+      'ws-1',
+      'art-1',
+      {
+        expectedVersion: 1,
+        baseRevisionNumber: 1,
+        baseContentHashHex: 'hash1',
+        rawContent: mockPkg,
+        note: 'Updated voiceover',
+      },
+      'idemp-key-1',
+    );
 
     expect(res.artifact.currentRevisionNumber).toBe(2);
     expect(res.latestRevision.revisionNumber).toBe(2);
+  });
+
+  it('createManualRevisionApi throws if idempotency key is empty or missing', async () => {
+    const mockPkg = createMockScriptPackage();
+    await expect(
+      createManualRevisionApi(
+        'ws-1',
+        'art-1',
+        {
+          expectedVersion: 1,
+          baseRevisionNumber: 1,
+          baseContentHashHex: 'hash1',
+          rawContent: mockPkg,
+        },
+        '',
+      ),
+    ).rejects.toThrow(/Idempotency key is required/);
   });
 
   it('requestScriptChangesApi sends change request and parses accepted response', async () => {
@@ -206,18 +228,41 @@ describe('Workforce API Client & Validators - Checkpoint C Revisions', () => {
       json: async () => mockCr,
     } as Response);
 
-    const res = await requestScriptChangesApi('ws-1', 'art-1', {
-      expectedVersion: 1,
-      baseRevisionNumber: 1,
-      baseContentHashHex: 'hash1',
-      instructionText: 'Make hook punchier',
-      selectedVideoNumbers: [1, 3],
-      targetVariantCount: 2,
-    });
+    const res = await requestScriptChangesApi(
+      'ws-1',
+      'art-1',
+      {
+        expectedVersion: 1,
+        baseRevisionNumber: 1,
+        baseContentHashHex: 'hash1',
+        instructionText: 'Make hook punchier',
+        selectedVideoNumbers: [1, 3],
+        targetVariantCount: 2,
+      },
+      'idemp-key-2',
+    );
 
     expect(res.id).toBe('cr-1');
     expect(res.selectedVideoNumbers).toEqual([1, 3]);
     expect(res.status).toBe('pending');
+  });
+
+  it('requestScriptChangesApi throws if idempotency key is empty or missing', async () => {
+    await expect(
+      requestScriptChangesApi(
+        'ws-1',
+        'art-1',
+        {
+          expectedVersion: 1,
+          baseRevisionNumber: 1,
+          baseContentHashHex: 'hash1',
+          instructionText: 'Make hook punchier',
+          selectedVideoNumbers: [1, 3],
+          targetVariantCount: 2,
+        },
+        '   ',
+      ),
+    ).rejects.toThrow(/Idempotency key is required/);
   });
 
   it('validateScriptPackage validates bounded 5-video package structure', () => {

@@ -31,6 +31,59 @@ const changeRequestIdParam = {
   description: 'Unique identifier of the change request.',
 } as const;
 
+const changeRequestResponseSchema = {
+  type: 'object',
+  required: [
+    'id',
+    'artifactId',
+    'baseRevisionNumber',
+    'baseContentHashHex',
+    'requestedByUserId',
+    'instructionText',
+    'selectedVideoNumbers',
+    'targetVariantCount',
+    'status',
+    'createdAt',
+    'updatedAt',
+    'version',
+  ],
+  properties: {
+    id: { type: 'string', format: 'uuid' },
+    artifactId: { type: 'string', format: 'uuid' },
+    baseRevisionNumber: { type: 'integer', minimum: 1 },
+    baseContentHashHex: { type: 'string' },
+    requestedByUserId: { type: 'string', format: 'uuid' },
+    instructionText: { type: 'string' },
+    selectedVideoNumbers: {
+      type: 'array',
+      items: { type: 'integer', minimum: 1, maximum: 5 },
+    },
+    targetVariantCount: { type: 'integer', minimum: 1, maximum: 3 },
+    status: {
+      type: 'string',
+      enum: ['pending', 'in_progress', 'completed', 'failed', 'canceled'],
+    },
+    resultingRevisionNumber: { type: 'integer', minimum: 1, nullable: true },
+    failureReason: { type: 'string', nullable: true },
+    failureCode: {
+      type: 'string',
+      enum: [
+        'stale_base_conflict',
+        'provider_failure',
+        'context_drift',
+        'budget_exhausted',
+        'timeout',
+        'validation_failed',
+      ],
+      nullable: true,
+    },
+    createdAt: { type: 'string', format: 'date-time' },
+    updatedAt: { type: 'string', format: 'date-time' },
+    version: { type: 'integer', minimum: 1 },
+  },
+  additionalProperties: false,
+} as const;
+
 export function buildOpenApiRevisionPaths(): Record<string, unknown> {
   return {
     '/api/v1/workspaces/{workspaceId}/artifacts/{artifactId}/revisions': {
@@ -171,7 +224,7 @@ export function buildOpenApiRevisionPaths(): Record<string, unknown> {
           '202': {
             description: 'Change request accepted and units enqueued',
             headers: commonHeaders,
-            content: { 'application/json': { schema: { type: 'object' } } },
+            content: { 'application/json': { schema: changeRequestResponseSchema } },
           },
           '400': {
             description: 'Bad Request',
@@ -212,7 +265,7 @@ export function buildOpenApiRevisionPaths(): Record<string, unknown> {
           '200': {
             description: 'Change request status details',
             headers: commonHeaders,
-            content: { 'application/json': { schema: { type: 'object' } } },
+            content: { 'application/json': { schema: changeRequestResponseSchema } },
           },
           '401': {
             description: 'Unauthorized',

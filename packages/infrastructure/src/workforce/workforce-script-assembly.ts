@@ -76,18 +76,13 @@ export async function assembleScriptPackageInitialAtomic(
     [workspaceId, workOrderId, productId],
   );
 
-  if (planningCheck.rowCount !== 3) {
-    throw new DatabaseError(
-      `Authoritative context drift: missing planning artifacts for work order ${workOrderId}`,
-    );
-  }
-
   const planningMap = new Map(planningCheck.rows.map((r) => [r.artifact_type, r]));
   const campaignRow = planningMap.get('product_campaign_plan');
   const audienceRow = planningMap.get('audience_insight_board');
   const seriesRow = planningMap.get('video_series_plan');
 
   if (
+    planningCheck.rowCount !== 3 ||
     !campaignRow ||
     campaignRow.current_revision_id !== brief.planningRevisions.productCampaignPlanRevisionId ||
     campaignRow.current_revision_number !==

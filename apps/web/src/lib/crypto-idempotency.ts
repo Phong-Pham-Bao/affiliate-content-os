@@ -46,3 +46,55 @@ export function normalizeWorkspacePayload(
     aiEnabled: aiEnabled ?? false,
   });
 }
+
+/**
+ * Normalizes logical manual save revision payload for idempotency key retention comparison.
+ */
+export function normalizeManualSavePayload(
+  workspaceId: string,
+  artifactId: string,
+  payload: {
+    readonly expectedVersion: number;
+    readonly baseRevisionNumber: number;
+    readonly baseContentHashHex: string;
+    readonly rawContent: unknown;
+    readonly note?: string | undefined;
+  },
+): string {
+  return JSON.stringify({
+    workspaceId: workspaceId.trim(),
+    artifactId: artifactId.trim(),
+    expectedVersion: payload.expectedVersion,
+    baseRevisionNumber: payload.baseRevisionNumber,
+    baseContentHashHex: payload.baseContentHashHex.trim(),
+    rawContent: payload.rawContent,
+    note: payload.note?.trim() || null,
+  });
+}
+
+/**
+ * Normalizes logical script change request payload for idempotency key retention comparison.
+ */
+export function normalizeRequestChangesPayload(
+  workspaceId: string,
+  artifactId: string,
+  payload: {
+    readonly expectedVersion: number;
+    readonly baseRevisionNumber: number;
+    readonly baseContentHashHex: string;
+    readonly instructionText: string;
+    readonly selectedVideoNumbers: readonly (1 | 2 | 3 | 4 | 5)[];
+    readonly targetVariantCount: number;
+  },
+): string {
+  return JSON.stringify({
+    workspaceId: workspaceId.trim(),
+    artifactId: artifactId.trim(),
+    expectedVersion: payload.expectedVersion,
+    baseRevisionNumber: payload.baseRevisionNumber,
+    baseContentHashHex: payload.baseContentHashHex.trim(),
+    instructionText: payload.instructionText.trim(),
+    selectedVideoNumbers: [...payload.selectedVideoNumbers].sort((a, b) => a - b),
+    targetVariantCount: payload.targetVariantCount,
+  });
+}

@@ -1,9 +1,61 @@
 import type { WorkOrderDetailDTO } from '../types/workforce.js';
-import { fetchWorkOrderApi } from './workforce-api-client.js';
+import type { ArtifactChangeRequestDTO } from '../types/script-studio.js';
+import { fetchChangeRequestByIdApi, fetchWorkOrderApi } from './workforce-api-client.js';
 
 export interface PollWorkOrderOptions {
   readonly intervalMs?: number;
   readonly maxAttempts?: number;
+}
+
+export interface PollChangeRequestOptions {
+  readonly intervalMs?: number;
+  readonly maxAttempts?: number;
+}
+
+export async function pollChangeRequestUntilTerminal(
+  workspaceId: string,
+  artifactId: string,
+  changeRequestId: string,
+  signal: AbortSignal,
+  onUpdate?: (cr: ArtifactChangeRequestDTO) => void,
+  options?: PollChangeRequestOptions,
+): Promise<ArtifactChangeRequestDTO> {
+  const intervalMs = options?.intervalMs ?? 1000;
+  const maxAttempts = options?.maxAttempts ?? 60;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (signal.aborted) {
+      throw new DOMException('Polling aborted', 'AbortError');
+    }
+
+    const cr = await fetchChangeRequestByIdApi(workspaceId, artifactId, changeRequestId, signal);
+    onUpdate?.(cr);
+
+    const isTerminal =
+      cr.status === 'completed' || cr.status === 'failed' || cr.status === 'canceled';
+
+    if (isTerminal) {
+      return cr;
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        signal.removeEventListener('abort', onAbort);
+        resolve();
+      }, intervalMs);
+
+      const onAbort = () => {
+        clearTimeout(timer);
+        signal.removeEventListener('abort', onAbort);
+        reject(new DOMException('Polling aborted', 'AbortError'));
+      };
+
+      signal.addEventListener('abort', onAbort, { once: true });
+    });
+  }
+
+  // Final fetch
+  return fetchChangeRequestByIdApi(workspaceId, artifactId, changeRequestId, signal);
 }
 
 export async function pollWorkOrderUntilTerminal(

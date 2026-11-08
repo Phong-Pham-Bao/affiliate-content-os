@@ -82,7 +82,7 @@ export async function requestScriptChangesTransaction(
       const existingCr = await client.query(
         `SELECT id, artifact_id, base_revision_number, base_content_hash, requested_by_user_id,
                 instruction_text, selected_video_numbers, target_variant_count, status,
-                resulting_revision_number, failure_reason, created_at, updated_at, version
+                resulting_revision_number, failure_reason, failure_code, created_at, updated_at, version
          FROM artifact_change_requests
          WHERE workspace_id = $1 AND id = $2`,
         [workspaceId, crId],
@@ -107,6 +107,7 @@ export async function requestScriptChangesTransaction(
         status: row.status,
         resultingRevisionNumber: row.resulting_revision_number,
         failureReason: row.failure_reason,
+        failureCode: row.failure_code ? String(row.failure_code) : null,
         createdAt: parseIsoTimestamp(
           row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at),
         ),
@@ -378,6 +379,7 @@ export async function requestScriptChangesTransaction(
     status: 'in_progress',
     resultingRevisionNumber: null,
     failureReason: null,
+    failureCode: null,
     createdAt: parseIsoTimestamp(new Date().toISOString()),
     updatedAt: parseIsoTimestamp(new Date().toISOString()),
     version: 1,
