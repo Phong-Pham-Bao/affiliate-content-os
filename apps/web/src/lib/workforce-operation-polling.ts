@@ -2,14 +2,60 @@ import type { WorkOrderDetailDTO } from '../types/workforce.js';
 import type { ArtifactChangeRequestDTO } from '../types/script-studio.js';
 import { fetchChangeRequestByIdApi, fetchWorkOrderApi } from './workforce-api-client.js';
 
+export class PollingDeadlineError extends Error {
+  readonly code = 'POLLING_DEADLINE_EXCEEDED';
+  readonly changeRequestId: string;
+  readonly elapsedMs: number;
+  readonly attempts: number;
+
+  constructor(message: string, changeRequestId: string, elapsedMs: number, attempts: number) {
+    super(message);
+    this.name = 'PollingDeadlineError';
+    this.changeRequestId = changeRequestId;
+    this.elapsedMs = elapsedMs;
+    this.attempts = attempts;
+  }
+}
+
 export interface PollWorkOrderOptions {
   readonly intervalMs?: number;
   readonly maxAttempts?: number;
 }
 
 export interface PollChangeRequestOptions {
-  readonly intervalMs?: number;
+  readonly initialIntervalMs?: number;
+  readonly maxIntervalMs?: number;
+  readonly backoffMultiplier?: number;
+  readonly maxDurationMs?: number;
   readonly maxAttempts?: number;
+  readonly intervalMs?: number;
+}
+
+function sleepAbortable(delayMs: number, signal: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new DOMException('Polling aborted', 'AbortError'));
+      return;
+    }
+
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const onAbort = () => {
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      signal.removeEventListener('abort', onAbort);
+      reject(new DOMException('Polling aborted', 'AbortError'));
+    };
+
+    timer = setTimeout(() => {
+      timer = null;
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, delayMs);
+
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 export async function pollChangeRequestUntilTerminal(
@@ -20,15 +66,23 @@ export async function pollChangeRequestUntilTerminal(
   onUpdate?: (cr: ArtifactChangeRequestDTO) => void,
   options?: PollChangeRequestOptions,
 ): Promise<ArtifactChangeRequestDTO> {
-  const intervalMs = options?.intervalMs ?? 1000;
-  const maxAttempts = options?.maxAttempts ?? 60;
+  const initialIntervalMs = options?.initialIntervalMs ?? options?.intervalMs ?? 2000;
+  const maxIntervalMs = Math.max(initialIntervalMs, options?.maxIntervalMs ?? 15000);
+  const backoffMultiplier = options?.backoffMultiplier ?? 1.5;
+  const maxDurationMs = options?.maxDurationMs ?? 60 * 60 * 1000;
+  const maxAttempts = options?.maxAttempts;
 
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+  let currentInterval = initialIntervalMs;
+  let attempts = 0;
+  const startTime = Date.now();
+
+  while (true) {
     if (signal.aborted) {
       throw new DOMException('Polling aborted', 'AbortError');
     }
 
     const cr = await fetchChangeRequestByIdApi(workspaceId, artifactId, changeRequestId, signal);
+    attempts++;
     onUpdate?.(cr);
 
     const isTerminal =
@@ -38,24 +92,30 @@ export async function pollChangeRequestUntilTerminal(
       return cr;
     }
 
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        signal.removeEventListener('abort', onAbort);
-        resolve();
-      }, intervalMs);
+    const elapsedMs = Date.now() - startTime;
 
-      const onAbort = () => {
-        clearTimeout(timer);
-        signal.removeEventListener('abort', onAbort);
-        reject(new DOMException('Polling aborted', 'AbortError'));
-      };
+    if (maxAttempts !== undefined && attempts >= maxAttempts) {
+      throw new PollingDeadlineError(
+        `Quá giới hạn số lần kiểm tra trạng thái (${maxAttempts} lần) cho yêu cầu thay đổi ${changeRequestId}`,
+        changeRequestId,
+        elapsedMs,
+        attempts,
+      );
+    }
 
-      signal.addEventListener('abort', onAbort, { once: true });
-    });
+    if (elapsedMs >= maxDurationMs) {
+      throw new PollingDeadlineError(
+        `Hết thời gian chờ phản hồi từ máy chủ (${Math.round(maxDurationMs / 1000)}s) cho yêu cầu thay đổi ${changeRequestId}`,
+        changeRequestId,
+        elapsedMs,
+        attempts,
+      );
+    }
+
+    const nextDelay = Math.min(currentInterval, Math.max(0, maxDurationMs - elapsedMs));
+    await sleepAbortable(nextDelay, signal);
+    currentInterval = Math.min(Math.round(currentInterval * backoffMultiplier), maxIntervalMs);
   }
-
-  // Final fetch
-  return fetchChangeRequestByIdApi(workspaceId, artifactId, changeRequestId, signal);
 }
 
 export async function pollWorkOrderUntilTerminal(
@@ -93,20 +153,7 @@ export async function pollWorkOrderUntilTerminal(
       return detail;
     }
 
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        signal.removeEventListener('abort', onAbort);
-        resolve();
-      }, intervalMs);
-
-      const onAbort = () => {
-        clearTimeout(timer);
-        signal.removeEventListener('abort', onAbort);
-        reject(new DOMException('Polling aborted', 'AbortError'));
-      };
-
-      signal.addEventListener('abort', onAbort, { once: true });
-    });
+    await sleepAbortable(intervalMs, signal);
   }
 
   // Final fetch

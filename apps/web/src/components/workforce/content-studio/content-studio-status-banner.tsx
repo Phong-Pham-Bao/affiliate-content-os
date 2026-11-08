@@ -14,12 +14,14 @@ export type ContentStudioStatusState =
   | 'ready'
   | 'stale_conflict'
   | 'insufficient_budget'
-  | 'provider_outage';
+  | 'provider_outage'
+  | 'polling_deadline';
 
 interface ContentStudioStatusBannerProps {
   readonly status: ContentStudioStatusState;
   readonly message?: string | null | undefined;
   readonly onRetry?: (() => void) | undefined;
+  readonly onResume?: (() => void) | undefined;
 }
 
 const STATUS_CONFIGS: Record<
@@ -86,12 +88,18 @@ const STATUS_CONFIGS: Record<
     alertClass: 'alert-danger',
     desc: 'Dịch vụ AI hiện không phản hồi. Vui lòng thử lại sau.',
   },
+  polling_deadline: {
+    label: 'Chờ phản hồi quá thời gian',
+    alertClass: 'alert-warning',
+    desc: 'Yêu cầu thay đổi đang được máy chủ tiếp tục xử lý nhưng đã vượt quá thời gian theo dõi liên tục. Bạn có thể tiếp tục kiểm tra trạng thái.',
+  },
 };
 
 export function ContentStudioStatusBanner({
   status,
   message,
   onRetry,
+  onResume,
 }: ContentStudioStatusBannerProps): ReactElement | null {
   if (status === 'idle') return null;
 
@@ -106,11 +114,18 @@ export function ContentStudioStatusBanner({
       <div>
         <strong>{config.label}:</strong> {message || config.desc}
       </div>
-      {onRetry && (status === 'failed' || status === 'partial_success') && (
-        <button type="button" className="btn btn-sm btn-outline-danger" onClick={onRetry}>
-          Thử lại tác vụ
-        </button>
-      )}
+      <div className="d-flex align-items-center gap-2">
+        {onResume && (status === 'polling_deadline' || status === 'failed') && (
+          <button type="button" className="btn btn-sm btn-outline-primary" onClick={onResume}>
+            Tiếp tục kiểm tra
+          </button>
+        )}
+        {onRetry && (status === 'failed' || status === 'partial_success') && (
+          <button type="button" className="btn btn-sm btn-outline-danger" onClick={onRetry}>
+            Thử lại tác vụ
+          </button>
+        )}
+      </div>
     </div>
   );
 }

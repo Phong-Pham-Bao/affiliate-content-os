@@ -19,7 +19,10 @@ import {
   normalizeManualSavePayload,
   normalizeRequestChangesPayload,
 } from '../../../lib/crypto-idempotency.js';
-import { pollChangeRequestUntilTerminal } from '../../../lib/workforce-operation-polling.js';
+import {
+  PollingDeadlineError,
+  pollChangeRequestUntilTerminal,
+} from '../../../lib/workforce-operation-polling.js';
 import { ApiError } from '../../../lib/api-validators-common.js';
 import type { ContentStudioStatusState } from './content-studio-status-banner.js';
 
@@ -41,6 +44,7 @@ export function useContentStudioState(
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [statusState, setStatusState] = useState<ContentStudioStatusState>('idle');
   const [error, setError] = useState<string | null>(null);
+  const [resumableChangeRequestId, setResumableChangeRequestId] = useState<string | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
   const pollAbortRef = useRef<AbortController | null>(null);
@@ -56,6 +60,7 @@ export function useContentStudioState(
     abortRef.current = ctrl;
 
     activeChangeRequestIdRef.current = null;
+    setResumableChangeRequestId(null);
     manualSaveSubmissionRef.current = null;
     requestChangesSubmissionRef.current = null;
 
@@ -144,8 +149,10 @@ export function useContentStudioState(
 
     try {
       const res = await createManualRevisionApi(workspaceId, artifactId, payload, key);
-      // Definitive success -> clear retry key
+      // Definitive success -> clear retry key and pending change request
       manualSaveSubmissionRef.current = null;
+      setResumableChangeRequestId(null);
+      activeChangeRequestIdRef.current = null;
       setDetail(res);
       setActiveRevision(res.latestRevision);
       setIsEditing(false);
@@ -247,14 +254,21 @@ export function useContentStudioState(
     }
 
     // Start bounded, abortable polling for change request completion
-    const crId = changeRequest.id;
+    await executePolling(changeRequest.id);
+  };
+
+  const executePolling = async (crId: string) => {
     activeChangeRequestIdRef.current = crId;
+    setResumableChangeRequestId(crId);
     pollAbortRef.current?.abort();
     const pollCtrl = new AbortController();
     pollAbortRef.current = pollCtrl;
 
     const currentWsId = workspaceId;
     const currentArtId = artifactId;
+
+    setStatusState('running');
+    setError(null);
 
     try {
       const finalCr = await pollChangeRequestUntilTerminal(
@@ -279,6 +293,10 @@ export function useContentStudioState(
       if (pollCtrl.signal.aborted || currentWsId !== workspaceId || currentArtId !== artifactId) {
         return;
       }
+
+      // Definitive terminal result from server: clear resumable ID
+      setResumableChangeRequestId(null);
+      activeChangeRequestIdRef.current = null;
 
       if (finalCr.status === 'completed') {
         const updatedDetail = await fetchArtifactDetailApi(
@@ -332,18 +350,35 @@ export function useContentStudioState(
       if (pollCtrl.signal.aborted || currentWsId !== workspaceId || currentArtId !== artifactId) {
         return;
       }
-      setStatusState('failed');
-      setError(
-        pollErr instanceof Error
-          ? pollErr.message
-          : 'Lỗi trong quá trình kiểm tra trạng thái yêu cầu',
-      );
-    } finally {
-      if (activeChangeRequestIdRef.current === crId) {
+      if (pollErr instanceof PollingDeadlineError) {
+        setStatusState('polling_deadline');
+        setError(
+          'Quá thời gian theo dõi tự động cho yêu cầu thay đổi. Tác vụ vẫn có thể đang chạy trên máy chủ. Bạn có thể nhấn Tiếp tục kiểm tra.',
+        );
+      } else if (pollErr instanceof ApiError && pollErr.status === 0) {
+        setStatusState('polling_deadline');
+        setError(
+          'Mất kết nối mạng khi kiểm tra trạng thái yêu cầu thay đổi. Bạn có thể nhấn Tiếp tục kiểm tra.',
+        );
+      } else {
+        setResumableChangeRequestId(null);
         activeChangeRequestIdRef.current = null;
+        setStatusState('failed');
+        setError(
+          pollErr instanceof Error
+            ? pollErr.message
+            : 'Lỗi trong quá trình kiểm tra trạng thái yêu cầu',
+        );
       }
     }
   };
+
+  const handleResumePolling = async () => {
+    if (!resumableChangeRequestId) return;
+    await executePolling(resumableChangeRequestId);
+  };
+
+  const canResumePolling = Boolean(resumableChangeRequestId) && statusState !== 'running';
 
   const handleCloseRequestChanges = () => {
     requestChangesSubmissionRef.current = null;
@@ -400,5 +435,8 @@ export function useContentStudioState(
     handleCloseRequestChanges,
     handleSelectRevision,
     handleCompareRevision,
+    handleResumePolling,
+    canResumePolling,
+    resumableChangeRequestId,
   };
 }

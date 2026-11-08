@@ -207,6 +207,17 @@ describe('Content Studio - Core Visual Components', () => {
       <ContentStudioStatusBanner status="insufficient_budget" />,
     );
     expect(htmlBudget).toContain('Ngân sách không đủ:');
+
+    const htmlDeadline = renderToStaticMarkup(
+      <ContentStudioStatusBanner
+        status="polling_deadline"
+        message="Quá thời gian theo dõi tự động"
+        onResume={() => {}}
+      />,
+    );
+    expect(htmlDeadline).toContain('Chờ phản hồi quá thời gian:');
+    expect(htmlDeadline).toContain('Quá thời gian theo dõi tự động');
+    expect(htmlDeadline).toContain('Tiếp tục kiểm tra');
   });
 
   it('renders immutable revision history with proper selection and compare actions', () => {

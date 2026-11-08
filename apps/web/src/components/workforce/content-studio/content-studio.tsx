@@ -53,6 +53,8 @@ export function ContentStudio({
     handleCloseRequestChanges,
     handleSelectRevision,
     handleCompareRevision,
+    handleResumePolling,
+    canResumePolling,
   } = useContentStudioState(workspaceId, artifactId, initialDetail);
 
   return (
@@ -73,7 +75,11 @@ export function ContentStudio({
         onClose={onClose}
       />
 
-      <ContentStudioStatusBanner status={statusState} message={error} />
+      <ContentStudioStatusBanner
+        status={statusState}
+        message={error}
+        onResume={canResumePolling ? handleResumePolling : undefined}
+      />
 
       {activeRevision && (
         <ContentStudioProvenanceBar
