@@ -38,6 +38,21 @@ ALTER TABLE operations
     (work_order_id IS NOT NULL AND work_item_id IS NOT NULL)
   );
 
+ALTER TABLE work_orders
+  DROP CONSTRAINT work_orders_mission_type_check;
+
+ALTER TABLE work_orders
+  ADD CONSTRAINT work_orders_mission_type_check CHECK (
+    mission_type IN (
+      'single_product_affiliate_launch',
+      'short_video_series',
+      'product_launch_plan',
+      'objection_handling_series',
+      'educational_series',
+      'custom'
+    )
+  );
+
 CREATE INDEX idx_operations_workforce_item
   ON operations (workspace_id, work_order_id, work_item_id)
   WHERE work_order_id IS NOT NULL;
@@ -181,6 +196,7 @@ CREATE TABLE content_artifact_revisions (
   created_at TIMESTAMPTZ NOT NULL,
   CONSTRAINT content_artifact_revisions_workspace_id_id_unique UNIQUE (workspace_id, id),
   CONSTRAINT content_artifact_revisions_artifact_rev_unique UNIQUE (artifact_id, revision_number),
+  CONSTRAINT content_artifact_revisions_ws_artifact_rev_unique UNIQUE (workspace_id, artifact_id, revision_number),
   CONSTRAINT content_artifact_revisions_artifact_fk FOREIGN KEY (workspace_id, artifact_id) REFERENCES content_artifacts(workspace_id, id) ON DELETE RESTRICT,
   CONSTRAINT content_artifact_revisions_hash_len CHECK (octet_length(content_hash) = 32),
   CONSTRAINT content_artifact_revisions_rev_num_check CHECK (revision_number >= 1),
@@ -211,7 +227,7 @@ CREATE TABLE artifact_evidence_refs (
   source_id UUID NOT NULL,
   created_at TIMESTAMPTZ NOT NULL,
   CONSTRAINT artifact_evidence_refs_unique UNIQUE (artifact_id, revision_number, source_kind, source_id),
-  CONSTRAINT artifact_evidence_refs_rev_fk FOREIGN KEY (artifact_id, revision_number) REFERENCES content_artifact_revisions(artifact_id, revision_number) ON DELETE RESTRICT,
+  CONSTRAINT artifact_evidence_refs_rev_fk FOREIGN KEY (workspace_id, artifact_id, revision_number) REFERENCES content_artifact_revisions(workspace_id, artifact_id, revision_number) ON DELETE RESTRICT,
   CONSTRAINT artifact_evidence_refs_source_kind_check CHECK (source_kind IN ('product_fact', 'analysis'))
 );
 

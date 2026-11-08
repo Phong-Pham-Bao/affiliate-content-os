@@ -23,6 +23,20 @@ export async function executeRetryWorkOrderTransaction(
   }
   const woRow = woRes.rows[0];
 
+  const cpRes = await client.query(
+    `SELECT context_hash FROM context_packages WHERE id = $1 AND workspace_id = $2`,
+    [woRow.context_package_id, workspaceId],
+  );
+  const contextHash = cpRes.rows[0]?.context_hash ?? Buffer.alloc(32, 0);
+
+  if (woRow.status !== 'in_progress' && woRow.status !== 'failed') {
+    return {
+      workOrder: mapWorkOrderRowToSummaryDTO(woRow),
+      retriedItemIds: [],
+      cached: false,
+    };
+  }
+
   // 2. Query failed planning items to retry
   const failedItemsRes = await client.query(
     `SELECT id, task_key FROM work_items
@@ -104,25 +118,35 @@ export async function executeRetryWorkOrderTransaction(
     const actualWorkItemId = failedTaskMap.get(item.taskKey)!;
     retriedItemIds.push(parseWorkItemId(actualWorkItemId));
 
-    await client.query(
+    const wiRes = await client.query(
       `UPDATE work_items
-       SET status = 'queued', failure_category = NULL, updated_at = NOW(), version = version + 1
-       WHERE id = $1 AND workspace_id = $2`,
-      [actualWorkItemId, workspaceId],
+       SET status = 'queued', started_at = NULL, completed_at = NULL, blocked_reason_code = NULL, updated_at = NOW(), version = version + 1
+       WHERE id = $1 AND workspace_id = $2 AND work_order_id = $3 AND status = 'failed'`,
+      [actualWorkItemId, workspaceId, workOrderId],
     );
+    if (wiRes.rowCount !== 1) {
+      throw new DatabaseError(
+        `Failed to update failed work item ${actualWorkItemId} to queued for retry`,
+      );
+    }
 
-    await client.query(
+    const asgRes = await client.query(
       `UPDATE agent_assignments
        SET office_state = 'preparing', latest_report_code = NULL, updated_at = NOW(), version = version + 1
-       WHERE work_item_id = $1 AND workspace_id = $2`,
-      [actualWorkItemId, workspaceId],
+       WHERE work_item_id = $1 AND workspace_id = $2 AND work_order_id = $3`,
+      [actualWorkItemId, workspaceId, workOrderId],
     );
+    if (asgRes.rowCount !== 1) {
+      throw new DatabaseError(
+        `Failed to update agent assignment for work item ${actualWorkItemId} to preparing`,
+      );
+    }
 
     await client.query(
       `INSERT INTO operations (
          id, workspace_id, operation_type, resource_type, resource_id,
          status, requested_by_user_id, work_order_id, work_item_id, created_at, updated_at
-       ) VALUES ($1, $2, $3, 'product', $4, 'pending', $5, $6, $7, NOW(), NOW())`,
+       ) VALUES ($1, $2, $3, 'product', $4, 'queued', $5, $6, $7, NOW(), NOW())`,
       [
         item.operationId,
         workspaceId,
@@ -138,9 +162,9 @@ export async function executeRetryWorkOrderTransaction(
       `INSERT INTO ai_runs (
          id, workspace_id, operation_id, requested_by_user_id, purpose,
          provider, model, prompt_template, prompt_version, input_schema_version,
-         output_schema_version, status, work_order_id, work_item_id, created_at, updated_at
+         output_schema_version, input_hash, status, work_order_id, work_item_id, created_at, updated_at
        ) VALUES (
-         $1, $2, $3, $4, $5, 'google', 'gemini-3.8-flash', $6, '1.0.0', 1, 1, 'queued', $7, $8, NOW(), NOW()
+         $1, $2, $3, $4, $5, 'google', 'gemini-3.8-flash', $6, '1.0.0', 1, 1, $7, 'queued', $8, $9, NOW(), NOW()
        )`,
       [
         item.aiRunId,
@@ -149,6 +173,7 @@ export async function executeRetryWorkOrderTransaction(
         actorUserId,
         item.taskKey,
         item.promptTemplate,
+        contextHash,
         workOrderId,
         actualWorkItemId,
       ],
@@ -163,20 +188,29 @@ export async function executeRetryWorkOrderTransaction(
       roleKey: item.roleKey,
       operationId: item.operationId,
       aiRunId: item.aiRunId,
+      contextPackageId: woRow.context_package_id,
+      actorUserId,
       reservedMicrounits: item.reservedMicrounits,
     };
 
+    const dedupKey = `workforce:${workOrderId}:${item.taskKey}:retry:${item.jobId}`;
+
     await client.query(
       `INSERT INTO job_executions (
-         id, workspace_id, job_type, operation_id, ai_runId, status,
-         attempt, max_attempts, reserved_spend_microunits, payload_json,
-         work_order_id, work_item_id, created_at, updated_at
+         id, workspace_id, job_type, deduplication_key, operation_id, ai_run_id, status,
+         attempt, max_attempts, repair_attempt, max_repair_attempts,
+         next_attempt_at, reserved_spend_microunits, payload_json,
+         work_order_id, work_item_id, created_at, updated_at, version
        ) VALUES (
-         $1, $2, 'workforce_planning', $3, $4, 'queued', 0, 3, $5, $6, $7, $8, NOW(), NOW()
+         $1, $2, 'workforce_planning', $3, $4, $5, 'queued',
+         0, 3, 0, 1,
+         NOW(), $6, $7::jsonb,
+         $8, $9, NOW(), NOW(), 1
        )`,
       [
         item.jobId,
         workspaceId,
+        dedupKey,
         item.operationId,
         item.aiRunId,
         item.reservedMicrounits,
@@ -217,8 +251,8 @@ export async function executeRetryWorkOrderTransaction(
   await client.query(
     `INSERT INTO audit_events (
        id, workspace_id, actor_user_id, actor_type, action,
-       resource_type, resource_id, changes_json, result, created_at
-     ) VALUES ($1, $2, $3, 'user', $4, $5, $6, $7, 'success', NOW())`,
+       resource_type, resource_id, changes_json, result, occurred_at, created_at
+     ) VALUES ($1, $2, $3, 'user', $4, $5, $6, $7, 'succeeded', NOW(), NOW())`,
     [
       params.auditEvent.id,
       workspaceId,

@@ -1,9 +1,9 @@
-import crypto from 'node:crypto';
 import type pg from 'pg';
 import type { ClaimJobParams, DurableJobQueuePort } from '@affiliate-content-os/application';
 import type { JobExecutionSnapshot } from '@affiliate-content-os/domain';
 import { mapJobExecutionRow } from '../analysis/analysis-mappers.js';
 import { DatabaseError } from '../database/errors.js';
+import { sweepExhaustedJobs } from './postgres-job-exhausted-sweep.js';
 
 // eslint-disable-next-line no-control-regex
 const CONTROL_CHARS_REGEX = /[\x00-\x1F\x7F]/;
@@ -38,160 +38,132 @@ export class PostgresJobAdapter implements DurableJobQueuePort {
 
     const client = await this.pool.connect();
     try {
+      // 1. Atomically sweep and terminalize any expired exhausted jobs
       await client.query('BEGIN');
+      await sweepExhaustedJobs(client);
+      await client.query('COMMIT');
 
-      // 1. Atomically sweep and terminalize any expired exhausted jobs (attempt >= max_attempts)
-      const exhaustedRes = await client.query(
-        `SELECT id, workspace_id, operation_id, ai_run_id, version, reserved_spend_microunits
-         FROM job_executions
-         WHERE (
-           (status = 'running' AND lease_expires_at < NOW() AND attempt >= max_attempts)
-           OR (status IN ('queued', 'retry_wait') AND attempt >= max_attempts)
-         )
-         ORDER BY next_attempt_at ASC, id ASC
-         LIMIT 10
-         FOR UPDATE SKIP LOCKED`,
-      );
+      const excludedWorkspaceIds: string[] = [];
+      const MAX_CLAIM_ATTEMPTS = 10;
 
-      for (const row of exhaustedRes.rows) {
-        const rawReserved = Number(row.reserved_spend_microunits ?? 0);
-        const reservedMicrounits =
-          Number.isSafeInteger(rawReserved) && rawReserved >= 0 ? rawReserved : 0;
+      for (let attempt = 0; attempt < MAX_CLAIM_ATTEMPTS; attempt++) {
+        await client.query('BEGIN');
 
-        // Fail job execution
-        await client.query(
-          `UPDATE job_executions
-           SET status = 'failed',
-               started_at = COALESCE(started_at, NOW()),
-               completed_at = NOW(),
-               last_error_category = 'provider_timeout',
-               lease_owner = NULL,
-               lease_expires_at = NULL,
-               updated_at = NOW(),
-               version = version + 1
-           WHERE id = $1`,
-          [row.id],
+        // 2. Select next candidate job, excluding saturated workforce workspaces
+        const candidateRes = await client.query(
+          `SELECT j.id, j.workspace_id, j.operation_id, j.ai_run_id, j.job_type, j.work_order_id, j.work_item_id
+           FROM job_executions j
+           WHERE ((j.status IN ('queued', 'retry_wait') AND j.attempt < j.max_attempts)
+              OR (j.status = 'running' AND j.lease_expires_at < NOW() AND j.attempt < j.max_attempts))
+             AND j.next_attempt_at <= NOW()
+             AND (
+               j.job_type <> 'workforce_planning'
+               OR j.workspace_id <> ALL($1::uuid[])
+             )
+           ORDER BY j.next_attempt_at ASC, j.id ASC
+           LIMIT 1
+           FOR UPDATE OF j SKIP LOCKED`,
+          [excludedWorkspaceIds],
         );
 
-        // Fail linked operation
+        if (candidateRes.rowCount === 0 || !candidateRes.rows[0]) {
+          await client.query('COMMIT');
+          return null;
+        }
+
+        const candidate = candidateRes.rows[0];
+
+        if (candidate.job_type === 'workforce_planning') {
+          // 3. Serialize workspace capacity decision atomically in PostgreSQL
+          await client.query(
+            `SELECT pg_advisory_xact_lock(hashtext('workforce_planning_workspace'), hashtext($1::text))`,
+            [candidate.workspace_id],
+          );
+
+          const countRes = await client.query(
+            `SELECT COUNT(*) AS running_count
+             FROM job_executions
+             WHERE workspace_id = $1
+               AND job_type = 'workforce_planning'
+               AND status = 'running'
+               AND lease_expires_at > NOW()
+               AND id <> $2`,
+            [candidate.workspace_id, candidate.id],
+          );
+
+          if (Number(countRes.rows[0]?.running_count ?? 0) >= 3) {
+            await client.query('ROLLBACK');
+            excludedWorkspaceIds.push(candidate.workspace_id);
+            continue;
+          }
+        }
+
+        // 4. Atomically claim the candidate job
+        const updateRes = await client.query(
+          `UPDATE job_executions
+           SET status = 'running',
+               lease_owner = $1,
+               lease_expires_at = NOW() + ($2 || ' seconds')::INTERVAL,
+               attempt = attempt + 1,
+               started_at = COALESCE(started_at, NOW()),
+               updated_at = NOW(),
+               version = version + 1
+           WHERE id = $3
+           RETURNING *`,
+          [validWorkerId, validLeaseDuration, candidate.id],
+        );
+
+        const claimedJob = updateRes.rows[0];
+
+        // 5. Consistently transition operation and ai_run from 'queued' to 'running'
         await client.query(
           `UPDATE operations
-           SET status = 'failed',
-               error_category = 'provider_timeout',
-               error_code = 'JOB_LEASE_EXPIRED_EXHAUSTED',
-               error_message = 'Job execution attempts exhausted after worker timeout',
+           SET status = 'running',
                started_at = COALESCE(started_at, NOW()),
-               completed_at = NOW(),
                updated_at = NOW(),
                version = version + 1
-           WHERE id = $1 AND workspace_id = $2 AND status IN ('queued', 'running')`,
-          [row.operation_id, row.workspace_id],
+           WHERE id = $1 AND workspace_id = $2 AND status = 'queued'`,
+          [claimedJob.operation_id, claimedJob.workspace_id],
         );
 
-        // Fail linked ai_run
         await client.query(
           `UPDATE ai_runs
-           SET status = 'failed',
-               error_category = 'provider_timeout',
+           SET status = 'running',
                started_at = COALESCE(started_at, NOW()),
-               completed_at = NOW(),
                updated_at = NOW(),
                version = version + 1
-           WHERE id = $1 AND workspace_id = $2 AND status IN ('queued', 'running')`,
-          [row.ai_run_id, row.workspace_id],
+           WHERE id = $1 AND workspace_id = $2 AND status = 'queued'`,
+          [claimedJob.ai_run_id, claimedJob.workspace_id],
         );
 
-        // Release policy reservation safely with exact accounting
-        if (Number.isSafeInteger(reservedMicrounits) && reservedMicrounits > 0) {
+        if (claimedJob.job_type === 'workforce_planning' && claimedJob.work_item_id) {
           await client.query(
-            `UPDATE workspace_ai_policies
-             SET reserved_spend_microunits = reserved_spend_microunits - $1,
+            `UPDATE work_items
+             SET status = 'running',
+                 started_at = COALESCE(started_at, NOW()),
                  updated_at = NOW(),
                  version = version + 1
-             WHERE workspace_id = $2 AND reserved_spend_microunits >= $1`,
-            [reservedMicrounits, row.workspace_id],
+             WHERE id = $1 AND workspace_id = $2 AND status = 'queued'`,
+            [claimedJob.work_item_id, claimedJob.workspace_id],
+          );
+
+          await client.query(
+            `UPDATE agent_assignments
+             SET office_state = 'running',
+                 updated_at = NOW(),
+                 version = version + 1
+             WHERE work_item_id = $1 AND workspace_id = $2 AND office_state = 'preparing'`,
+            [claimedJob.work_item_id, claimedJob.workspace_id],
           );
         }
 
-        // Record terminal audit event with system actor
-        const auditEventId = crypto.randomUUID();
-        await client.query(
-          `INSERT INTO audit_events (
-             id, workspace_id, actor_type, actor_user_id, action, resource_type,
-             resource_id, result, reason_code, changes_json, occurred_at, created_at
-           )
-           VALUES ($1, $2, 'system', NULL, 'ai_analysis.failed', 'operation', $3, 'failed', 'job_lease_expired_exhausted', $4, NOW(), NOW())`,
-          [
-            auditEventId,
-            row.workspace_id,
-            row.operation_id,
-            JSON.stringify({
-              error_category: 'provider_timeout',
-              reason: 'Worker lease expired and attempts exhausted',
-            }),
-          ],
-        );
-      }
-
-      // 2. Candidate claim query: never claim/reclaim when attempt >= max_attempts
-      const claimSql = `
-        WITH candidate AS (
-          SELECT id, workspace_id, operation_id, ai_run_id
-          FROM job_executions
-          WHERE ((status IN ('queued', 'retry_wait') AND attempt < max_attempts)
-             OR (status = 'running' AND lease_expires_at < NOW() AND attempt < max_attempts))
-            AND next_attempt_at <= NOW()
-          ORDER BY next_attempt_at ASC, id ASC
-          LIMIT 1
-          FOR UPDATE SKIP LOCKED
-        )
-        UPDATE job_executions j
-        SET status = 'running',
-            lease_owner = $1,
-            lease_expires_at = NOW() + ($2 || ' seconds')::INTERVAL,
-            attempt = j.attempt + 1,
-            started_at = COALESCE(j.started_at, NOW()),
-            updated_at = NOW(),
-            version = j.version + 1
-        FROM candidate
-        WHERE j.id = candidate.id
-        RETURNING j.*;
-      `;
-
-      const res = await client.query(claimSql, [validWorkerId, validLeaseDuration]);
-
-      if (res.rows.length === 0) {
         await client.query('COMMIT');
-        return null;
+        return mapJobExecutionRow(claimedJob);
       }
 
-      const claimedJob = res.rows[0];
-
-      // 3. Consistently transition operation and ai_run from 'queued' to 'running'
-      await client.query(
-        `UPDATE operations
-         SET status = 'running',
-             started_at = COALESCE(started_at, NOW()),
-             updated_at = NOW(),
-             version = version + 1
-         WHERE id = $1 AND workspace_id = $2 AND status = 'queued'`,
-        [claimedJob.operation_id, claimedJob.workspace_id],
-      );
-
-      await client.query(
-        `UPDATE ai_runs
-         SET status = 'running',
-             started_at = COALESCE(started_at, NOW()),
-             updated_at = NOW(),
-             version = version + 1
-         WHERE id = $1 AND workspace_id = $2 AND status = 'queued'`,
-        [claimedJob.ai_run_id, claimedJob.workspace_id],
-      );
-
-      await client.query('COMMIT');
-      return mapJobExecutionRow(claimedJob);
+      return null;
     } catch (err) {
-      await client.query('ROLLBACK');
+      await client.query('ROLLBACK').catch(() => {});
       throw err;
     } finally {
       client.release();

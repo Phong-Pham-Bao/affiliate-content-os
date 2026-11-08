@@ -141,6 +141,7 @@ export async function processWorkforcePlanningJob(
           assignmentId: ctx.assignmentId,
           authorRoleKey: payload.roleKey,
           artifactType,
+          taskKey: payload.taskKey,
           jobId: job.id,
           jobVersion: job.version,
           operationId: payload.operationId,
@@ -174,6 +175,7 @@ export async function processWorkforcePlanningJob(
             assignmentId: ctx.assignmentId,
             authorRoleKey: payload.roleKey,
             artifactType,
+            taskKey: payload.taskKey,
             jobId: job.id,
             jobVersion: job.version,
             operationId: payload.operationId,
@@ -187,6 +189,29 @@ export async function processWorkforcePlanningJob(
               nextAttemptAt: new Date(Date.now() + backoffSec * 1000),
             },
           });
+        } else if (errCat === 'invalid_output' && job.repairAttempt < job.maxRepairAttempts) {
+          await settleWorkforcePlanningJobAtomic(client, {
+            workspaceId: payload.workspaceId,
+            productId: payload.productId,
+            workOrderId: payload.workOrderId,
+            workItemId: payload.workItemId,
+            assignmentId: ctx.assignmentId,
+            authorRoleKey: payload.roleKey,
+            artifactType,
+            taskKey: payload.taskKey,
+            jobId: job.id,
+            jobVersion: job.version,
+            operationId: payload.operationId,
+            aiRunId: payload.aiRunId,
+            workerId: deps.workerId,
+            reservedMicrounits: payload.reservedMicrounits,
+            outcome: {
+              kind: 'repair',
+              errorCategory: errCat,
+              errorMessage: errMsg,
+              repairDelaySeconds: 1,
+            },
+          });
         } else {
           await settleWorkforcePlanningJobAtomic(client, {
             workspaceId: payload.workspaceId,
@@ -196,6 +221,7 @@ export async function processWorkforcePlanningJob(
             assignmentId: ctx.assignmentId,
             authorRoleKey: payload.roleKey,
             artifactType,
+            taskKey: payload.taskKey,
             jobId: job.id,
             jobVersion: job.version,
             operationId: payload.operationId,
@@ -205,7 +231,10 @@ export async function processWorkforcePlanningJob(
             outcome: {
               kind: 'terminal_failure',
               errorCategory: errCat,
-              errorCode: 'PLANNING_FAILED',
+              errorCode:
+                job.repairAttempt >= job.maxRepairAttempts && errCat === 'invalid_output'
+                  ? 'INVALID_OUTPUT_REPAIR_EXHAUSTED'
+                  : 'PLANNING_FAILED',
               errorMessage: errMsg,
             },
           });

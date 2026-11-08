@@ -126,6 +126,7 @@ export function buildOpenApiWorkforcePaths(): Record<string, unknown> {
           workspaceIdParam,
           { name: 'cursor', in: 'query', schema: { type: 'string' } },
           { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100 } },
+          { name: 'productId', in: 'query', schema: { type: 'string', format: 'uuid' } },
         ],
         responses: {
           '200': {

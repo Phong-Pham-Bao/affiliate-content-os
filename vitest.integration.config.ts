@@ -23,6 +23,7 @@ export default defineConfig({
     include: [
       'packages/infrastructure/test/integration/**/*.test.ts',
       'apps/api/test/integration/**/*.test.ts',
+      'apps/worker/test/integration/**/*.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/dist/**'],
   },

@@ -1,5 +1,14 @@
 import { vi } from 'vitest';
-import { TEST_WORKSPACE_ID } from './catalog-test-deps.js';
+import {
+  parseIsoTimestamp,
+  type ProductFactSetId,
+  type ProductId,
+  type ProductFactSetSnapshot,
+  type ProductSnapshot,
+  type UserId,
+  type WorkspaceRole,
+} from '@affiliate-content-os/domain';
+import { OWNER_USER_ID, TEST_WORKSPACE_ID } from './catalog-test-deps.js';
 import { createTestAnalysisDeps } from './analysis-test-deps.js';
 import type { WorkforceRouteDependencies } from '../../src/workforce/types.js';
 
@@ -58,8 +67,56 @@ export const mockArtifactDetail = {
   },
 };
 
-export function createTestWorkforceDeps(): WorkforceRouteDependencies {
-  const { deps } = createTestAnalysisDeps();
+export function createTestWorkforceDeps(options?: {
+  readonly defaultUserId?: UserId;
+  readonly defaultRole?: WorkspaceRole;
+}): WorkforceRouteDependencies {
+  const { deps, catalogPersistence } = createTestAnalysisDeps(options);
+  const activeUserId = options?.defaultUserId ?? OWNER_USER_ID;
+  const factSetId = '0192b012-3456-789a-8bcd-ef0123456711';
+
+  const productSnapshot: ProductSnapshot = {
+    id: mockWorkOrder.productId as ProductId,
+    workspaceId: TEST_WORKSPACE_ID,
+    name: 'Test Product',
+    merchantName: 'Test Merchant',
+    canonicalUrl: 'https://example.com/product',
+    canonicalUrlHash: new Uint8Array(32),
+    category: 'electronics',
+    description: 'Test description',
+    audienceNotes: null,
+    allowedClaimsNotes: null,
+    prohibitedClaimsNotes: null,
+    status: 'active',
+    currentFactSetId: factSetId as ProductFactSetId,
+    createdAt: parseIsoTimestamp('2026-11-02T12:00:00.000Z'),
+    updatedAt: parseIsoTimestamp('2026-11-02T12:00:00.000Z'),
+    version: 1,
+  };
+  catalogPersistence.products.set(
+    `${TEST_WORKSPACE_ID}:${mockWorkOrder.productId}`,
+    productSnapshot,
+  );
+
+  const factSetSnapshot: ProductFactSetSnapshot = {
+    id: factSetId as ProductFactSetId,
+    workspaceId: TEST_WORKSPACE_ID,
+    productId: mockWorkOrder.productId as ProductId,
+    revisionNumber: 1,
+    status: 'confirmed',
+    summary: null,
+    createdByUserId: activeUserId,
+    confirmedByUserId: activeUserId,
+    confirmedAt: parseIsoTimestamp('2026-11-02T12:00:00.000Z'),
+    createdAt: parseIsoTimestamp('2026-11-02T12:00:00.000Z'),
+    updatedAt: parseIsoTimestamp('2026-11-02T12:00:00.000Z'),
+    version: 1,
+  };
+  catalogPersistence.factSets.set(
+    `${TEST_WORKSPACE_ID}:${mockWorkOrder.productId}:${factSetId}`,
+    factSetSnapshot,
+  );
+
   return {
     auth: deps.auth,
     workspaceAuthorization: deps.workspaceAuthorization,

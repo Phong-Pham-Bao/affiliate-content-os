@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, type FormEvent, type ReactElement } from 'react';
+import { useEffect, useState, type FormEvent, type ReactElement } from 'react';
+import type { AnalysisSummaryDTO, WorkspaceAIPolicyDTO } from '../../types/analysis.js';
 import type {
   AffiliateDestinationDTO,
   CreateAffiliatePayload,
@@ -16,6 +17,7 @@ import { FactSetsSection } from './fact-sets-section.js';
 import { AnalysesSection } from './analyses-section.js';
 import { WorkforceCommandCenter } from '../workforce/index.js';
 import { ApiError } from '../../lib/api-validators-common.js';
+import { fetchAIPolicyApi, fetchAnalysesApi } from '../../lib/catalog-api-client.js';
 
 interface ProductDetailViewProps {
   readonly product: ProductDTO;
@@ -50,10 +52,76 @@ interface ProductDetailViewProps {
   readonly factSetsHasMore: boolean;
   readonly isFactSetsLoadingMore: boolean;
   readonly onLoadMoreFactSets: () => void;
+  readonly initialAcceptedAnalyses?: readonly AnalysisSummaryDTO[] | undefined;
+  readonly initialAIPolicy?: WorkspaceAIPolicyDTO | null | undefined;
 }
 
 export function ProductDetailView(props: ProductDetailViewProps): ReactElement {
   const { product, canManage, onUpdateProduct, onArchiveProduct, onRefreshProduct } = props;
+
+  const [acceptedAnalyses, setAcceptedAnalyses] = useState<readonly AnalysisSummaryDTO[]>(
+    props.initialAcceptedAnalyses ?? [],
+  );
+  const [aiPolicy, setAiPolicy] = useState<WorkspaceAIPolicyDTO | null>(
+    props.initialAIPolicy ?? null,
+  );
+  const [isReadinessLoading, setIsReadinessLoading] = useState<boolean>(
+    props.initialAcceptedAnalyses === undefined || props.initialAIPolicy === undefined,
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    const ctrl = new AbortController();
+    setIsReadinessLoading(true);
+
+    const loadData = async () => {
+      try {
+        const [analysesRes, policyRes] = await Promise.all([
+          fetchAnalysesApi(
+            product.workspaceId,
+            product.id,
+            { status: 'accepted' },
+            ctrl.signal,
+          ).catch(() => null),
+          fetchAIPolicyApi(product.workspaceId, ctrl.signal).catch(() => null),
+        ]);
+        if (cancelled) return;
+        if (analysesRes) {
+          const accepted = analysesRes.items.filter((a) => a.status === 'accepted');
+          setAcceptedAnalyses(accepted);
+        } else {
+          setAcceptedAnalyses([]);
+        }
+        if (policyRes) {
+          setAiPolicy(policyRes);
+        } else {
+          setAiPolicy(null);
+        }
+      } finally {
+        if (!cancelled) {
+          setIsReadinessLoading(false);
+        }
+      }
+    };
+
+    void loadData();
+
+    return () => {
+      cancelled = true;
+      ctrl.abort();
+    };
+  }, [product.workspaceId, product.id]);
+
+  const availableBudgetMicrounits = aiPolicy
+    ? Math.max(
+        0,
+        aiPolicy.monthlyBudgetMicrounits -
+          aiPolicy.currentSpendMicrounits -
+          aiPolicy.reservedSpendMicrounits,
+      )
+    : undefined;
+
+  const aiEnabled = aiPolicy?.aiEnabled;
 
   const [isEditing, setIsEditing] = useState(false);
   const [showArchiveConfirm, setShowArchiveConfirm] = useState(false);
@@ -405,6 +473,9 @@ export function ProductDetailView(props: ProductDetailViewProps): ReactElement {
         productId={product.id}
         factSetId={product.currentFactSetId}
         canManage={canManage}
+        onAnalysesChanged={(items) => {
+          setAcceptedAnalyses(items.filter((a) => a.status === 'accepted'));
+        }}
       />
 
       <WorkforceCommandCenter
@@ -413,6 +484,10 @@ export function ProductDetailView(props: ProductDetailViewProps): ReactElement {
         canManage={canManage}
         hasConfirmedFacts={Boolean(product.currentFactSetId)}
         confirmedFacts={props.selectedRevisionFacts}
+        acceptedAnalyses={acceptedAnalyses}
+        aiEnabled={aiEnabled}
+        availableBudgetMicrounits={availableBudgetMicrounits}
+        isReadinessLoading={isReadinessLoading}
       />
 
       {showArchiveConfirm && (

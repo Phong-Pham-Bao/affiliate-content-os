@@ -18,8 +18,9 @@ interface WorkforceCommandCenterProps {
   readonly hasConfirmedFacts?: boolean;
   readonly confirmedFacts?: readonly FactDTO[];
   readonly acceptedAnalyses?: readonly AnalysisSummaryDTO[];
-  readonly aiEnabled?: boolean;
-  readonly availableBudgetMicrounits?: number;
+  readonly aiEnabled?: boolean | undefined;
+  readonly availableBudgetMicrounits?: number | undefined;
+  readonly isReadinessLoading?: boolean | undefined;
 }
 
 export function WorkforceCommandCenter({
@@ -29,8 +30,9 @@ export function WorkforceCommandCenter({
   hasConfirmedFacts = false,
   confirmedFacts = [],
   acceptedAnalyses = [],
-  aiEnabled = true,
-  availableBudgetMicrounits = 1000000000,
+  aiEnabled,
+  availableBudgetMicrounits,
+  isReadinessLoading = false,
 }: WorkforceCommandCenterProps): ReactElement {
   const {
     workOrders,
@@ -146,6 +148,7 @@ export function WorkforceCommandCenter({
         acceptedAnalyses={acceptedAnalyses}
         aiEnabled={aiEnabled}
         availableBudgetMicrounits={availableBudgetMicrounits}
+        isLoadingContext={isReadinessLoading}
         isSubmittingAssign={isSubmittingAssign}
         assignError={assignError}
         inspectedRoleKey={inspectedRoleKey}

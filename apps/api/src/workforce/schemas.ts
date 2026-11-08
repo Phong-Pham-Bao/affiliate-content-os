@@ -53,6 +53,7 @@ export const listWorkOrdersRouteSchema = {
     properties: {
       cursor: { type: 'string' },
       limit: { type: 'integer', minimum: 1, maximum: 100 },
+      productId: { type: 'string', pattern: uuidPattern },
     },
     additionalProperties: false,
   },

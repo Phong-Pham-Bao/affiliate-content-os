@@ -8,34 +8,17 @@ import {
 import { generateUuidV7 } from '../id-generator.js';
 import { authorizeWorkspaceAction } from '../authorize-workspace-action.js';
 import { ValidationError } from '../errors.js';
+import {
+  ESTIMATED_COST_PER_PLANNING_CALL_MICROUNITS,
+  PLANNING_ROLE_CONFIG,
+  TOTAL_PLANNING_RESERVED_MICROUNITS,
+} from './build-kickoff-graph.js';
 import type { RetryPlanningItemParam } from './ports.js';
 import type {
   RetryWorkOrderPlanningCommand,
   RetryWorkOrderPlanningResultDTO,
   WorkforceDependencies,
 } from './types.js';
-
-const PLANNING_RETRY_ROLES: readonly {
-  readonly taskKey: 'product_strategy' | 'audience_strategy' | 'creative_direction';
-  readonly roleKey: 'product_strategist' | 'audience_strategist' | 'creative_director';
-  readonly promptTemplate: string;
-}[] = [
-  {
-    taskKey: 'product_strategy',
-    roleKey: 'product_strategist',
-    promptTemplate: 'product_strategy_v1',
-  },
-  {
-    taskKey: 'audience_strategy',
-    roleKey: 'audience_strategist',
-    promptTemplate: 'audience_strategy_v1',
-  },
-  {
-    taskKey: 'creative_direction',
-    roleKey: 'creative_director',
-    promptTemplate: 'creative_direction_v1',
-  },
-];
 
 export async function retryWorkOrderPlanning(
   command: RetryWorkOrderPlanningCommand,
@@ -56,7 +39,7 @@ export async function retryWorkOrderPlanning(
 
   const genId = () => deps.idGenerator?.generateId?.() ?? generateUuidV7();
 
-  const retryItems: RetryPlanningItemParam[] = PLANNING_RETRY_ROLES.map((role) => ({
+  const retryItems: RetryPlanningItemParam[] = PLANNING_ROLE_CONFIG.map((role) => ({
     workItemId: parseWorkItemId(genId()),
     operationId: genId(),
     aiRunId: genId(),
@@ -65,7 +48,7 @@ export async function retryWorkOrderPlanning(
     taskKey: role.taskKey,
     roleKey: role.roleKey,
     promptTemplate: role.promptTemplate,
-    reservedMicrounits: 50000,
+    reservedMicrounits: ESTIMATED_COST_PER_PLANNING_CALL_MICROUNITS,
   }));
 
   const auditEventId = parseAuditEventId(genId());
@@ -75,7 +58,7 @@ export async function retryWorkOrderPlanning(
     workOrderId: orderId,
     actorUserId: actorId,
     retryItems,
-    totalEstimatedCostMicrounits: 150000,
+    totalEstimatedCostMicrounits: TOTAL_PLANNING_RESERVED_MICROUNITS,
     auditEvent: {
       id: auditEventId,
       workspaceId: wsId,

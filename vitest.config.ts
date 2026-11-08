@@ -35,6 +35,7 @@ export default defineConfig({
       '**/dist/**',
       'packages/infrastructure/test/integration/**',
       'apps/api/test/integration/**',
+      'apps/worker/test/integration/**',
     ],
   },
 });

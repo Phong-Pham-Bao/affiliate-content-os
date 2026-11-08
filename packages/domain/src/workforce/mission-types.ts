@@ -4,6 +4,7 @@ import type { IsoTimestamp } from '../timestamps.js';
 import type { ContextPackageId, WorkOrderId } from './ids.js';
 
 export const WORK_ORDER_MISSION_TYPES = [
+  'single_product_affiliate_launch',
   'short_video_series',
   'product_launch_plan',
   'objection_handling_series',

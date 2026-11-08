@@ -1,4 +1,4 @@
-import { parseUserId, parseWorkspaceId } from '@affiliate-content-os/domain';
+import { parseProductId, parseUserId, parseWorkspaceId } from '@affiliate-content-os/domain';
 import { authorizeWorkspaceAction } from '../authorize-workspace-action.js';
 import { ValidationError } from '../errors.js';
 import {
@@ -49,9 +49,12 @@ export async function listWorkOrders(
     decodedCursor = decodeWorkOrderCursor(query.cursor);
   }
 
+  const prodId = query.productId ? parseProductId(query.productId) : undefined;
+
   const rows = await deps.workforcePersistence.listWorkOrders(wsId, {
     cursor: decodedCursor,
     limit: limit + 1,
+    productId: prodId,
   });
 
   const hasMore = rows.length > limit;

@@ -25,6 +25,7 @@ interface AnalysesSectionProps {
   readonly factSetId: string | null;
   readonly factSetRevision?: number | null | undefined;
   readonly canManage?: boolean | undefined;
+  readonly onAnalysesChanged?: ((analyses: readonly AnalysisSummaryDTO[]) => void) | undefined;
 }
 
 export function AnalysesSection({
@@ -33,6 +34,7 @@ export function AnalysesSection({
   factSetId,
   factSetRevision,
   canManage = true,
+  onAnalysesChanged,
 }: AnalysesSectionProps): ReactElement {
   const [analyses, setAnalyses] = useState<readonly AnalysisSummaryDTO[]>([]);
   const [activeOperation, setActiveOperation] = useState<OperationDTO | null>(null);
@@ -47,6 +49,7 @@ export function AnalysesSection({
     try {
       const res = await fetchAnalysesApi(workspaceId, productId);
       setAnalyses(res.items);
+      onAnalysesChanged?.(res.items);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load analyses.');
     } finally {

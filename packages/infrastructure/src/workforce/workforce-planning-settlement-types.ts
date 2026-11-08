@@ -24,6 +24,13 @@ export interface WorkforceTransientFailureOutcome {
   readonly nextAttemptAt: Date;
 }
 
+export interface WorkforceRepairOutcome {
+  readonly kind: 'repair';
+  readonly errorCategory: string;
+  readonly errorMessage: string;
+  readonly repairDelaySeconds: number;
+}
+
 export interface WorkforceTerminalFailureOutcome {
   readonly kind: 'terminal_failure';
   readonly errorCategory: string;
@@ -39,6 +46,7 @@ export interface WorkforcePlanningSettlementParams {
   readonly assignmentId: string;
   readonly authorRoleKey: string;
   readonly artifactType: string;
+  readonly taskKey?: string | undefined;
   readonly jobId: string;
   readonly jobVersion: number;
   readonly operationId: string;
@@ -46,5 +54,8 @@ export interface WorkforcePlanningSettlementParams {
   readonly workerId: string;
   readonly reservedMicrounits: number;
   readonly outcome:
-    WorkforceSuccessOutcome | WorkforceTransientFailureOutcome | WorkforceTerminalFailureOutcome;
+    | WorkforceSuccessOutcome
+    | WorkforceTransientFailureOutcome
+    | WorkforceTerminalFailureOutcome
+    | WorkforceRepairOutcome;
 }

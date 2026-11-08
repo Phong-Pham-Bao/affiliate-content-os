@@ -27,7 +27,7 @@ export function useWorkforceOrders(workspaceId: string, productId: string) {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetchWorkOrdersApi(workspaceId);
+      const res = await fetchWorkOrdersApi(workspaceId, { productId });
       const productOrders = res.items.filter((item) => item.productId === productId);
       setWorkOrders(productOrders);
       if (productOrders.length > 0) {

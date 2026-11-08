@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, type FormEvent, type ReactElement } from 'react';
+import { useEffect, useState, type FormEvent, type ReactElement } from 'react';
 import type { AnalysisSummaryDTO } from '../../types/analysis.js';
 import type { FactDTO } from '../../types/catalog.js';
 import type { KickoffWorkOrderPayload } from '../../types/workforce.js';
@@ -13,8 +13,9 @@ interface AssignToAiTeamDialogProps {
   readonly hasConfirmedFacts: boolean;
   readonly confirmedFacts: readonly FactDTO[];
   readonly acceptedAnalyses: readonly AnalysisSummaryDTO[];
-  readonly aiEnabled: boolean;
-  readonly availableBudgetMicrounits: number;
+  readonly aiEnabled?: boolean | undefined;
+  readonly availableBudgetMicrounits?: number | undefined;
+  readonly isLoadingContext?: boolean | undefined;
   readonly isSubmitting: boolean;
   readonly error: string | null;
   readonly onClose: () => void;
@@ -29,6 +30,7 @@ export function AssignToAiTeamDialog({
   acceptedAnalyses,
   aiEnabled,
   availableBudgetMicrounits,
+  isLoadingContext = false,
   isSubmitting,
   error,
   onClose,
@@ -44,14 +46,25 @@ export function AssignToAiTeamDialog({
     acceptedAnalyses.map((a) => a.id),
   );
 
+  useEffect(() => {
+    setSelectedAnalysisIds(acceptedAnalyses.map((a) => a.id));
+  }, [acceptedAnalyses]);
+
   if (!isOpen) return null;
 
   const estimatedCostMicrounits = 150000; // 3 calls * 50,000 microunits = $0.15
-  const hasEnoughBudget = availableBudgetMicrounits >= estimatedCostMicrounits;
+  const hasEnoughBudget =
+    availableBudgetMicrounits !== undefined && availableBudgetMicrounits >= estimatedCostMicrounits;
 
   let disabledReason: string | null = null;
   if (!canManage) {
     disabledReason = 'Only workspace owners or editors can assign work to the AI team.';
+  } else if (
+    isLoadingContext ||
+    aiEnabled === undefined ||
+    availableBudgetMicrounits === undefined
+  ) {
+    disabledReason = 'Checking workspace AI readiness and budget...';
   } else if (!aiEnabled) {
     disabledReason = 'AI features are disabled in workspace AI policy.';
   } else if (!hasConfirmedFacts) {
@@ -60,6 +73,8 @@ export function AssignToAiTeamDialog({
     disabledReason = 'At least one accepted product or niche analysis is required.';
   } else if (!hasEnoughBudget) {
     disabledReason = 'Insufficient workspace AI budget for the estimated 3 planning calls.';
+  } else if (selectedAnalysisIds.length === 0) {
+    disabledReason = 'Select at least one accepted analysis to proceed.';
   }
 
   const isFormDisabled = Boolean(disabledReason) || isSubmitting;

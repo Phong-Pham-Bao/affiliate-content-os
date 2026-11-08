@@ -43,9 +43,10 @@ export async function handleListWorkOrders(
 ): Promise<void> {
   const authContext = await requireAuthenticatedSession(request, reply, deps.auth);
   const { workspaceId } = request.params as { readonly workspaceId: string };
-  const { cursor, limit } = request.query as {
+  const { cursor, limit, productId } = request.query as {
     readonly cursor?: string | undefined;
     readonly limit?: number | undefined;
+    readonly productId?: string | undefined;
   };
 
   const result = await listWorkOrders(
@@ -54,6 +55,7 @@ export async function handleListWorkOrders(
       actorUserId: authContext.user.id,
       cursor,
       limit,
+      productId,
     },
     {
       workforcePersistence: deps.workforcePersistence,
@@ -107,9 +109,10 @@ export async function handleGetArtifactById(
 
   if (!result) {
     return reply.status(404).send({
-      type: 'https://problems.affiliate-content-os.com/artifact-not-found',
+      type: 'https://affiliate-content-os.example/problems/artifact-not-found',
       title: 'Not Found',
       status: 404,
+      code: 'ARTIFACT_NOT_FOUND',
       detail: `Artifact ${artifactId} not found`,
     });
   }

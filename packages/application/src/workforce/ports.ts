@@ -1,4 +1,9 @@
-import type { WorkItemSnapshot, WorkOrderId, WorkspaceId } from '@affiliate-content-os/domain';
+import type {
+  ProductId,
+  WorkItemSnapshot,
+  WorkOrderId,
+  WorkspaceId,
+} from '@affiliate-content-os/domain';
 import type { DecodedWorkOrderCursor } from './cursor.js';
 import type {
   KickoffWorkOrderAtomicParams,
@@ -27,6 +32,7 @@ export interface WorkforcePersistencePort {
     options: {
       readonly cursor?: DecodedWorkOrderCursor | undefined;
       readonly limit: number;
+      readonly productId?: ProductId | undefined;
     },
   ): Promise<readonly WorkOrderSummaryDTO[]>;
   findReadyWorkItems(

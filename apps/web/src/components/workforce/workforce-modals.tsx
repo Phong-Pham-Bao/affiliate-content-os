@@ -20,8 +20,9 @@ interface WorkforceModalsProps {
   readonly hasConfirmedFacts: boolean;
   readonly confirmedFacts: readonly FactDTO[];
   readonly acceptedAnalyses: readonly AnalysisSummaryDTO[];
-  readonly aiEnabled: boolean;
-  readonly availableBudgetMicrounits: number;
+  readonly aiEnabled?: boolean | undefined;
+  readonly availableBudgetMicrounits?: number | undefined;
+  readonly isLoadingContext?: boolean | undefined;
   readonly isSubmittingAssign: boolean;
   readonly assignError: string | null;
   readonly inspectedRoleKey: AgentRoleKey | null;
@@ -46,6 +47,7 @@ export function WorkforceModals(props: WorkforceModalsProps): ReactElement {
         acceptedAnalyses={props.acceptedAnalyses}
         aiEnabled={props.aiEnabled}
         availableBudgetMicrounits={props.availableBudgetMicrounits}
+        isLoadingContext={props.isLoadingContext}
         isSubmitting={props.isSubmittingAssign}
         error={props.assignError}
         onClose={props.onCloseAssign}

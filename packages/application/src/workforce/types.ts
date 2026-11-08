@@ -31,6 +31,7 @@ export interface GetWorkOrderQuery {
 export interface ListWorkOrdersQuery {
   readonly workspaceId: string;
   readonly actorUserId: string;
+  readonly productId?: string | null | undefined;
   readonly cursor?: string | null | undefined;
   readonly limit?: number | undefined;
 }

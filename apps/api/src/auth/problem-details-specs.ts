@@ -123,6 +123,20 @@ export const PROBLEM_SPECS: Record<string, ProblemSpec> = {
     title: 'Not Found',
     detail: 'The requested affiliate destination was not found or is not accessible.',
   },
+  WORK_ORDER_NOT_FOUND: {
+    status: 404,
+    code: 'WORK_ORDER_NOT_FOUND',
+    type: 'https://affiliate-content-os.example/problems/work-order-not-found',
+    title: 'Not Found',
+    detail: 'The requested work order was not found or is not accessible.',
+  },
+  ARTIFACT_NOT_FOUND: {
+    status: 404,
+    code: 'ARTIFACT_NOT_FOUND',
+    type: 'https://affiliate-content-os.example/problems/artifact-not-found',
+    title: 'Not Found',
+    detail: 'The requested artifact was not found or is not accessible.',
+  },
   STALE_VERSION_CONFLICT: {
     status: 409,
     code: 'STALE_VERSION_CONFLICT',

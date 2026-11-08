@@ -17,6 +17,7 @@ import {
   SlugConflictError,
   StaleVersionConflictError,
   ValidationError,
+  WorkOrderNotFoundError,
   WorkspaceAccessDeniedError,
 } from '@affiliate-content-os/application';
 import { DomainValidationError } from '@affiliate-content-os/domain';
@@ -89,6 +90,9 @@ export function resolveProblemSpec(error: unknown, request?: FastifyRequest): Pr
     }
     if (error instanceof AffiliateDestinationNotFoundError) {
       return PROBLEM_SPECS['AFFILIATE_DESTINATION_NOT_FOUND']!;
+    }
+    if (error instanceof WorkOrderNotFoundError) {
+      return PROBLEM_SPECS['WORK_ORDER_NOT_FOUND']!;
     }
     if (error instanceof StaleVersionConflictError) {
       return PROBLEM_SPECS['STALE_VERSION_CONFLICT']!;

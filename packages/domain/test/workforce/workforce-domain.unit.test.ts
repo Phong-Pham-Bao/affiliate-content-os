@@ -112,12 +112,14 @@ describe('Workforce Domain Foundation', () => {
   describe('Normative Enums and Types', () => {
     it('validates mission types', () => {
       expect(WORK_ORDER_MISSION_TYPES).toEqual([
+        'single_product_affiliate_launch',
         'short_video_series',
         'product_launch_plan',
         'objection_handling_series',
         'educational_series',
         'custom',
       ]);
+      expect(isWorkOrderMissionType('single_product_affiliate_launch')).toBe(true);
       expect(isWorkOrderMissionType('short_video_series')).toBe(true);
       expect(isWorkOrderMissionType('unsupported')).toBe(false);
     });

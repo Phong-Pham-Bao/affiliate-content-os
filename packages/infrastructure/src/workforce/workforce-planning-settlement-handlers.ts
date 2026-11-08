@@ -1,5 +1,6 @@
 import type pg from 'pg';
 import { generateUuidV7 } from '@affiliate-content-os/application';
+import { DatabaseError } from '../database/errors.js';
 import type {
   WorkforcePlanningSettlementParams,
   WorkforceSuccessOutcome,
@@ -8,6 +9,7 @@ import { persistContentArtifactAndRevision } from './workforce-planning-artifact
 
 export {
   handleTransientFailure,
+  handleRepairSettlement,
   handleTerminalFailure,
 } from './workforce-planning-failure-handlers.js';
 
@@ -18,38 +20,76 @@ export async function handleSuccessSettlement(
 ): Promise<{ artifactId: string }> {
   const outcome = params.outcome as WorkforceSuccessOutcome;
 
-  // 1-3. Persist content_artifacts, content_artifact_revisions, artifact_evidence_refs
+  // 1. Validate actual cost strictly: must be safe non-negative integer <= reserved
+  const actualCost = outcome.usage.costMicrounits ?? 0;
+  if (
+    typeof actualCost !== 'number' ||
+    actualCost < 0 ||
+    !Number.isSafeInteger(actualCost) ||
+    actualCost > reserved
+  ) {
+    throw new DatabaseError(
+      `Invalid actual cost: must be safe non-negative integer <= reserved amount (${reserved})`,
+    );
+  }
+
+  // 2. Persist content_artifacts, content_artifact_revisions, artifact_evidence_refs
   const { artifactId, revisionNumber } = await persistContentArtifactAndRevision(
     client,
     params,
     outcome,
   );
 
+  // 3. Settle budget in workspace_ai_policies first
+  const policyUpdate = await client.query(
+    `UPDATE workspace_ai_policies
+     SET reserved_spend_microunits = reserved_spend_microunits - $1,
+         current_spend_microunits = current_spend_microunits + $2,
+         updated_at = NOW(), version = version + 1
+     WHERE workspace_id = $3 AND reserved_spend_microunits >= $1`,
+    [reserved, actualCost, params.workspaceId],
+  );
+  if (policyUpdate.rowCount !== 1) {
+    throw new DatabaseError(
+      `Failed to settle workspace AI policy reservation: insufficient reserved spend in workspace ${params.workspaceId}`,
+    );
+  }
+
   // 4. Update job_executions to succeeded
-  await client.query(
+  const jobUpdate = await client.query(
     `UPDATE job_executions
      SET status = 'succeeded', completed_at = NOW(), lease_owner = NULL,
          lease_expires_at = NULL, last_error_category = NULL, updated_at = NOW(), version = version + 1
-     WHERE id = $1`,
-    [params.jobId],
+     WHERE id = $1 AND workspace_id = $2 AND version = $3 AND status = 'running' AND lease_owner = $4`,
+    [params.jobId, params.workspaceId, params.jobVersion, params.workerId],
   );
+  if (jobUpdate.rowCount !== 1) {
+    throw new DatabaseError(`Failed to update job execution ${params.jobId} to succeeded`);
+  }
 
   // 5. Update operations to succeeded
-  await client.query(
+  const opUpdate = await client.query(
     `UPDATE operations
      SET status = 'succeeded', result_location = $1, completed_at = NOW(),
          updated_at = NOW(), version = version + 1
-     WHERE id = $2`,
-    [`/workspaces/${params.workspaceId}/artifacts/${artifactId}`, params.operationId],
+     WHERE id = $2 AND workspace_id = $3 AND status IN ('queued', 'running', 'pending')`,
+    [
+      `/workspaces/${params.workspaceId}/artifacts/${artifactId}`,
+      params.operationId,
+      params.workspaceId,
+    ],
   );
+  if (opUpdate.rowCount !== 1) {
+    throw new DatabaseError(`Failed to update operation ${params.operationId} to succeeded`);
+  }
 
   // 6. Update ai_runs to succeeded
-  await client.query(
+  const runUpdate = await client.query(
     `UPDATE ai_runs
      SET status = 'succeeded', output_hash = $1, token_input = $2, token_output = $3,
          cost_microunits = $4, cost_currency = $5, latency_ms = $6, completed_at = NOW(),
          updated_at = NOW(), version = version + 1
-     WHERE id = $7`,
+     WHERE id = $7 AND workspace_id = $8 AND status IN ('queued', 'running')`,
     [
       Buffer.from(outcome.contentHash),
       outcome.usage.tokenInput ?? null,
@@ -58,44 +98,46 @@ export async function handleSuccessSettlement(
       outcome.usage.costCurrency ?? 'USD',
       outcome.usage.latencyMs ?? null,
       params.aiRunId,
+      params.workspaceId,
     ],
   );
+  if (runUpdate.rowCount !== 1) {
+    throw new DatabaseError(`Failed to update AI run ${params.aiRunId} to succeeded`);
+  }
 
-  // 7. Settle budget in workspace_ai_policies
-  const actualCost = outcome.usage.costMicrounits ?? 0;
-  await client.query(
-    `UPDATE workspace_ai_policies
-     SET reserved_spend_microunits = reserved_spend_microunits - $1,
-         current_spend_microunits = current_spend_microunits + $2,
-         updated_at = NOW(), version = version + 1
-     WHERE workspace_id = $3 AND reserved_spend_microunits >= $1`,
-    [reserved, actualCost, params.workspaceId],
-  );
-
-  // 8. Update work_items to completed
-  await client.query(
+  // 7. Update work_items to completed
+  const wiUpdate = await client.query(
     `UPDATE work_items
-     SET status = 'completed', started_at = COALESCE(started_at, NOW()), completed_at = NOW(), updated_at = NOW(), version = version + 1
-     WHERE id = $1`,
-    [params.workItemId],
+     SET status = 'completed', started_at = COALESCE(started_at, NOW()), completed_at = NOW(),
+         updated_at = NOW(), version = version + 1
+     WHERE id = $1 AND workspace_id = $2 AND work_order_id = $3 AND status IN ('queued', 'running')`,
+    [params.workItemId, params.workspaceId, params.workOrderId],
   );
+  if (wiUpdate.rowCount !== 1) {
+    throw new DatabaseError(`Failed to update work item ${params.workItemId} to completed`);
+  }
 
-  // 9. Update agent_assignments to completed
-  await client.query(
+  // 8. Update agent_assignments to completed
+  const asgUpdate = await client.query(
     `UPDATE agent_assignments
      SET office_state = 'completed', updated_at = NOW(), version = version + 1
-     WHERE id = $1`,
-    [params.assignmentId],
+     WHERE id = $1 AND workspace_id = $2 AND work_order_id = $3`,
+    [params.assignmentId, params.workspaceId, params.workOrderId],
   );
+  if (asgUpdate.rowCount !== 1) {
+    throw new DatabaseError(
+      `Failed to update agent assignment ${params.assignmentId} to completed`,
+    );
+  }
 
-  // 10. Dependency release check: check if all 3 planning items are completed
+  // 9. Dependency release check: check if all 3 planning items are completed
   const remainingRes = await client.query(
     `SELECT count(*) AS remaining
      FROM work_items
-     WHERE work_order_id = $1
+     WHERE workspace_id = $1 AND work_order_id = $2
        AND task_key IN ('product_strategy', 'audience_strategy', 'creative_direction')
        AND status <> 'completed'`,
-    [params.workOrderId],
+    [params.workspaceId, params.workOrderId],
   );
 
   const remaining = Number(remainingRes.rows[0]?.remaining ?? 0);
@@ -103,20 +145,20 @@ export async function handleSuccessSettlement(
     await client.query(
       `UPDATE work_items
        SET status = 'ready', updated_at = NOW(), version = version + 1
-       WHERE work_order_id = $1 AND task_key = 'scriptwriting' AND status = 'waiting_dependency'`,
-      [params.workOrderId],
+       WHERE workspace_id = $1 AND work_order_id = $2 AND task_key = 'scriptwriting' AND status = 'waiting_dependency'`,
+      [params.workspaceId, params.workOrderId],
     );
     await client.query(
       `UPDATE agent_assignments
        SET office_state = 'preparing', waiting_on_work_item_id = NULL, updated_at = NOW(), version = version + 1
-       WHERE work_order_id = $1 AND work_item_id = (
-         SELECT id FROM work_items WHERE work_order_id = $1 AND task_key = 'scriptwriting'
+       WHERE workspace_id = $1 AND work_order_id = $2 AND work_item_id = (
+         SELECT id FROM work_items WHERE workspace_id = $1 AND work_order_id = $2 AND task_key = 'scriptwriting'
        )`,
-      [params.workOrderId],
+      [params.workspaceId, params.workOrderId],
     );
   }
 
-  // 11. Audit event
+  // 10. Insert audit event
   await client.query(
     `INSERT INTO audit_events (
        id, workspace_id, actor_type, actor_user_id, action, resource_type,

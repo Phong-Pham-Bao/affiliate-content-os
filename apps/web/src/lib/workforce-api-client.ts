@@ -80,12 +80,13 @@ export async function fetchWorkOrderApi(
 
 export async function fetchWorkOrdersApi(
   workspaceId: string,
-  options?: { readonly cursor?: string; readonly limit?: number },
+  options?: { readonly cursor?: string; readonly limit?: number; readonly productId?: string },
   signal?: AbortSignal,
 ): Promise<{ items: readonly WorkOrderSummaryDTO[]; nextCursor: string | null }> {
   const query = new URLSearchParams();
   if (options?.cursor) query.set('cursor', options.cursor);
   if (options?.limit) query.set('limit', String(options.limit));
+  if (options?.productId) query.set('productId', options.productId);
   const qs = query.toString();
 
   let res: Response;
