@@ -1,30 +1,43 @@
-export type AgentRoleKey =
-  | 'chief_of_staff'
-  | 'product_strategist'
-  | 'audience_strategist'
-  | 'creative_director'
-  | 'scriptwriter'
-  | 'compliance_reviewer';
+export const CANONICAL_ROLE_KEYS = [
+  'chief_of_staff',
+  'product_strategist',
+  'audience_strategist',
+  'creative_director',
+  'scriptwriter',
+  'compliance_reviewer',
+] as const;
 
-export type WorkOrderStatus = 'pending' | 'in_progress' | 'completed' | 'failed' | 'cancelled';
+export type AgentRoleKey = (typeof CANONICAL_ROLE_KEYS)[number];
 
-export type WorkItemStatus =
-  'waiting_dependency' | 'ready' | 'queued' | 'in_progress' | 'completed' | 'failed' | 'cancelled';
+export const CANONICAL_WORK_ORDER_STATUSES = [
+  'preparing',
+  'in_progress',
+  'waiting_review',
+  'completed',
+  'blocked',
+  'failed',
+  'canceled',
+] as const;
 
-export type AssignmentOfficeState =
-  | 'idle'
-  | 'preparing'
-  | 'queued'
-  | 'running'
-  | 'waiting_dependency'
-  | 'review_required'
-  | 'completed'
-  | 'blocked'
-  | 'failed'
-  | 'canceled'
-  | 'working'
-  | 'waiting'
-  | 'cancelled';
+export type CanonicalWorkOrderStatus = (typeof CANONICAL_WORK_ORDER_STATUSES)[number];
+
+export type WorkOrderStatus = CanonicalWorkOrderStatus | 'pending' | 'cancelled';
+
+export const CANONICAL_WORK_ITEM_STATUSES = [
+  'ready',
+  'waiting_dependency',
+  'queued',
+  'running',
+  'review_required',
+  'completed',
+  'blocked',
+  'failed',
+  'canceled',
+] as const;
+
+export type CanonicalWorkItemStatus = (typeof CANONICAL_WORK_ITEM_STATUSES)[number];
+
+export type WorkItemStatus = CanonicalWorkItemStatus | 'in_progress' | 'cancelled';
 
 export const CANONICAL_OFFICE_STATES = [
   'idle',
@@ -41,14 +54,25 @@ export const CANONICAL_OFFICE_STATES = [
 
 export type CanonicalOfficeState = (typeof CANONICAL_OFFICE_STATES)[number];
 
+export type AssignmentOfficeState = CanonicalOfficeState | 'working' | 'waiting' | 'cancelled';
+
+export const CANONICAL_MISSION_TYPES = [
+  'single_product_affiliate_launch',
+  'short_video_series',
+  'product_launch_plan',
+  'objection_handling_series',
+  'educational_series',
+  'custom',
+] as const;
+
+export type WorkOrderMissionType = (typeof CANONICAL_MISSION_TYPES)[number];
+
 export type ContentArtifactType =
   | 'product_campaign_plan'
   | 'audience_insight_board'
   | 'video_series_plan'
   | 'script_package'
   | 'compliance_report';
-
-export type WorkOrderMissionType = 'single_product_affiliate_launch';
 
 export interface WorkOrderSummaryDTO {
   readonly id: string;

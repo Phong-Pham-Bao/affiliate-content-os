@@ -1,8 +1,20 @@
-import { useCallback, type KeyboardEvent } from 'react';
+import { useCallback, useState, type KeyboardEvent } from 'react';
 import type { AgentRoleKey } from '../../types/workforce.js';
 import { ORDERED_ROLES } from '../../lib/workforce-view-model-roles.js';
 
-export function useRosterKeyboardNav(onInspectEmployee: (roleKey: AgentRoleKey) => void) {
+export function useRosterKeyboardNav(
+  onInspectEmployee: (roleKey: AgentRoleKey) => void,
+  initialRoleKey: AgentRoleKey = ORDERED_ROLES[0]!,
+) {
+  const [activeRoleKey, setActiveRoleKey] = useState<AgentRoleKey>(initialRoleKey);
+
+  const getTabIndex = useCallback(
+    (roleKey: AgentRoleKey): number => {
+      return roleKey === activeRoleKey ? 0 : -1;
+    },
+    [activeRoleKey],
+  );
+
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLElement>, currentRoleKey: AgentRoleKey) => {
       const idx = ORDERED_ROLES.indexOf(currentRoleKey);
@@ -35,16 +47,19 @@ export function useRosterKeyboardNav(onInspectEmployee: (roleKey: AgentRoleKey) 
 
       e.preventDefault();
       const targetRole = ORDERED_ROLES[targetIndex]!;
+      setActiveRoleKey(targetRole);
+
+      // Focus the target element in the active view
       const stationEl = document.getElementById(`station-${targetRole}`);
       const boardEl = document.getElementById(`board-${targetRole}`);
-      if (stationEl) {
+      if (stationEl && document.contains(stationEl)) {
         stationEl.focus();
-      } else if (boardEl) {
+      } else if (boardEl && document.contains(boardEl)) {
         boardEl.focus();
       }
     },
     [onInspectEmployee],
   );
 
-  return { handleKeyDown };
+  return { activeRoleKey, setActiveRoleKey, getTabIndex, handleKeyDown };
 }

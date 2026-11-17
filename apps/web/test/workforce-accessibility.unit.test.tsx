@@ -224,4 +224,67 @@ describe('Workforce Accessibility & Semantic DOM (TASK-015 Item 6)', () => {
     expect(html).toContain('Rev #1');
     expect(html).toContain('accepted');
   });
+
+  it('renders roving tabindex with tabIndex="0" on first roster item and tabIndex="-1" on others', () => {
+    const vm = mapWorkforceViewModel({ detail: mockDetail, artifacts: [], activities: [] });
+
+    // OfficeView
+    const officeHtml = renderToStaticMarkup(
+      <OfficeView employees={vm.employees} onInspectEmployee={vi.fn()} />,
+    );
+    expect(officeHtml).toContain('id="station-chief_of_staff" tabindex="0"');
+    expect(officeHtml).toContain('id="station-product_strategist" tabindex="-1"');
+    expect(officeHtml).toContain('id="station-audience_strategist" tabindex="-1"');
+    expect(officeHtml).toContain('id="station-creative_director" tabindex="-1"');
+    expect(officeHtml).toContain('id="station-scriptwriter" tabindex="-1"');
+    expect(officeHtml).toContain('id="station-compliance_reviewer" tabindex="-1"');
+
+    // BoardView
+    const boardHtml = renderToStaticMarkup(
+      <BoardView employees={vm.employees} onInspectEmployee={vi.fn()} />,
+    );
+    expect(boardHtml).toContain('id="board-chief_of_staff" tabindex="0"');
+    expect(boardHtml).toContain('id="board-product_strategist" tabindex="-1"');
+    expect(boardHtml).toContain('id="board-audience_strategist" tabindex="-1"');
+    expect(boardHtml).toContain('id="board-creative_director" tabindex="-1"');
+    expect(boardHtml).toContain('id="board-scriptwriter" tabindex="-1"');
+    expect(boardHtml).toContain('id="board-compliance_reviewer" tabindex="-1"');
+  });
+
+  it('ensures BoardView uses valid interactive structure without plain listitem handlers or nested buttons', () => {
+    const vm = mapWorkforceViewModel({ detail: mockDetail, artifacts: [], activities: [] });
+    const boardHtml = renderToStaticMarkup(
+      <BoardView employees={vm.employees} onInspectEmployee={vi.fn()} />,
+    );
+
+    // Has list items
+    expect(boardHtml).toContain('role="listitem"');
+    // The interactive card is role="button" inside the list item
+    expect(boardHtml).toContain('role="button"');
+    // Does NOT contain nested <button inside the card footer
+    expect(boardHtml).not.toContain(
+      '<button type="button" class="btn btn-link btn-xs p-0 text-primary"',
+    );
+    // Contains inspect prompt span instead
+    expect(boardHtml).toContain('inspect-prompt');
+    expect(boardHtml).toContain('Inspect');
+  });
+
+  it('renders read-only notice in EmployeeInspector when canManage is false', () => {
+    const vm = mapWorkforceViewModel({ detail: mockDetail, artifacts: [], activities: [] });
+    const cosEmp = vm.employees.find((e) => e.roleKey === 'chief_of_staff')!;
+
+    const html = renderToStaticMarkup(
+      <EmployeeInspector
+        isOpen={true}
+        employee={cosEmp}
+        canManage={false}
+        onClose={vi.fn()}
+        onSelectArtifact={vi.fn()}
+      />,
+    );
+
+    expect(html).toContain('Read-only view');
+    expect(html).toContain('You do not have manager privileges');
+  });
 });

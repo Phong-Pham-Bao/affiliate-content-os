@@ -486,8 +486,36 @@ Sprint 3 Checkpoint C turns the 3 Checkpoint B planning artifacts into a product
 - **Work Order Completion**: Acceptance transitions the work order status to `completed` and the Chief of Staff assignment office state to `completed`.
 - **Rejection**: Rejection records an immutable decision with a bounded human reason (1..2000 chars) and marks the artifact lifecycle as `rejected`.
 
-### 5. Explicit Checkpoint E Boundary
-Checkpoint D completes compliance review and human approval. It strictly does NOT:
-- Implement Checkpoint E office/board visual polish or employee movement canvas animations;
-- Schedule, publish, or connect social media platform accounts (Sprint 4);
-- Generate production media assets (video rendering, TTS synthesis).
+## 25. Virtual Office & Board Experience (Sprint 3 Checkpoint E Remediated)
+
+Sprint 3 Checkpoint E delivers the Virtual Office Command Center and Board experience, connecting the human operator with their AI workforce without timer-driven illusions or synthetic progress:
+
+### 1. Pure ViewModel Projection & Dual View Parity
+- **Single Source of Truth**: Office and Board presentations consume identical data derived from `mapWorkforceViewModel`.
+- **Honest Station & Card Mapping**: Real database states map directly to visual positions and classes (`pos-desk`, `pos-dependency`, `pos-review`, `pos-archive`, `pos-attention`, `pos-idle`).
+- **No Client Timers**: Workflow transitions advance strictly upon verified backend response.
+- **Persistent View Preference**: User toggle between Office and Board views persists across navigation.
+
+### 2. Accessibility & Keyboard Navigation
+- **Roving Tabindex**: Both Office floor plan and Board roster implement genuine roving tabindex (`tabIndex={0}` on active station/card, `-1` on all others).
+- **Keyboard Traversal**: Left/Up and Right/Down arrow keys move active focus across roles; Home/End jump to first/last; Enter/Space activate detailed employee inspection.
+- **Semantic Structure**: Board cards render inside valid `<ul role="list"><li role="listitem"><div role="button">` without invalid nested buttons or interactive listitem anti-patterns.
+- **Inspector Focus Trapping & Restoration**: The employee inspector traps focus via Tab/Shift+Tab, supports Escape to dismiss, and restores focus safely to the invoking station/card (or station fallback on view toggle).
+- **Screen Reader Announcements**: Live region (`aria-live="polite" aria-atomic="true"`) announces authoritative status summaries for all lifecycle states.
+
+### 3. Full-Lifecycle Observability & Caching
+- **Bounded Polling**: `useWorkforceOrders` polls active missions with exponential backoff (1s–5s) and a 2-minute safety deadline.
+- **Data Preservation**: Network disruptions and activity fetch errors preserve all previously loaded artifacts and assignments, surfacing actionable observation warnings (`observationWarning`) rather than clearing UI state.
+- **Manual Refresh**: Operators can trigger immediate authoritative sync (`↻ Manual Refresh`).
+
+### 4. Human-Only Approval Authority Boundary
+- **Zero Autonomous Approval**: AI agents (including Chief of Staff and Compliance Reviewer) possess zero approval authority. All compliance evaluation findings are strictly advisory.
+- **Human Gate**: Only authenticated human operators with `canManage` (editor/owner) can review, edit, request changes, accept, or reject script packages.
+- **Optimistic Concurrency**: Material mutations require exact version hashes, preventing stale approval races.
+
+### 5. Explicit Sprint 4 Boundary
+Checkpoint E concludes Sprint 3. The system strictly does NOT:
+- Schedule or publish content to external channels;
+- Connect social media platform OAuth accounts;
+- Render production video or perform text-to-speech audio synthesis;
+- Introduce microservices, message queues (Kafka), or distributed event sourcing.

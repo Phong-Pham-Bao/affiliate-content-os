@@ -8,6 +8,7 @@ interface OperationalStatusBannerProps {
   readonly isStale: boolean;
   readonly isRefreshing: boolean;
   readonly pollingError: string | null;
+  readonly observationWarning?: string | null | undefined;
   readonly lastUpdatedAt: string | null;
   readonly onRefresh: () => void;
 }
@@ -17,6 +18,7 @@ export function OperationalStatusBanner({
   isStale,
   isRefreshing,
   pollingError,
+  observationWarning,
   lastUpdatedAt,
   onRefresh,
 }: OperationalStatusBannerProps): ReactElement | null {
@@ -38,6 +40,20 @@ export function OperationalStatusBanner({
           </div>
           <button type="button" className="btn btn-sm btn-outline-dark" onClick={onRefresh}>
             Retry Refresh
+          </button>
+        </div>
+      )}
+
+      {observationWarning && !pollingError && (
+        <div
+          role="status"
+          className="alert alert-warning d-flex justify-content-between align-items-center p-3 mb-2 rounded text-xs"
+        >
+          <div>
+            <strong>Observation Warning:</strong> {observationWarning}. Existing data is preserved.
+          </div>
+          <button type="button" className="btn btn-sm btn-outline-dark" onClick={onRefresh}>
+            Retry Sync
           </button>
         </div>
       )}

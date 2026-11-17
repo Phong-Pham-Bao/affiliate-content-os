@@ -61,6 +61,16 @@ Engagement and affiliate conversion are outcomes to optimize, not reliability me
 - Versioned niche analysis covering target audience, pains, intent, themes, competitive positioning, seasonality notes, and risks.
 - User review of analysis inputs and outputs before content generation.
 
+### AI workforce command center (Sprint 3)
+
+- Dual-view command center for non-technical creators: an interactive Virtual Office (desk stations per employee) and an operational Board view (kanban columns) sharing identical live projection.
+- Specialized 6-role AI team: Chief of Staff, Product Strategist, Audience Strategist, Creative Director, Scriptwriter, and Compliance Reviewer.
+- Objective-driven kickoff: creators assign high-level business objectives to an approved product, and the workforce automatically plans, decomposes, and executes the creative pipeline.
+- Full-lifecycle observation: bounded live polling provides real-time visibility into preparing, running, dependency-waiting, review-required, completed, and failed states. Observable activity events link deterministically to specific roles and deliverables. Network/fetch errors surface as non-destructive observation warnings without wiping loaded state.
+- Advisory compliance safety model: AI compliance evaluation audits drafts against brand guidelines, claimed facts, and platform disclosure requirements. Compliance findings and scores are strictly advisory; AI agents never act as autonomous gatekeepers and have zero approval or publishing authority.
+- Human-only review and approval flow: execution transitions to `review_required` upon deliverable completion. The creator inspects artifacts, scripts, and shot lists in Content Studio, reviews advisory compliance flags, and makes the binding decision to accept or reject.
+- Explicit Sprint 4 publishing boundary: Sprint 3 workflow terminates at approved deliverables and immutable revision packages ready for human recording/production. Social account OAuth, scheduling, publishing, and analytics synchronization are strictly deferred to Sprint 4.
+
 ### Content workflow
 
 - Generate multiple text/caption concepts from an approved product fact set and selected analyses.

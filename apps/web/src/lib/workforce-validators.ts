@@ -6,6 +6,11 @@ export {
   validateWorkOrderList,
   validateKickoffResult,
   validateRetryResult,
+  validateWorkOrderStatus,
+  validateWorkItemStatus,
+  validateAgentRoleKey,
+  validateWorkOrderMissionType,
+  normalizeOfficeState,
 } from './workforce-validators-order.js';
 
 export {

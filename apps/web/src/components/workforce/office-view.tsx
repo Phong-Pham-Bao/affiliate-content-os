@@ -20,7 +20,7 @@ const ROLE_ICONS: Record<AgentRoleKey, string> = {
 };
 
 export function OfficeView({ employees, onInspectEmployee }: OfficeViewProps): ReactElement {
-  const { handleKeyDown } = useRosterKeyboardNav(onInspectEmployee);
+  const { setActiveRoleKey, getTabIndex, handleKeyDown } = useRosterKeyboardNav(onInspectEmployee);
 
   const getEmp = (rk: AgentRoleKey): EmployeeVM | undefined =>
     employees.find((e) => e.roleKey === rk);
@@ -34,11 +34,15 @@ export function OfficeView({ employees, onInspectEmployee }: OfficeViewProps): R
       <div
         key={rk}
         id={`station-${rk}`}
-        tabIndex={0}
+        tabIndex={getTabIndex(rk)}
         role="button"
         aria-label={`Inspect ${emp.displayName}, Department: ${emp.department}, Status: ${emp.statusLabel}`}
         className={`office-station station-${emp.station} ${emp.positionClass} status-${emp.officeState}`}
-        onClick={() => onInspectEmployee(rk)}
+        onClick={() => {
+          setActiveRoleKey(rk);
+          onInspectEmployee(rk);
+        }}
+        onFocus={() => setActiveRoleKey(rk)}
         onKeyDown={(e) => handleKeyDown(e, rk)}
       >
         <div className="station-header d-flex justify-content-between align-items-center">

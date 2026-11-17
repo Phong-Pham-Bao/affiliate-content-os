@@ -8,12 +8,23 @@ import {
   MOCK_FACT_SET,
   MOCK_FACTS,
   MOCK_ANALYSIS,
+  MOCK_SCRIPT_PACKAGE_ARTIFACT,
+  MOCK_COMPLIANCE_EVALUATION,
   createMockWorkOrderDetail,
+  createMockArtifacts,
+  createMockActivities,
+  type WorkforceE2EStage,
 } from './workforce-fixtures.js';
 
 test.describe('Sprint 3 Checkpoint E — Virtual Office & Board Experience', () => {
   let stageIndex = 0;
-  const stages: ('planning' | 'scripts' | 'review')[] = ['planning', 'scripts', 'review'];
+  const stages: WorkforceE2EStage[] = [
+    'planning',
+    'script_generation',
+    'compliance',
+    'review_required',
+    'accepted_handoff',
+  ];
 
   test.beforeEach(async ({ page }) => {
     stageIndex = 0;
@@ -89,51 +100,50 @@ test.describe('Sprint 3 Checkpoint E — Virtual Office & Board Experience', () 
       });
     });
 
+    // Content Studio / Artifact detail mock routes
+    await page.route(
+      /.*\/api\/v1\/workspaces\/[^/]+\/artifacts\/art-4\/compliance(\?.*)?$/,
+      async (route) => {
+        await route.fulfill({ status: 200, json: MOCK_COMPLIANCE_EVALUATION });
+      },
+    );
+
+    await page.route(
+      /.*\/api\/v1\/workspaces\/[^/]+\/artifacts\/art-4\/decisions(\?.*)?$/,
+      async (route) => {
+        await route.fulfill({ status: 200, json: { items: [] } });
+      },
+    );
+
+    await page.route(
+      /.*\/api\/v1\/workspaces\/[^/]+\/artifacts\/art-4\/revisions(\?.*)?$/,
+      async (route) => {
+        await route.fulfill({
+          status: 200,
+          json: { items: [MOCK_SCRIPT_PACKAGE_ARTIFACT.latestRevision], nextCursor: null },
+        });
+      },
+    );
+
+    await page.route(/.*\/api\/v1\/workspaces\/[^/]+\/artifacts\/art-4(\?.*)?$/, async (route) => {
+      await route.fulfill({ status: 200, json: MOCK_SCRIPT_PACKAGE_ARTIFACT });
+    });
+
+    // Work order detail, artifacts, and activity mock routes
     await page.route(/.*\/api\/v1\/workspaces\/[^/]+\/work-orders(\/.*|\?.*)?$/, async (route) => {
       const url = route.request().url();
-      const detail = createMockWorkOrderDetail(stages[stageIndex]!);
+      const currentStage = stages[stageIndex]!;
+      const detail = createMockWorkOrderDetail(currentStage);
 
       if (url.includes('/artifacts')) {
-        const artifacts = [
-          {
-            id: 'art-1',
-            workspaceId: MOCK_WORKSPACE.id,
-            productId: MOCK_PRODUCT.id,
-            workOrderId: detail.workOrder.id,
-            workItemId: 'wi-ps',
-            assignmentId: 'as-ps',
-            authorRoleKey: 'product_strategist',
-            artifactType: 'product_campaign_plan',
-            lifecycleStatus: stageIndex >= 1 ? 'accepted' : 'draft',
-            currentRevisionNumber: 1,
-            createdAt: '2026-11-18T00:01:00Z',
-            updatedAt: '2026-11-18T00:01:00Z',
-            version: 1,
-          },
-        ];
-        if (stageIndex >= 2) {
-          artifacts.push({
-            id: 'art-2',
-            workspaceId: MOCK_WORKSPACE.id,
-            productId: MOCK_PRODUCT.id,
-            workOrderId: detail.workOrder.id,
-            workItemId: 'wi-sw',
-            assignmentId: 'as-sw',
-            authorRoleKey: 'scriptwriter',
-            artifactType: 'script_package',
-            lifecycleStatus: 'review_required',
-            currentRevisionNumber: 1,
-            createdAt: '2026-11-18T00:04:00Z',
-            updatedAt: '2026-11-18T00:04:00Z',
-            version: 1,
-          });
-        }
+        const artifacts = createMockArtifacts(currentStage);
         await route.fulfill({ status: 200, json: { items: artifacts, nextCursor: null } });
         return;
       }
 
       if (url.includes('/activity')) {
-        await route.fulfill({ status: 200, json: { items: [], nextCursor: null } });
+        const activities = createMockActivities(currentStage);
+        await route.fulfill({ status: 200, json: { items: activities, nextCursor: null } });
         return;
       }
 
@@ -175,10 +185,15 @@ test.describe('Sprint 3 Checkpoint E — Virtual Office & Board Experience', () 
     await expect(page.locator('#zone-content-title')).toHaveText('Creative & Content Studio');
     await expect(page.locator('#zone-quality-title')).toHaveText('Quality & Compliance Lab');
 
-    // Verify Scriptwriter initial state is waiting on dependency
+    // Stage 0: Planning — Scriptwriter initial state is waiting on dependency
     const scriptwriterStation = page.locator('#station-scriptwriter');
     await expect(scriptwriterStation).toBeVisible();
     await expect(scriptwriterStation).toContainText('Waiting on: Product Strategist');
+
+    // Verify page does not advance without server response (wait-without-advance proof)
+    await page.waitForTimeout(1000);
+    await expect(scriptwriterStation).toContainText('Waiting on: Product Strategist');
+    await expect(page.locator('.deliverables-section')).not.toBeVisible();
 
     // Switch to Board View
     await page.click('#view-toggle-board', { force: true });
@@ -200,19 +215,24 @@ test.describe('Sprint 3 Checkpoint E — Virtual Office & Board Experience', () 
     await page.click('button[aria-label="Close Scriptwriter inspector"]', { force: true });
     await expect(inspector).not.toBeVisible();
 
-    // Advance server stage: planning finishes -> scripts
+    // Advance server stage: Stage 1 (script_generation)
     stageIndex = 1;
     await page.click('button:has-text("Manual Refresh")', { force: true });
 
-    // Scriptwriter now transitions to Running from authoritative server state
+    // Scriptwriter transitions to Running from authoritative server state
     await expect(page.locator('#board-scriptwriter')).toContainText('Running');
 
     // Switch back to Office View
     await page.click('#view-toggle-office', { force: true });
     await expect(page.locator('#station-scriptwriter')).toHaveClass(/status-running/);
 
-    // Advance to final review stage: script_package produced with review_required
+    // Advance to Stage 2: compliance
     stageIndex = 2;
+    await page.click('button:has-text("Manual Refresh")', { force: true });
+    await expect(page.locator('#station-compliance_reviewer')).toHaveClass(/status-running/);
+
+    // Advance to Stage 3: review_required
+    stageIndex = 3;
     await page.click('button:has-text("Manual Refresh")', { force: true });
 
     // Deliverables section renders real artifacts grouped by stages
@@ -224,13 +244,68 @@ test.describe('Sprint 3 Checkpoint E — Virtual Office & Board Experience', () 
     // Verify human action banner appears
     await expect(page.getByText('Human Boss Action Needed:')).toBeVisible();
 
+    // Open Script Package deliverable from Deliverables list
+    const openDeliverableBtn = page.locator(
+      'button[aria-label="Open deliverable: Script Package"]',
+    );
+    await expect(openDeliverableBtn).toBeVisible();
+    await openDeliverableBtn.click({ force: true });
+
+    // Verify Content Studio modal opens with Episode 1 script content and evidence reference
+    const contentStudio = page.locator('.content-studio-container');
+    await expect(contentStudio).toBeVisible();
+    await expect(
+      contentStudio.getByRole('heading', { name: /Episode 1: The Sound Test Challenge/ }),
+    ).toBeVisible();
+    await expect(
+      page.getByText('Stop recording bad audio with your phone microphone.'),
+    ).toBeVisible();
+    await expect(page.getByText('Bằng chứng liên kết')).toBeVisible();
+
+    // Close Content Studio viewer
+    const closeStudioBtn = page.locator('button[aria-label="Đóng Content Studio"]');
+    await expect(closeStudioBtn).toBeVisible();
+    await closeStudioBtn.click({ force: true });
+    await expect(contentStudio).not.toBeVisible();
+
+    // Advance to Stage 4: accepted_handoff
+    stageIndex = 4;
+    await page.click('button:has-text("Manual Refresh")', { force: true });
+
+    // State reflects completed campaign handoff: human action banner dismissed, scriptwriter completed, live summary updated
+    await expect(page.getByText('Human Boss Action Needed:')).not.toBeVisible();
+    await expect(page.locator('#station-scriptwriter')).toHaveClass(/status-completed/);
+    await expect(page.locator('div.sr-only[aria-live="polite"]')).toContainText(
+      'All deliverables accepted',
+    );
+
     // Reload page: server state reconstructed cleanly
     await page.reload();
     await page.locator('.product-list-item').click({ force: true });
     await expect(page.getByText('Script Package')).toBeVisible();
+
+    // Keyboard navigation: roving tabindex & Enter to inspect
+    const cosStation = page.locator('#station-chief_of_staff');
+    await cosStation.focus();
+    await expect(cosStation).toHaveAttribute('tabindex', '0');
+    await page.keyboard.press('ArrowRight');
+    const psStation = page.locator('#station-product_strategist');
+    await expect(psStation).toHaveAttribute('tabindex', '0');
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.employee-inspector-panel')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.employee-inspector-panel')).not.toBeVisible();
+
+    // Verify mobile viewport renders without horizontal scroll overflow
+    const hasHorizontalOverflow = await page.evaluate(
+      () => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
+    );
+    expect(hasHorizontalOverflow).toBe(false);
   });
 
-  test('verifies axe accessibility compliance', async ({ page }) => {
+  test('verifies axe accessibility compliance on initial and populated states', async ({
+    page,
+  }) => {
     await page.goto('/');
 
     const productItem = page.locator('.product-list-item');
@@ -241,14 +316,35 @@ test.describe('Sprint 3 Checkpoint E — Virtual Office & Board Experience', () 
       page.getByRole('heading', { name: 'AI Workforce Command Center', level: 3 }),
     ).toBeVisible();
 
-    const accessibilityScanResults = await new AxeBuilder({ page })
+    // 1. Initial stage Axe audit
+    const initialScan = await new AxeBuilder({ page })
       .include('.workforce-command-center')
       .withTags(['wcag2a', 'wcag2aa'])
       .analyze();
 
-    const severeViolations = accessibilityScanResults.violations.filter(
+    const initialViolations = initialScan.violations.filter(
       (v) => v.impact === 'critical' || v.impact === 'serious',
     );
-    expect(severeViolations).toHaveLength(0);
+    expect(initialViolations).toHaveLength(0);
+
+    // 2. Advance to populated review_required stage with deliverables and open inspector
+    stageIndex = 3;
+    await page.click('button:has-text("Manual Refresh")', { force: true });
+    await expect(page.getByText('Script Package')).toBeVisible();
+
+    // Open employee inspector
+    await page.locator('#station-scriptwriter').click({ force: true });
+    await expect(page.locator('.employee-inspector-panel')).toBeVisible();
+
+    // Populated state Axe audit
+    const populatedScan = await new AxeBuilder({ page })
+      .include('.workforce-command-center')
+      .withTags(['wcag2a', 'wcag2aa'])
+      .analyze();
+
+    const populatedViolations = populatedScan.violations.filter(
+      (v) => v.impact === 'critical' || v.impact === 'serious',
+    );
+    expect(populatedViolations).toHaveLength(0);
   });
 });

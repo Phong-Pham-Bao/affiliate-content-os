@@ -53,6 +53,7 @@ export function WorkforceCommandCenter(props: WorkforceCommandCenterProps): Reac
     lastUpdatedAt,
     error,
     pollingError,
+    activityError,
     setError,
     loadOrderDetail,
     loadWorkOrders,
@@ -75,6 +76,7 @@ export function WorkforceCommandCenter(props: WorkforceCommandCenterProps): Reac
     isRefreshing,
     lastUpdatedAt,
     pollingError,
+    observationWarning: activityError,
     canManage,
   });
 
@@ -140,6 +142,7 @@ export function WorkforceCommandCenter(props: WorkforceCommandCenterProps): Reac
         isStale={isStale}
         isRefreshing={isRefreshing}
         pollingError={pollingError}
+        observationWarning={vm.observationWarning}
         lastUpdatedAt={lastUpdatedAt}
         onRefresh={refresh}
       />

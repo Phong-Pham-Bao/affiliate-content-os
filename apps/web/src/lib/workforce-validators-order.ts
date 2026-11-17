@@ -1,18 +1,23 @@
 import { isPlainObject, ApiError } from './api-validators-common.js';
-import type {
-  AgentAssignmentSummaryDTO,
-  AgentRoleKey,
-  AssignmentOfficeState,
-  ContextPackageSummaryDTO,
-  KickoffWorkOrderResult,
-  RetryWorkOrderResult,
-  WorkItemDependencySummaryDTO,
-  WorkItemStatus,
-  WorkItemSummaryDTO,
-  WorkOrderDetailDTO,
-  WorkOrderMissionType,
-  WorkOrderStatus,
-  WorkOrderSummaryDTO,
+import {
+  CANONICAL_MISSION_TYPES,
+  CANONICAL_OFFICE_STATES,
+  CANONICAL_ROLE_KEYS,
+  CANONICAL_WORK_ITEM_STATUSES,
+  CANONICAL_WORK_ORDER_STATUSES,
+  type AgentAssignmentSummaryDTO,
+  type AgentRoleKey,
+  type AssignmentOfficeState,
+  type ContextPackageSummaryDTO,
+  type KickoffWorkOrderResult,
+  type RetryWorkOrderResult,
+  type WorkItemDependencySummaryDTO,
+  type WorkItemStatus,
+  type WorkItemSummaryDTO,
+  type WorkOrderDetailDTO,
+  type WorkOrderMissionType,
+  type WorkOrderStatus,
+  type WorkOrderSummaryDTO,
 } from '../types/workforce.js';
 
 function invalid(msg: string): never {
@@ -23,22 +28,71 @@ function invalid(msg: string): never {
   });
 }
 
+export function validateWorkOrderStatus(raw: unknown): WorkOrderStatus {
+  if (typeof raw !== 'string') invalid('Work order status must be string');
+  if (raw === 'cancelled') return 'canceled';
+  if (raw === 'pending') return 'preparing';
+  if ((CANONICAL_WORK_ORDER_STATUSES as readonly string[]).includes(raw)) {
+    return raw as WorkOrderStatus;
+  }
+  invalid(`Unknown work order status: ${raw}`);
+}
+
+export function validateWorkItemStatus(raw: unknown): WorkItemStatus {
+  if (typeof raw !== 'string') invalid('Work item status must be string');
+  if (raw === 'in_progress') return 'running';
+  if (raw === 'cancelled') return 'canceled';
+  if ((CANONICAL_WORK_ITEM_STATUSES as readonly string[]).includes(raw)) {
+    return raw as WorkItemStatus;
+  }
+  invalid(`Unknown work item status: ${raw}`);
+}
+
+export function validateAgentRoleKey(raw: unknown): AgentRoleKey {
+  if (typeof raw !== 'string') invalid('Agent role key must be string');
+  if ((CANONICAL_ROLE_KEYS as readonly string[]).includes(raw)) {
+    return raw as AgentRoleKey;
+  }
+  invalid(`Unknown agent role key: ${raw}`);
+}
+
+export function validateWorkOrderMissionType(raw: unknown): WorkOrderMissionType {
+  if (raw === undefined || raw === null || raw === '') {
+    return 'single_product_affiliate_launch';
+  }
+  if (typeof raw !== 'string') invalid('Work order mission type must be string');
+  if ((CANONICAL_MISSION_TYPES as readonly string[]).includes(raw)) {
+    return raw as WorkOrderMissionType;
+  }
+  invalid(`Unknown work order mission type: ${raw}`);
+}
+
+export function normalizeOfficeState(raw: unknown): AssignmentOfficeState {
+  if (typeof raw !== 'string') return 'idle';
+  if (raw === 'working') return 'running';
+  if (raw === 'waiting') return 'waiting_dependency';
+  if (raw === 'cancelled') return 'canceled';
+  if ((CANONICAL_OFFICE_STATES as readonly string[]).includes(raw)) {
+    return raw as AssignmentOfficeState;
+  }
+  invalid(`Unknown assignment office state: ${raw}`);
+}
+
 export function validateWorkOrderSummary(val: unknown): WorkOrderSummaryDTO {
   if (!isPlainObject(val)) invalid('Work order summary must be an object');
   if (typeof val.id !== 'string') invalid('Work order id must be string');
   if (typeof val.workspaceId !== 'string') invalid('Work order workspaceId must be string');
   if (typeof val.productId !== 'string') invalid('Work order productId must be string');
-  if (typeof val.status !== 'string') invalid('Work order status must be string');
 
   return {
     id: val.id,
     workspaceId: val.workspaceId,
     productId: val.productId,
     contextPackageId: String(val.contextPackageId ?? ''),
-    missionType: (val.missionType as WorkOrderMissionType) ?? 'single_product_affiliate_launch',
+    missionType: validateWorkOrderMissionType(val.missionType),
     graphTemplate: String(val.graphTemplate ?? ''),
     graphVersion: Number(val.graphVersion ?? 1),
-    status: val.status as WorkOrderStatus,
+    status: validateWorkOrderStatus(val.status),
     priority: Number(val.priority ?? 0),
     createdByUserId: String(val.createdByUserId ?? ''),
     failureCategory: val.failureCategory ? String(val.failureCategory) : null,
@@ -55,10 +109,10 @@ export function validateWorkItemSummary(val: unknown): WorkItemSummaryDTO {
     id: String(val.id),
     workOrderId: String(val.workOrderId),
     roleDefinitionId: String(val.roleDefinitionId),
-    roleKey: val.roleKey as AgentRoleKey,
+    roleKey: validateAgentRoleKey(val.roleKey),
     taskKey: String(val.taskKey),
     expectedArtifactType: String(val.expectedArtifactType),
-    status: val.status as WorkItemStatus,
+    status: validateWorkItemStatus(val.status),
     blockedReasonCode: val.blockedReasonCode ? String(val.blockedReasonCode) : null,
     startedAt: val.startedAt ? String(val.startedAt) : null,
     completedAt: val.completedAt ? String(val.completedAt) : null,
@@ -68,21 +122,13 @@ export function validateWorkItemSummary(val: unknown): WorkItemSummaryDTO {
   };
 }
 
-function normalizeOfficeState(raw: unknown): AssignmentOfficeState {
-  if (typeof raw !== 'string') return 'idle';
-  if (raw === 'working') return 'running';
-  if (raw === 'waiting') return 'waiting_dependency';
-  if (raw === 'cancelled') return 'canceled';
-  return raw as AssignmentOfficeState;
-}
-
 export function validateAgentAssignmentSummary(val: unknown): AgentAssignmentSummaryDTO {
   if (!isPlainObject(val)) invalid('Agent assignment must be an object');
   return {
     id: String(val.id),
     workOrderId: String(val.workOrderId),
     roleDefinitionId: String(val.roleDefinitionId),
-    roleKey: val.roleKey as AgentRoleKey,
+    roleKey: validateAgentRoleKey(val.roleKey),
     workItemId: val.workItemId ? String(val.workItemId) : null,
     officeState: normalizeOfficeState(val.officeState),
     waitingOnWorkItemId: val.waitingOnWorkItemId ? String(val.waitingOnWorkItemId) : null,

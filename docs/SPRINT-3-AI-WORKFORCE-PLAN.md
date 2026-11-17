@@ -375,15 +375,21 @@ Exit evidence:
 - No general-purpose agent tool execution, shell access, crawling, or open-ended web research.
 - No microservices, Kafka, Kubernetes, event sourcing, or second database.
 
-## 16. Product Owner decisions requested
+## 16. Delivered Checkpoint Decisions & Definitive State Semantics
 
-Recommended defaults are provided so implementation can begin quickly after approval:
+All previous architectural recommendations have been approved, delivered, and verified through Checkpoints A–E and the Sprint 3 Checkpoint E Remediation package (`tasks/TASK-015-REMEDIATION-01.md`):
 
-1. Approve six visible roles: Chief of Staff, Product Strategist, Audience Strategist, Creative Director, Scriptwriter, and Compliance Reviewer. **Recommended: approve.**
-2. Make the office view optional and keep an equivalent board view. **Recommended: approve for accessibility and operational clarity.**
-3. Deliver Checkpoint B before polishing office animations so the sprint creates business value early. **Recommended: approve.**
-4. Keep Sprint 3 limited to planning, scripts, shot lists, revisions, compliance, and approval; defer real video generation. **Recommended: approve.**
-5. Use bounded polling for live status in Sprint 3 instead of introducing WebSockets. **Recommended: approve.**
-6. Use a maximum of three concurrent Gemini calls per workspace initially. **Recommended: approve, then tune from measured latency/quota.**
+1. **Roster**: Six visible canonical roles delivered: Chief of Staff, Product Strategist, Audience Strategist, Creative Director, Scriptwriter, and Compliance Reviewer.
+2. **Dual View Parity**: Office and Board views share 100% data parity through pure projection (`WorkforceViewModel`), with persistent view-mode toggle, roving tabindex keyboard navigation, and docked/modal inspection.
+3. **Execution Sequencing**: Checkpoint B planning delivered early, followed by Checkpoint C Content Studio, Checkpoint D compliance, and Checkpoint E Virtual Office Command Center.
+4. **Sprint 4 Scope Boundary**: Strictly bounded to planning, scripts, shot lists, revisions, compliance, and approval. Publishing, social OAuth, and media generation remain deferred to Sprint 4.
+5. **Full-Lifecycle Observation**: Bounded exponential backoff polling (1s–5s, 2-minute deadline) with active state caching, observation warning preservation, and manual refresh controls.
+6. **Concurrency & Quotas**: 3 concurrent provider calls per workspace, budget reservation, rate limits, and idempotent kickoff.
 
-After these decisions are approved, Codex will produce the Sprint 3 ADR and the first implementation task for Checkpoint A.
+### Definitive Workforce State Semantics
+
+- **Work Order Statuses**: `in_progress`, `completed`, `failed`, `canceled`.
+- **Work Item Statuses**: `pending`, `running`, `completed`, `failed`, `waiting_dependency`, `canceled`.
+- **Assignment Office States**: `idle`, `preparing`, `running`, `waiting_dependency`, `review_required`, `completed`, `failed`, `blocked`. Legacy aliases (`working` → `running`, `waiting` → `waiting_dependency`, unknown → `blocked`) are safely normalized at the projection boundary.
+- **Artifact Lifecycle Statuses**: `draft`, `review_required`, `accepted`, `rejected`. AI compliance evaluation findings are strictly advisory; only human bosses possess approval authority.
+- **Retry Eligibility**: Strictly restricted to recoverable failed planning tasks (`product_strategy`, `audience_strategy`, `creative_direction`) and script generation units when work order is `in_progress` or `failed`. Completed, canceled, and review-required states are never retry-eligible.

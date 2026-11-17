@@ -49,7 +49,26 @@ The Checkpoint D compliance evaluation inspection, review decision history, and 
 - `POST /api/v1/workspaces/{workspaceId}/artifacts/{artifactId}/accept`: Human-only approval of the current script revision. Requires `canManage` (editor/owner), `Idempotency-Key`, and exact optimistic preconditions (`expectedVersion`, `revisionNumber`, `contentHashHex`). Fails with `422 Unprocessable Content` if blocking compliance findings exist. Creates an immutable approval snapshot (`content_approval_snapshots`), completes work order handoff state, and returns `200 OK`.
 - `POST /api/v1/workspaces/{workspaceId}/artifacts/{artifactId}/reject`: Human-only rejection with bounded reason (1..2000 chars). Sets lifecycle status to `rejected`, records immutable decision, and returns `200 OK`.
 
-Explicit Boundary: No publication scheduling, social OAuth platform connection, media asset generation, or Checkpoint E office animation polish is implemented.
+### Sprint 3 Checkpoint E: Virtual Office & Board Experience (Remediated)
+
+The unified workforce observation, polling, activity projection, and retry mechanics are implemented across web and API:
+
+- **Unified Office/Board Projection**: The frontend projects single authoritative server payloads (`WorkOrderDetailDTO`, `ContentArtifactSummaryDTO[]`, and `WorkOrderActivityDTO[]`) into both Office and Board presentations via `mapWorkforceViewModel`. Office and Board share identical employee states, badges, blockers, reports, and artifact references.
+- **Full-Lifecycle Polling & Caching (`useWorkforceOrders`)**:
+  - Automatically polls running or terminal-pending work orders through all 5 stages (`planning` → `script_generation` → `compliance` → `review_required` → `accepted_handoff`).
+  - Exponential backoff (1s base up to 5s maximum) with a 2-minute observation deadline.
+  - When deadline or fetch error occurs, active data is strictly preserved; error is surfaced as an observation warning (`observationWarning`) or stale banner without clearing loaded state.
+  - User can trigger immediate manual refresh (`↻ Manual Refresh`) at any time.
+- **Activity & Artifact Exposure**:
+  - `GET /api/v1/workspaces/{workspaceId}/work-orders/{workOrderId}/activity` returns audit log entries (`WorkOrderActivityDTO`).
+  - Activities link to roles via work item ownership (`workItemId` matching assignment's `workItemId` or task key) and artifact author role (`artifact.authorRoleKey`), never assuming `resourceType === roleKey`.
+  - Artifacts are grouped by delivery stage: Strategy & Planning (`product_campaign_plan`, `audience_insight_board`, `video_series_plan`), Scriptwriting (`script_package`), and Quality Lab (`compliance_report`).
+- **Retry Eligibility Rules (`POST /api/v1/workspaces/{workspaceId}/work-orders/{workOrderId}/retry`)**:
+  - Manual retry is gated by real backend eligibility: only failed or retry_wait planning tasks (`product_strategy`, `audience_strategy`, `creative_direction`) and script generation units (`script_generation_units`) on work orders in status `in_progress` or `failed`.
+  - Retry is strictly disabled when the work order is `completed`, `canceled`, or when all failures are non-retryable (e.g. compliance evaluations or review_required artifacts).
+  - Web UI reflects this via `isRetryEligible(workOrder, workItems, assignments)` and displays lowercase standard reason codes (`insufficient_budget`, `budget_exhausted`, `rate_limited`, `provider_outage`, `retry_wait`).
+
+Sprint 4 Boundary: No automated publication scheduling, social OAuth platform connections, video media rendering, or external distribution is implemented in Sprint 3.
 
 ## 1. Contract principles
 

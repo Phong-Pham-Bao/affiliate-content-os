@@ -162,18 +162,19 @@ An unknown route returns standard Fastify `404 Not Found`.
 
 The workspace enforces strict verification commands:
 
-| Command                           | Description                                                                              |
-| --------------------------------- | ---------------------------------------------------------------------------------------- |
-| `pnpm format:check`               | Check code formatting via Prettier                                                       |
-| `pnpm format`                     | Auto-format files via Prettier                                                           |
-| `pnpm lint`                       | Lint codebase with ESLint and run architecture boundary checks                           |
-| `pnpm lint:boundaries`            | Enforce architecture layer and dependency direction rules via dependency-cruiser         |
-| `pnpm typecheck`                  | Run strict TypeScript type checking across source and tests for all packages and apps    |
-| `pnpm test`                       | Run unit and boundary tests with Vitest                                                  |
-| `pnpm test:integration`           | Run isolated PostgreSQL integration tests with Vitest                                    |
-| `pnpm verify:infrastructure-pins` | Verify Docker Compose and CI image digest pins against remote registry                   |
-| `pnpm build`                      | Compile package source and build production artifacts                                    |
-| `pnpm check`                      | Run all quality gates in sequence (`format:check`, `lint`, `typecheck`, `test`, `build`) |
+| Command                           | Description                                                                                               |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `pnpm format:check`               | Check code formatting via Prettier                                                                        |
+| `pnpm format`                     | Auto-format files via Prettier                                                                            |
+| `pnpm lint`                       | Lint codebase with ESLint and run architecture boundary checks                                            |
+| `pnpm lint:boundaries`            | Enforce architecture layer and dependency direction rules via dependency-cruiser                          |
+| `pnpm typecheck`                  | Run strict TypeScript type checking across source and tests for all packages and apps                     |
+| `pnpm test`                       | Run unit and boundary tests with Vitest                                                                   |
+| `pnpm test:integration`           | Run isolated PostgreSQL integration tests with Vitest                                                     |
+| `pnpm test:e2e`                   | Run end-to-end browser tests across desktop, mobile, and reduced-motion viewports with Playwright         |
+| `pnpm verify:infrastructure-pins` | Verify Docker Compose and CI image digest pins against remote registry                                    |
+| `pnpm build`                      | Compile package source and build production artifacts                                                     |
+| `pnpm check`                      | Run all quality gates in sequence (`format:check`, `lint`, `typecheck`, `test`, `openapi:check`, `build`) |
 
 ## Architecture Boundaries
 

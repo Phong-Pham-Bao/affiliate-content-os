@@ -27,6 +27,7 @@ export function useWorkforceOrders(workspaceId: string, productId: string) {
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pollingError, setPollingError] = useState<string | null>(null);
+  const [activityError, setActivityError] = useState<string | null>(null);
 
   const pollAbortControllerRef = useRef<AbortController | null>(null);
   const activeOrderIdRef = useRef<string | null>(null);
@@ -47,6 +48,7 @@ export function useWorkforceOrders(workspaceId: string, productId: string) {
         setActiveDetail(null);
         setArtifacts([]);
         setActivities([]);
+        setActivityError(null);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load work orders');
@@ -70,22 +72,39 @@ export function useWorkforceOrders(workspaceId: string, productId: string) {
       setPollingError(null);
 
       try {
-        const [detail, arts, acts] = await Promise.all([
-          fetchWorkOrderApi(workspaceId, workOrderId, ctrl.signal),
-          fetchWorkOrderArtifactsApi(workspaceId, workOrderId, ctrl.signal),
-          fetchWorkOrderActivitiesApi(workspaceId, workOrderId, ctrl.signal).catch(() => []),
+        const detailPromise = fetchWorkOrderApi(workspaceId, workOrderId, ctrl.signal);
+        const artsPromise = fetchWorkOrderArtifactsApi(workspaceId, workOrderId, ctrl.signal);
+        const actsPromise = fetchWorkOrderActivitiesApi(workspaceId, workOrderId, ctrl.signal)
+          .then((acts) => ({ ok: true as const, acts }))
+          .catch((err) => ({
+            ok: false as const,
+            error: err instanceof Error ? err.message : 'Activity trail unavailable',
+          }));
+
+        const [detail, arts, actResult] = await Promise.all([
+          detailPromise,
+          artsPromise,
+          actsPromise,
         ]);
 
         if (activeOrderIdRef.current !== workOrderId || ctrl.signal.aborted) return;
 
         setActiveDetail(detail);
         setArtifacts(arts);
-        setActivities(acts);
+        if (actResult.ok) {
+          setActivities(actResult.acts);
+          setActivityError(null);
+        } else {
+          // Preserve previously loaded activities and surface observation warning
+          setActivityError(actResult.error);
+        }
         setIsStale(false);
         setLastUpdatedAt(new Date().toISOString());
 
         const isRunning =
-          detail.workOrder.status === 'in_progress' || detail.workOrder.status === 'pending';
+          detail.workOrder.status === 'in_progress' ||
+          detail.workOrder.status === 'pending' ||
+          detail.workOrder.status === 'preparing';
 
         if (isRunning) {
           setIsRefreshing(true);
@@ -104,9 +123,18 @@ export function useWorkforceOrders(workspaceId: string, productId: string) {
               .then((newActs) => {
                 if (activeOrderIdRef.current === workOrderId && !ctrl.signal.aborted) {
                   setActivities(newActs);
+                  setActivityError(null);
                 }
               })
-              .catch(() => {});
+              .catch((err) => {
+                if (activeOrderIdRef.current === workOrderId && !ctrl.signal.aborted) {
+                  if (!(err instanceof Error && err.name === 'AbortError')) {
+                    setActivityError(
+                      err instanceof Error ? err.message : 'Activity synchronization warning',
+                    );
+                  }
+                }
+              });
           })
             .then((terminalDetail) => {
               if (activeOrderIdRef.current === workOrderId && !ctrl.signal.aborted) {
@@ -187,6 +215,7 @@ export function useWorkforceOrders(workspaceId: string, productId: string) {
     lastUpdatedAt,
     error,
     pollingError,
+    activityError,
     setError,
     loadWorkOrders,
     loadOrderDetail,

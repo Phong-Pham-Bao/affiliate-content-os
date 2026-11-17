@@ -1,13 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import {
+  normalizeOfficeState,
+  validateAgentRoleKey,
   validateContentArtifactDetail,
   validateContentArtifactList,
   validateContentArtifactSummary,
   validateKickoffResult,
   validateRetryResult,
+  validateWorkItemStatus,
   validateWorkOrderActivityList,
   validateWorkOrderDetail,
   validateWorkOrderList,
+  validateWorkOrderMissionType,
+  validateWorkOrderStatus,
   validateWorkOrderSummary,
 } from '../src/lib/workforce-validators.js';
 
@@ -197,5 +202,86 @@ describe('Workforce Web Validators', () => {
       cached: false,
     });
     expect(retryRes.retriedItemIds).toHaveLength(1);
+  });
+
+  describe('Enum allowlist validation and legacy normalization', () => {
+    it('validates and normalizes WorkOrderStatus', () => {
+      expect(validateWorkOrderStatus('in_progress')).toBe('in_progress');
+      expect(validateWorkOrderStatus('preparing')).toBe('preparing');
+      expect(validateWorkOrderStatus('waiting_review')).toBe('waiting_review');
+      expect(validateWorkOrderStatus('completed')).toBe('completed');
+      expect(validateWorkOrderStatus('failed')).toBe('failed');
+      expect(validateWorkOrderStatus('blocked')).toBe('blocked');
+      expect(validateWorkOrderStatus('canceled')).toBe('canceled');
+      // Legacy aliases
+      expect(validateWorkOrderStatus('pending')).toBe('preparing');
+      expect(validateWorkOrderStatus('cancelled')).toBe('canceled');
+      // Unknown values rejected
+      expect(() => validateWorkOrderStatus('invalid_status')).toThrow();
+      expect(() => validateWorkOrderStatus(123)).toThrow();
+    });
+
+    it('validates and normalizes WorkItemStatus', () => {
+      expect(validateWorkItemStatus('ready')).toBe('ready');
+      expect(validateWorkItemStatus('waiting_dependency')).toBe('waiting_dependency');
+      expect(validateWorkItemStatus('queued')).toBe('queued');
+      expect(validateWorkItemStatus('running')).toBe('running');
+      expect(validateWorkItemStatus('review_required')).toBe('review_required');
+      expect(validateWorkItemStatus('completed')).toBe('completed');
+      expect(validateWorkItemStatus('failed')).toBe('failed');
+      expect(validateWorkItemStatus('blocked')).toBe('blocked');
+      expect(validateWorkItemStatus('canceled')).toBe('canceled');
+      // Legacy aliases
+      expect(validateWorkItemStatus('in_progress')).toBe('running');
+      expect(validateWorkItemStatus('cancelled')).toBe('canceled');
+      // Unknown values rejected
+      expect(() => validateWorkItemStatus('unknown_status')).toThrow();
+    });
+
+    it('validates AgentRoleKey with strict canonical allowlist', () => {
+      expect(validateAgentRoleKey('chief_of_staff')).toBe('chief_of_staff');
+      expect(validateAgentRoleKey('product_strategist')).toBe('product_strategist');
+      expect(validateAgentRoleKey('audience_strategist')).toBe('audience_strategist');
+      expect(validateAgentRoleKey('creative_director')).toBe('creative_director');
+      expect(validateAgentRoleKey('scriptwriter')).toBe('scriptwriter');
+      expect(validateAgentRoleKey('compliance_reviewer')).toBe('compliance_reviewer');
+      // Unknown role keys rejected
+      expect(() => validateAgentRoleKey('marketing_intern')).toThrow();
+      expect(() => validateAgentRoleKey('')).toThrow();
+    });
+
+    it('validates WorkOrderMissionType with canonical allowlist and default', () => {
+      expect(validateWorkOrderMissionType('single_product_affiliate_launch')).toBe(
+        'single_product_affiliate_launch',
+      );
+      expect(validateWorkOrderMissionType('short_video_series')).toBe('short_video_series');
+      expect(validateWorkOrderMissionType(undefined)).toBe('single_product_affiliate_launch');
+      expect(validateWorkOrderMissionType(null)).toBe('single_product_affiliate_launch');
+      expect(validateWorkOrderMissionType('')).toBe('single_product_affiliate_launch');
+      // Unknown mission types rejected
+      expect(() => validateWorkOrderMissionType('unsupported_mission')).toThrow();
+    });
+
+    it('validates and normalizes AssignmentOfficeState', () => {
+      expect(normalizeOfficeState('idle')).toBe('idle');
+      expect(normalizeOfficeState('preparing')).toBe('preparing');
+      expect(normalizeOfficeState('queued')).toBe('queued');
+      expect(normalizeOfficeState('running')).toBe('running');
+      expect(normalizeOfficeState('waiting_dependency')).toBe('waiting_dependency');
+      expect(normalizeOfficeState('review_required')).toBe('review_required');
+      expect(normalizeOfficeState('completed')).toBe('completed');
+      expect(normalizeOfficeState('blocked')).toBe('blocked');
+      expect(normalizeOfficeState('failed')).toBe('failed');
+      expect(normalizeOfficeState('canceled')).toBe('canceled');
+      // Legacy aliases
+      expect(normalizeOfficeState('working')).toBe('running');
+      expect(normalizeOfficeState('waiting')).toBe('waiting_dependency');
+      expect(normalizeOfficeState('cancelled')).toBe('canceled');
+      // Non-string fallback
+      expect(normalizeOfficeState(null)).toBe('idle');
+      expect(normalizeOfficeState(undefined)).toBe('idle');
+      // Unknown office state rejected
+      expect(() => normalizeOfficeState('party_time')).toThrow();
+    });
   });
 });

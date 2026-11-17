@@ -1,8 +1,9 @@
-import type {
-  AgentRoleKey,
-  AssignmentOfficeState,
-  WorkItemSummaryDTO,
-  WorkOrderDetailDTO,
+import {
+  CANONICAL_OFFICE_STATES,
+  type AgentRoleKey,
+  type AssignmentOfficeState,
+  type WorkItemSummaryDTO,
+  type WorkOrderDetailDTO,
 } from '../types/workforce.js';
 import type {
   BadgeVariant,
@@ -22,11 +23,16 @@ export function deriveOfficeState(
     if (rawState === 'working') return 'running';
     if (rawState === 'waiting') return 'waiting_dependency';
     if (rawState === 'cancelled') return 'canceled';
-    return rawState;
+    if ((CANONICAL_OFFICE_STATES as readonly string[]).includes(rawState)) {
+      return rawState;
+    }
+    // Unknown office state falls back safely to non-success blocked
+    return 'blocked';
   }
   if (!itemStatus) return 'idle';
   switch (itemStatus) {
     case 'in_progress':
+    case 'running':
       return 'running';
     case 'waiting_dependency':
       return 'waiting_dependency';
@@ -35,11 +41,17 @@ export function deriveOfficeState(
     case 'failed':
       return 'failed';
     case 'cancelled':
+    case 'canceled':
       return 'canceled';
     case 'queued':
       return 'queued';
     case 'ready':
+    case 'preparing':
       return 'preparing';
+    case 'review_required':
+      return 'review_required';
+    case 'blocked':
+      return 'blocked';
     default:
       return 'idle';
   }
@@ -100,30 +112,47 @@ export function deriveOperationalDetails(
   item: WorkItemSummaryDTO | null,
   orderFailureCategory: string | null,
 ): EmployeeOperationalDetailsVM {
-  const code = item?.blockedReasonCode ?? null;
-  const isBudget = code === 'BUDGET_EXHAUSTED' || orderFailureCategory === 'budget_exhausted';
-  const isRateLimit = code === 'RATE_LIMITED' || orderFailureCategory === 'rate_limited';
-  const isProvider = code === 'PROVIDER_UNAVAILABLE' || orderFailureCategory === 'provider_outage';
-  const isRetryWait = code === 'RETRY_WAIT';
+  const rawCode = item?.blockedReasonCode ?? null;
+  const normCode = rawCode ? rawCode.toLowerCase().trim() : null;
+  const normCat = orderFailureCategory ? orderFailureCategory.toLowerCase().trim() : null;
+
+  const isBudget =
+    normCode === 'budget_exhausted' ||
+    normCode === 'insufficient_budget' ||
+    normCat === 'budget_exhausted' ||
+    normCat === 'insufficient_budget';
+
+  const isRateLimit = normCode === 'rate_limited' || normCat === 'rate_limited';
+
+  const isProvider =
+    normCode === 'provider_unavailable' ||
+    normCode === 'provider_outage' ||
+    normCat === 'provider_unavailable' ||
+    normCat === 'provider_outage';
+
+  const isRetryWait = normCode === 'retry_wait';
 
   let actionableMessage: string | null = null;
-  if (isBudget)
+  if (isBudget) {
     actionableMessage = 'Workspace monthly AI budget exhausted. Please adjust budget in settings.';
-  else if (isRateLimit)
+  } else if (isRateLimit) {
     actionableMessage = 'Provider rate limit reached. Durable worker is backing off safely.';
-  else if (isProvider)
+  } else if (isProvider) {
     actionableMessage = 'AI provider service temporarily unavailable. Will retry automatically.';
-  else if (isRetryWait)
+  } else if (isRetryWait) {
     actionableMessage = 'Transient error encountered. Awaiting scheduled retry attempt.';
-  else if (code) actionableMessage = `Blocked with reason code: ${code}`;
-  else if (item?.status === 'failed') actionableMessage = 'Execution encountered a terminal error.';
+  } else if (rawCode) {
+    actionableMessage = `Blocked with reason code: ${rawCode}`;
+  } else if (item?.status === 'failed') {
+    actionableMessage = 'Execution encountered a terminal error.';
+  }
 
   return {
     isRetryWait,
     isBudgetExhausted: isBudget,
     isRateLimited: isRateLimit,
     isProviderOutage: isProvider,
-    blockedReasonCode: code,
+    blockedReasonCode: rawCode,
     failureCategory: orderFailureCategory,
     actionableMessage,
   };

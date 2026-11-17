@@ -90,4 +90,5 @@ export interface WorkforceViewModel {
   readonly isRefreshing: boolean;
   readonly lastUpdatedAt: string | null;
   readonly pollingError: string | null;
+  readonly observationWarning: string | null;
 }
