@@ -19,6 +19,10 @@ export class PollingDeadlineError extends Error {
 
 export interface PollWorkOrderOptions {
   readonly intervalMs?: number;
+  readonly initialIntervalMs?: number;
+  readonly maxIntervalMs?: number;
+  readonly backoffMultiplier?: number;
+  readonly maxDurationMs?: number;
   readonly maxAttempts?: number;
 }
 
@@ -125,15 +129,23 @@ export async function pollWorkOrderUntilTerminal(
   onUpdate: (detail: WorkOrderDetailDTO) => void,
   options?: PollWorkOrderOptions,
 ): Promise<WorkOrderDetailDTO> {
-  const intervalMs = options?.intervalMs ?? 2000;
-  const maxAttempts = options?.maxAttempts ?? 60;
+  const initialIntervalMs = options?.initialIntervalMs ?? options?.intervalMs ?? 2000;
+  const maxIntervalMs = Math.max(initialIntervalMs, options?.maxIntervalMs ?? 10000);
+  const backoffMultiplier = options?.backoffMultiplier ?? 1.25;
+  const maxDurationMs = options?.maxDurationMs ?? 60 * 60 * 1000;
+  const maxAttempts = options?.maxAttempts ?? 120;
 
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+  let currentInterval = initialIntervalMs;
+  let attempts = 0;
+  const startTime = Date.now();
+
+  while (true) {
     if (signal.aborted) {
       throw new DOMException('Polling aborted', 'AbortError');
     }
 
     const detail = await fetchWorkOrderApi(workspaceId, workOrderId, signal);
+    attempts++;
     onUpdate(detail);
 
     const isTerminal =
@@ -141,21 +153,17 @@ export async function pollWorkOrderUntilTerminal(
       detail.workOrder.status === 'failed' ||
       detail.workOrder.status === 'cancelled';
 
-    // In Checkpoint B, if all 3 planning items are completed, the planning phase is finished
-    const planningItems = detail.workItems.filter((i) =>
-      ['product_strategy', 'audience_strategy', 'creative_direction'].includes(i.taskKey),
-    );
-    const allPlanningFinished =
-      planningItems.length === 3 &&
-      planningItems.every((i) => i.status === 'completed' || i.status === 'failed');
-
-    if (isTerminal || allPlanningFinished) {
+    if (isTerminal) {
       return detail;
     }
 
-    await sleepAbortable(intervalMs, signal);
-  }
+    const elapsedMs = Date.now() - startTime;
+    if (attempts >= maxAttempts || elapsedMs >= maxDurationMs) {
+      return detail;
+    }
 
-  // Final fetch
-  return fetchWorkOrderApi(workspaceId, workOrderId, signal);
+    const nextDelay = Math.min(currentInterval, Math.max(0, maxDurationMs - elapsedMs));
+    await sleepAbortable(nextDelay, signal);
+    currentInterval = Math.min(Math.round(currentInterval * backoffMultiplier), maxIntervalMs);
+  }
 }

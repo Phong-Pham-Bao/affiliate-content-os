@@ -1,8 +1,8 @@
 # Sprint 3 Proposed Plan — AI Creative Office
 
-Status: Checkpoint A, Checkpoint B, and Checkpoint C implemented; Checkpoints D and E pending
+Status: Complete — Checkpoints A, B, C, D, and E implemented and verified
 
-Last updated: 2026-11-08
+Last updated: 2026-11-18
 
 ## 1. Product-owner intent
 
@@ -313,17 +313,22 @@ Goal: deliver the “boss managing an AI company” experience without sacrifici
 
 Deliverables:
 
-- Adapt the reference HTML visual language into Next.js components.
-- Office/board view toggle, responsive inspector, keyboard navigation, reduced-motion mode, and screen-reader status summaries.
-- Real state-driven employee movement, handoff animation, reports, files, and logs.
-- Empty/loading/error/retry/budget/rate-limit/provider-outage states.
-- End-to-end browser flow, accessibility checks, full PostgreSQL integration suite, build, threat review, and runbook.
+- Adapted reference HTML visual language into semantic, accessible Next.js components.
+- Office/board view toggle with persistent preference, responsive docked/sheet employee inspector, roving keyboard navigation (Arrows/Home/End/Enter/Space), focus restoration on Escape, reduced-motion mode (`prefers-reduced-motion`), and screen-reader live status summaries (`aria-live="polite"`).
+- Pure persisted workforce view-model mapping layer projecting durable server state into office stations and equivalent board cards with honest position classes (`pos-desk`, `pos-dependency`, `pos-review`, `pos-archive`, `pos-attention`, `pos-idle`).
+- Full-lifecycle abortable polling (`pollWorkOrderUntilTerminal`) supporting missions through planning, scripts, compliance, and human handoff, with bounded backoff and visible stale state on disconnection.
+- Honest empty/loading/error/retry/budget-exhausted/rate-limit/provider-outage states with advisory compliance badges.
+- Real campaign deliverables section grouped into Strategy & Planning, Scriptwriting & Direction, and Quality & Review stages with versioning and review-required triggers.
+- Deterministic browser E2E test suite (`playwright.config.ts`, `e2e/workforce-command-center.spec.ts`) validating desktop, mobile (320px), and reduced-motion viewports with automated Axe accessibility audits (`@axe-core/playwright`).
+- Complete Sprint 3 operations runbook (`docs/SPRINT-3-OPERATIONS-RUNBOOK.md`) and focused threat review (`docs/SPRINT-3-THREAT-REVIEW.md`).
 
 Exit evidence:
 
-- The office animation matches database state and survives refresh/restart.
-- A board view exposes the same information without the canvas.
-- No timer-generated progress, fake files, or fake success remains.
+- The office animation matches database state and survives refresh/restart with zero timer-driven progress or synthetic success.
+- The equivalent Board view exposes identical employee information, dependencies, and deliverables.
+- Playwright E2E passes across desktop-chrome, mobile-chrome (320x568), and reduced-motion with 0 critical/serious Axe accessibility violations.
+- Human-only approval and Sprint 4 publishing boundaries strictly preserved (no social OAuth, publishing, or media generation).
+- Full repository quality gates pass clean: `pnpm check`, `pnpm test:e2e`, `pnpm test:integration`, `pnpm db:migrate:validate` (twice), `git diff --check`, OpenAPI synchronization check, and diff-scoped secret scan.
 
 ## 12. Recommended sprint acceptance scenario
 

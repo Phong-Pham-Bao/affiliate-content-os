@@ -12,7 +12,34 @@ export type WorkItemStatus =
   'waiting_dependency' | 'ready' | 'queued' | 'in_progress' | 'completed' | 'failed' | 'cancelled';
 
 export type AssignmentOfficeState =
-  'idle' | 'preparing' | 'queued' | 'working' | 'completed' | 'failed' | 'waiting';
+  | 'idle'
+  | 'preparing'
+  | 'queued'
+  | 'running'
+  | 'waiting_dependency'
+  | 'review_required'
+  | 'completed'
+  | 'blocked'
+  | 'failed'
+  | 'canceled'
+  | 'working'
+  | 'waiting'
+  | 'cancelled';
+
+export const CANONICAL_OFFICE_STATES = [
+  'idle',
+  'preparing',
+  'queued',
+  'running',
+  'waiting_dependency',
+  'review_required',
+  'completed',
+  'blocked',
+  'failed',
+  'canceled',
+] as const;
+
+export type CanonicalOfficeState = (typeof CANONICAL_OFFICE_STATES)[number];
 
 export type ContentArtifactType =
   | 'product_campaign_plan'

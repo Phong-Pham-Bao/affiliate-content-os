@@ -11,6 +11,8 @@ build/
 # Test and coverage
 coverage/
 .nyc_output/
+test-results/
+playwright-report/
 
 # Environment files
 .env

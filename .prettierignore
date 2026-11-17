@@ -9,3 +9,5 @@ AGENTS.md
 .github/pull_request_template.md
 plans/
 *.code-workspace
+test-results/
+playwright-report/

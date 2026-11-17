@@ -68,6 +68,14 @@ export function validateWorkItemSummary(val: unknown): WorkItemSummaryDTO {
   };
 }
 
+function normalizeOfficeState(raw: unknown): AssignmentOfficeState {
+  if (typeof raw !== 'string') return 'idle';
+  if (raw === 'working') return 'running';
+  if (raw === 'waiting') return 'waiting_dependency';
+  if (raw === 'cancelled') return 'canceled';
+  return raw as AssignmentOfficeState;
+}
+
 export function validateAgentAssignmentSummary(val: unknown): AgentAssignmentSummaryDTO {
   if (!isPlainObject(val)) invalid('Agent assignment must be an object');
   return {
@@ -76,7 +84,7 @@ export function validateAgentAssignmentSummary(val: unknown): AgentAssignmentSum
     roleDefinitionId: String(val.roleDefinitionId),
     roleKey: val.roleKey as AgentRoleKey,
     workItemId: val.workItemId ? String(val.workItemId) : null,
-    officeState: (val.officeState as AssignmentOfficeState) ?? 'idle',
+    officeState: normalizeOfficeState(val.officeState),
     waitingOnWorkItemId: val.waitingOnWorkItemId ? String(val.waitingOnWorkItemId) : null,
     latestReportCode: val.latestReportCode ? String(val.latestReportCode) : null,
     createdAt: String(val.createdAt ?? ''),

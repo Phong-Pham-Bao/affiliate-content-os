@@ -7,10 +7,12 @@ import type {
   AgentRoleKey,
   ContentArtifactSummaryDTO,
   KickoffWorkOrderPayload,
+  WorkOrderActivityDTO,
   WorkOrderDetailDTO,
 } from '../../types/workforce.js';
+import { mapWorkforceViewModel } from '../../lib/workforce-view-model.js';
 import { AssignToAiTeamDialog } from './assign-to-ai-team-dialog.js';
-import { EmployeeInspectorModal } from './employee-inspector-modal.js';
+import { EmployeeInspector } from './employee-inspector.js';
 import { ArtifactViewerModal } from './artifact-viewer-modal.js';
 
 interface WorkforceModalsProps {
@@ -29,6 +31,7 @@ interface WorkforceModalsProps {
   readonly viewingArtifactId: string | null;
   readonly activeDetail: WorkOrderDetailDTO | null;
   readonly artifacts: readonly ContentArtifactSummaryDTO[];
+  readonly activities?: readonly WorkOrderActivityDTO[] | undefined;
   readonly onCloseAssign: () => void;
   readonly onSubmitAssign: (payload: KickoffWorkOrderPayload, key: string) => Promise<void>;
   readonly onCloseInspector: () => void;
@@ -37,6 +40,17 @@ interface WorkforceModalsProps {
 }
 
 export function WorkforceModals(props: WorkforceModalsProps): ReactElement {
+  const vm = mapWorkforceViewModel({
+    detail: props.activeDetail,
+    artifacts: props.artifacts,
+    activities: props.activities ?? [],
+    canManage: props.canManage,
+  });
+
+  const inspectedEmployee = props.inspectedRoleKey
+    ? (vm.employees.find((e) => e.roleKey === props.inspectedRoleKey) ?? null)
+    : null;
+
   return (
     <>
       <AssignToAiTeamDialog
@@ -54,11 +68,10 @@ export function WorkforceModals(props: WorkforceModalsProps): ReactElement {
         onSubmit={props.onSubmitAssign}
       />
 
-      <EmployeeInspectorModal
+      <EmployeeInspector
         isOpen={Boolean(props.inspectedRoleKey)}
-        roleKey={props.inspectedRoleKey}
-        detail={props.activeDetail}
-        artifacts={props.artifacts}
+        employee={inspectedEmployee}
+        canManage={props.canManage}
         onClose={props.onCloseInspector}
         onSelectArtifact={props.onSelectArtifactFromInspector}
       />
