@@ -2,12 +2,14 @@ import crypto from 'node:crypto';
 import type pg from 'pg';
 import { generateUuidV7 } from '@affiliate-content-os/application';
 import {
+  parseWorkspaceId,
   validateScriptPackage,
   type ContentBrief,
   type ScriptPackage,
   type ScriptVideo,
 } from '@affiliate-content-os/domain';
 import { DatabaseError } from '../database/errors.js';
+import { enqueueComplianceEvaluationTransaction } from './workforce-compliance-enqueue.js';
 
 export async function assembleScriptPackageChangeRequestAtomic(
   client: pg.PoolClient,
@@ -21,7 +23,7 @@ export async function assembleScriptPackageChangeRequestAtomic(
   // 1. Fetch change request with row-level lock
   const crRes = await client.query(
     `SELECT id, artifact_id, base_revision_number, base_content_hash, selected_video_numbers,
-            instruction_text, status
+            instruction_text, status, requested_by_user_id
      FROM artifact_change_requests
      WHERE workspace_id = $1 AND id = $2
      FOR UPDATE`,
@@ -388,10 +390,20 @@ export async function assembleScriptPackageChangeRequestAtomic(
   // 8. Update artifact
   await client.query(
     `UPDATE content_artifacts
-     SET current_revision_number = $1, version = version + 1, updated_at = NOW()
+     SET current_revision_number = $1, lifecycle_status = 'review_required', version = version + 1, updated_at = NOW()
      WHERE workspace_id = $2 AND id = $3`,
     [newRevNum, workspaceId, artifactId],
   );
+
+  // Automatically prepare/enqueue compliance evaluation for new change request revision
+  await enqueueComplianceEvaluationTransaction(client, {
+    workspaceId: parseWorkspaceId(workspaceId),
+    productId,
+    workOrderId,
+    artifactId,
+    revisionNumber: newRevNum,
+    actorUserId: cr.requested_by_user_id,
+  });
 
   // 9. Update change request to completed
   await client.query(

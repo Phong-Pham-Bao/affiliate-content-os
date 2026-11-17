@@ -9,6 +9,7 @@ import type {
   ProductCampaignPlan,
   ProductFactSnapshot,
   SafeFailureCategory,
+  ScriptPackage,
   SingleVideoScript,
   VideoSeriesPlan,
   WorkOrderId,
@@ -64,6 +65,32 @@ export interface AIScriptVideoInput {
   readonly changeInstruction?: string | null | undefined;
 }
 
+export interface AIComplianceAdvisoryInput {
+  readonly workspaceId: WorkspaceId;
+  readonly productId: ProductId;
+  readonly workOrderId: WorkOrderId;
+  readonly artifactId: string;
+  readonly revisionNumber: number;
+  readonly scriptPackage: ScriptPackage;
+  readonly brief?: ContentBrief | null | undefined;
+  readonly facts?: readonly ProductFactSnapshot[] | undefined;
+  readonly sourceAnalyses?: readonly AnalysisSnapshot[] | undefined;
+}
+
+export interface ComplianceAdvisoryFinding {
+  readonly code: string;
+  readonly severity: 'info' | 'warning';
+  readonly videoNumber: number | null;
+  readonly fieldPath: string;
+  readonly message: string;
+  readonly evidenceIds?: readonly string[] | undefined;
+}
+
+export interface ComplianceAdvisoryOutput {
+  readonly summary: string;
+  readonly findings: readonly ComplianceAdvisoryFinding[];
+}
+
 export interface AIAnalysisGatewayResult<T> {
   readonly success: boolean;
   readonly content?: T | undefined;
@@ -112,4 +139,10 @@ export interface AIGatewayPort {
     repairFeedback?: { readonly errorCategory: string; readonly errorPath?: string | undefined },
     options?: { readonly signal?: AbortSignal },
   ): Promise<AIAnalysisGatewayResult<SingleVideoScript>>;
+
+  executeComplianceAdvisory(
+    input: AIComplianceAdvisoryInput,
+    repairFeedback?: { readonly errorCategory: string; readonly errorPath?: string | undefined },
+    options?: { readonly signal?: AbortSignal },
+  ): Promise<AIAnalysisGatewayResult<ComplianceAdvisoryOutput>>;
 }

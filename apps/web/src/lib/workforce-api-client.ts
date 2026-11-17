@@ -219,3 +219,10 @@ export {
   requestScriptChangesApi,
   fetchChangeRequestByIdApi,
 } from './workforce-api-client-revisions.js';
+
+export {
+  fetchArtifactComplianceApi,
+  fetchArtifactDecisionsApi,
+  acceptScriptRevisionApi,
+  rejectScriptRevisionApi,
+} from './workforce-api-client-compliance.js';

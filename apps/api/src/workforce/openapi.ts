@@ -8,6 +8,7 @@ import {
 } from '../analysis/openapi-params.js';
 import { kickoffWorkOrderRouteSchema } from './schemas.js';
 import { buildOpenApiRevisionPaths } from './openapi-revisions.js';
+import { buildOpenApiCompliancePaths } from './openapi-compliance.js';
 
 const workOrderIdParam = {
   name: 'workOrderId',
@@ -273,5 +274,6 @@ export function buildOpenApiWorkforcePaths(): Record<string, unknown> {
       },
     },
     ...buildOpenApiRevisionPaths(),
+    ...buildOpenApiCompliancePaths(),
   };
 }

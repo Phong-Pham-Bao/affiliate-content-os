@@ -3,6 +3,7 @@ import type { JobProcessorDependencies } from './job-processor-types.js';
 import { processAnalysisJob } from './analysis-job-processor.js';
 import { processWorkforcePlanningJob } from './workforce-job-processor.js';
 import { processScriptwritingJob } from './scriptwriting-job-processor.js';
+import { processComplianceReviewJob } from './compliance-job-processor.js';
 
 export type { JobProcessorDependencies };
 
@@ -26,6 +27,17 @@ export async function processJobExecution(
       throw new Error(`Database pool required to process scriptwriting job ${job.id}`);
     }
     return processScriptwritingJob(job, {
+      workerId: deps.workerId,
+      gatewayPort: deps.gatewayPort,
+      pool: deps.pool,
+    });
+  }
+
+  if (job.jobType === 'compliance_review') {
+    if (!deps.pool) {
+      throw new Error(`Database pool required to process compliance_review job ${job.id}`);
+    }
+    return processComplianceReviewJob(job, {
       workerId: deps.workerId,
       gatewayPort: deps.gatewayPort,
       pool: deps.pool,

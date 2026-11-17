@@ -407,6 +407,11 @@ describe('scriptwriting-drift.integration (Worker Authoritative-Context Drift Ha
         gatewayCallCount++;
         return { success: false, usage: {} as never, provenance: {} as never };
       },
+      executeComplianceAdvisory: async () => ({
+        success: false,
+        usage: {} as never,
+        provenance: {} as never,
+      }),
     };
 
     // 4. Run worker processor
@@ -555,6 +560,11 @@ describe('scriptwriting-drift.integration (Worker Authoritative-Context Drift Ha
           },
         };
       },
+      executeComplianceAdvisory: async () => ({
+        success: false,
+        usage: {} as never,
+        provenance: {} as never,
+      }),
     };
 
     // Run processor: provider succeeds, but assembly detects context drift post-provider

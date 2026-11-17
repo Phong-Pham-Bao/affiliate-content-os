@@ -12,4 +12,6 @@ export * from './gemini-planning-prompt-builder.js';
 export * from './gemini-script-schemas.js';
 export * from './gemini-script-prompt-builder.js';
 export * from './gemini-call-executor.js';
+export * from './gemini-compliance-schemas.js';
+export * from './gemini-compliance-prompt-builder.js';
 export * from './gemini-ai-gateway-adapter.js';

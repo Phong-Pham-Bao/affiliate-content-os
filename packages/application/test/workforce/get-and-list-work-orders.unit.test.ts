@@ -79,6 +79,11 @@ describe('getWorkOrder and listWorkOrders Application Use Cases', () => {
         listScriptUnits: vi.fn().mockResolvedValue([]),
         listWorkOrderActivities: vi.fn().mockResolvedValue([]),
         retryWorkOrderPlanningAtomic: vi.fn(),
+        getComplianceEvaluation: vi.fn().mockResolvedValue(null),
+        listReviewDecisions: vi.fn().mockResolvedValue([]),
+        getApprovalSnapshot: vi.fn().mockResolvedValue(null),
+        acceptScriptRevision: vi.fn(),
+        rejectScriptRevision: vi.fn(),
       },
       workspaceAuthorization: {
         findMembership: vi.fn().mockResolvedValue({

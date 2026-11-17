@@ -17,16 +17,20 @@ import {
   handleListWorkOrders,
 } from './read-handlers.js';
 import {
+  acceptRevisionRouteSchema,
   createManualRevisionRouteSchema,
   getArtifactByIdRouteSchema,
   getArtifactRevisionByNumberRouteSchema,
   getArtifactRevisionsRouteSchema,
   getChangeRequestByIdRouteSchema,
+  getComplianceRouteSchema,
   getWorkOrderRouteSchema,
   kickoffWorkOrderRouteSchema,
+  listDecisionsRouteSchema,
   listWorkOrderActivitiesRouteSchema,
   listWorkOrderArtifactsRouteSchema,
   listWorkOrdersRouteSchema,
+  rejectRevisionRouteSchema,
   requestScriptChangesRouteSchema,
   retryWorkOrderPlanningRouteSchema,
 } from './schemas.js';
@@ -37,6 +41,12 @@ import {
   handleGetChangeRequestById,
   handleRequestScriptChanges,
 } from './revision-handlers.js';
+import {
+  handleAcceptArtifactRevision,
+  handleGetArtifactCompliance,
+  handleListArtifactDecisions,
+  handleRejectArtifactRevision,
+} from './compliance-handlers.js';
 import type { WorkforceRouteDependencies } from './types.js';
 
 export function createWorkforceRoutes(deps: WorkforceRouteDependencies): FastifyPluginAsync {
@@ -165,6 +175,38 @@ export function createWorkforceRoutes(deps: WorkforceRouteDependencies): Fastify
       { schema: getChangeRequestByIdRouteSchema, config: readRateLimit },
       async (request, reply) => {
         await handleGetChangeRequestById(request, reply, deps);
+      },
+    );
+
+    fastify.get(
+      '/api/v1/workspaces/:workspaceId/artifacts/:artifactId/compliance',
+      { schema: getComplianceRouteSchema, config: readRateLimit },
+      async (request, reply) => {
+        await handleGetArtifactCompliance(request, reply, deps);
+      },
+    );
+
+    fastify.get(
+      '/api/v1/workspaces/:workspaceId/artifacts/:artifactId/decisions',
+      { schema: listDecisionsRouteSchema, config: readRateLimit },
+      async (request, reply) => {
+        await handleListArtifactDecisions(request, reply, deps);
+      },
+    );
+
+    fastify.post(
+      '/api/v1/workspaces/:workspaceId/artifacts/:artifactId/accept',
+      { schema: acceptRevisionRouteSchema, config: kickoffRateLimit },
+      async (request, reply) => {
+        await handleAcceptArtifactRevision(request, reply, deps);
+      },
+    );
+
+    fastify.post(
+      '/api/v1/workspaces/:workspaceId/artifacts/:artifactId/reject',
+      { schema: rejectRevisionRouteSchema, config: kickoffRateLimit },
+      async (request, reply) => {
+        await handleRejectArtifactRevision(request, reply, deps);
       },
     );
   };

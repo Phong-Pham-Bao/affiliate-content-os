@@ -13,9 +13,12 @@ import type {
 } from './kickoff-params-types.js';
 import type {
   ArtifactChangeRequestDTO,
+  ComplianceEvaluationDTO,
+  ContentApprovalSnapshotDTO,
   ContentArtifactDetailDTO,
   ContentArtifactRevisionDTO,
   ContentArtifactSummaryDTO,
+  ContentReviewDecisionDTO,
   ScriptGenerationUnitDTO,
   WorkOrderActivityDTO,
   WorkOrderDetailDTO,
@@ -25,9 +28,16 @@ import type {
   CreateManualRevisionParams,
   RequestScriptChangesParams,
 } from './script-params-types.js';
+import type {
+  AcceptScriptRevisionParams,
+  AcceptScriptRevisionResult,
+  RejectScriptRevisionParams,
+  RejectScriptRevisionResult,
+} from './compliance-params-types.js';
 
 export * from './kickoff-params-types.js';
 export * from './script-params-types.js';
+export * from './compliance-params-types.js';
 
 export interface WorkforcePersistencePort {
   kickoffWorkOrderAtomic(params: KickoffWorkOrderAtomicParams): Promise<KickoffTransactionResult>;
@@ -83,4 +93,20 @@ export interface WorkforcePersistencePort {
   retryWorkOrderPlanningAtomic(
     params: RetryWorkOrderPlanningAtomicParams,
   ): Promise<RetryWorkOrderPlanningResult>;
+  getComplianceEvaluation(
+    workspaceId: WorkspaceId,
+    artifactId: string,
+    revisionNumber?: number | undefined,
+  ): Promise<ComplianceEvaluationDTO | null>;
+  listReviewDecisions(
+    workspaceId: WorkspaceId,
+    artifactId: string,
+  ): Promise<readonly ContentReviewDecisionDTO[]>;
+  getApprovalSnapshot(
+    workspaceId: WorkspaceId,
+    artifactId: string,
+    revisionNumber?: number | undefined,
+  ): Promise<ContentApprovalSnapshotDTO | null>;
+  acceptScriptRevision(params: AcceptScriptRevisionParams): Promise<AcceptScriptRevisionResult>;
+  rejectScriptRevision(params: RejectScriptRevisionParams): Promise<RejectScriptRevisionResult>;
 }

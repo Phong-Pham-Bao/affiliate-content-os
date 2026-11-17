@@ -42,8 +42,26 @@ export {
 } from './request-script-changes.js';
 export { listWorkOrderActivities } from './list-work-order-activities.js';
 export { retryWorkOrderPlanning } from './retry-work-order.js';
+export {
+  acceptScriptRevision,
+  computeCanonicalAcceptRevisionRequestHash,
+  type ExecuteAcceptScriptRevisionParams,
+} from './accept-script-revision.js';
+export {
+  rejectScriptRevision,
+  computeCanonicalRejectRevisionRequestHash,
+  type ExecuteRejectScriptRevisionParams,
+} from './reject-script-revision.js';
+export { getComplianceEvaluation } from './get-compliance-evaluation.js';
+export { listReviewDecisions } from './list-review-decisions.js';
 
 export {
+  type AcceptScriptRevisionParams,
+  type AcceptScriptRevisionResult,
+  type RejectScriptRevisionParams,
+  type RejectScriptRevisionResult,
+  type EnqueueComplianceEvaluationParams,
+  type EnqueueComplianceEvaluationResult,
   type CreateManualRevisionParams,
   type RequestScriptChangesParams,
   type KickoffAtomicAssignmentParam,
@@ -64,9 +82,13 @@ export {
   type ScriptGenerationUnitDTO,
   type AgentAssignmentSummaryDTO,
   type ArtifactEvidenceRefDTO,
+  type ComplianceEvaluationDTO,
+  type ComplianceFindingDTO,
+  type ContentApprovalSnapshotDTO,
   type ContentArtifactDetailDTO,
   type ContentArtifactRevisionDTO,
   type ContentArtifactSummaryDTO,
+  type ContentReviewDecisionDTO,
   type ContextPackageSummaryDTO,
   type GetArtifactByIdQuery,
   type GetWorkOrderQuery,

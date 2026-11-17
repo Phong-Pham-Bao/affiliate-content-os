@@ -304,6 +304,29 @@ Migration `0012_change_request_failure_code.sql` adds bounded failure classifica
 - `failure_code TEXT NULL` with check constraint: `failure_code IS NULL OR failure_code IN ('stale_base_conflict', 'provider_failure', 'context_drift', 'budget_exhausted', 'timeout', 'validation_failed')`.
 - Distinguishes stale-base conflicts and context drift from generic provider outages without brittle free-text string parsing.
 
+#### Checkpoint D: Compliance & Human Approval (`0013_compliance_human_approval.sql`)
+Migration `0013_compliance_human_approval.sql` introduces normalized, tenant-bound compliance and human approval records:
+- `compliance_evaluations`:
+  - `id UUID PRIMARY KEY`, `workspace_id UUID NOT NULL REFERENCES workspaces(id)`, `product_id UUID NOT NULL`, `work_order_id UUID NOT NULL`, `artifact_id UUID NOT NULL`, `revision_number INTEGER NOT NULL`, `policy_version TEXT NOT NULL`, `policy_hash BYTEA NOT NULL`, `status TEXT NOT NULL`, `result TEXT NOT NULL`, `blocking_count INTEGER NOT NULL DEFAULT 0`, `warning_count INTEGER NOT NULL DEFAULT 0`, `info_count INTEGER NOT NULL DEFAULT 0`, `deterministic_passed BOOLEAN NOT NULL`, `ai_advisory_status TEXT NOT NULL`, `evaluation_report_artifact_id UUID NULL`, `ai_run_id UUID NULL`, `job_id UUID NULL`, `operation_id UUID NULL`, `created_at TIMESTAMPTZ NOT NULL`, `updated_at TIMESTAMPTZ NOT NULL`, `version INTEGER NOT NULL DEFAULT 1`.
+  - Composite foreign keys: `(workspace_id, product_id)` to `products`, `(workspace_id, work_order_id)` to `work_orders`, `(workspace_id, artifact_id, revision_number)` to `content_artifact_revisions`, `(workspace_id, job_id)` to `job_executions`, `(workspace_id, operation_id)` to `operations`, `(workspace_id, ai_run_id)` to `ai_runs`.
+  - Unique constraint: `(workspace_id, artifact_id, revision_number, policy_version)`.
+- `compliance_findings`:
+  - `id UUID PRIMARY KEY`, `workspace_id UUID NOT NULL REFERENCES workspaces(id)`, `evaluation_id UUID NOT NULL`, `fingerprint TEXT NOT NULL`, `code TEXT NOT NULL`, `severity TEXT NOT NULL`, `source TEXT NOT NULL`, `video_number INTEGER NULL`, `field_path TEXT NULL`, `message TEXT NOT NULL`, `evidence_ids_json JSONB NOT NULL DEFAULT '[]'::jsonb`, `raw_finding_json JSONB NOT NULL DEFAULT '{}'::jsonb`, `created_at TIMESTAMPTZ NOT NULL`.
+  - Check constraints: severity in `('info', 'warning', 'blocking')`, source in `('deterministic', 'ai_advisory')`.
+  - Composite foreign key: `(workspace_id, evaluation_id)` to `compliance_evaluations(workspace_id, id)`.
+  - Unique constraint: `(workspace_id, evaluation_id, fingerprint)`.
+  - Immutability trigger: `prevent_compliance_findings_mutation` prevents `UPDATE` or `DELETE`.
+- `content_review_decisions`:
+  - `id UUID PRIMARY KEY`, `workspace_id UUID NOT NULL REFERENCES workspaces(id)`, `artifact_id UUID NOT NULL`, `revision_number INTEGER NOT NULL`, `content_hash BYTEA NOT NULL`, `evaluation_id UUID NULL`, `decision TEXT NOT NULL`, `actor_user_id UUID NOT NULL REFERENCES users(id)`, `reason TEXT NULL`, `metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb`, `created_at TIMESTAMPTZ NOT NULL`.
+  - Check constraints: decision in `('accept', 'reject', 'request_changes')`.
+  - Composite foreign keys: `(workspace_id, artifact_id, revision_number)` to `content_artifact_revisions`, `(workspace_id, evaluation_id)` to `compliance_evaluations(workspace_id, id)`.
+  - Immutability trigger: `prevent_content_review_decisions_mutation` prevents `UPDATE` or `DELETE`.
+- `content_approval_snapshots`:
+  - `id UUID PRIMARY KEY`, `workspace_id UUID NOT NULL REFERENCES workspaces(id)`, `artifact_id UUID NOT NULL`, `revision_number INTEGER NOT NULL`, `content_hash BYTEA NOT NULL`, `evaluation_id UUID NOT NULL`, `policy_version TEXT NOT NULL`, `policy_hash BYTEA NOT NULL`, `decision_id UUID NOT NULL`, `approved_by_user_id UUID NOT NULL REFERENCES users(id)`, `evidence_ids_json JSONB NOT NULL DEFAULT '[]'::jsonb`, `disclosure_state_json JSONB NOT NULL DEFAULT '{}'::jsonb`, `snapshot_json JSONB NOT NULL DEFAULT '{}'::jsonb`, `snapshot_hash BYTEA NOT NULL`, `created_at TIMESTAMPTZ NOT NULL`.
+  - Composite foreign keys: `(workspace_id, artifact_id, revision_number)` to `content_artifact_revisions`, `(workspace_id, evaluation_id)` to `compliance_evaluations(workspace_id, id)`, `(workspace_id, decision_id)` to `content_review_decisions(workspace_id, id)`.
+  - Unique constraint: `(workspace_id, artifact_id, revision_number)` ensuring at most 1 approval snapshot per exact revision.
+  - Immutability trigger: `prevent_content_approval_snapshots_mutation` prevents `UPDATE` or `DELETE`.
+
 ## 6. Content and approval
 
 ### `content_items`

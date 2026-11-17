@@ -342,6 +342,16 @@ describe('workforce-checkpoint-c-revisions.integration (Immutability, Tenants, S
     expect(crUnits.rows[0].video_number).toBe(2);
     expect(crUnits.rows[1].video_number).toBe(4);
 
+    // In Checkpoint D, initial assembly automatically queues a compliance_review job.
+    // Complete it here so the loop claims only the change-request scriptwriting units.
+    await pool.query(
+      `UPDATE job_executions
+       SET status = 'succeeded', started_at = COALESCE(started_at, created_at), completed_at = NOW(),
+           lease_owner = NULL, lease_expires_at = NULL, last_error_category = NULL, updated_at = NOW()
+       WHERE work_order_id = $1 AND job_type = 'compliance_review'`,
+      [workOrderId],
+    );
+
     // Settle both units
     for (const row of crUnits.rows) {
       const claimed = await jobAdapter.claimNextJob({

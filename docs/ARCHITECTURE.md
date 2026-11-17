@@ -458,9 +458,36 @@ Sprint 3 Checkpoint C turns the 3 Checkpoint B planning artifacts into a product
 - **Targeted Change Requests**: An editor/owner can request changes with instruction text for selected video numbers (e.g. videos 2 and 4). Only selected units are regenerated; untouched videos are carried forward from the base revision.
 - **Accessible Web Studio**: Complete five-video navigation rail, focused script reader/editor, revision history, and visual diff comparison.
 
-### 5. Explicit Checkpoint D Boundary
-Checkpoint C stops at assembling the `script_package` artifact and unlocking the `compliance_review` work item to `ready`. It strictly does NOT:
-- Enqueue or execute Compliance Reviewer jobs;
-- Create `compliance_evaluations` or `compliance_findings`;
-- Provide human approval or rejection actions;
-- Snapshot approvals or schedule publications.
+## Sprint 3 Checkpoint D — Compliance Review and Human Approval Architecture
+
+### 1. Deterministic Policy & Versioning
+- **Versioned Policy Engine**: Evaluates canonical compliance rules with version tracking (`2026-11-17`) and SHA-256 policy hashing.
+- **Rule Categories**:
+  - `PROHIBITED_CLAIM`: Detects absolute/guaranteed claims in Vietnamese (`cam kết 100%`, `chắc chắn khỏi`, `trị dứt điểm`, etc.) and English (`guaranteed`, `100% cure`, `risk-free`). Severity: `blocking`.
+  - `STRUCTURE_SCHEMA`: Validates mandatory video structure (1..5 videos, scenes, shots, narrator audio, visual description, text overlays). Severity: `blocking`.
+  - `EVIDENCE_COHERENCE`: Verifies all product claims resolve to allowed confirmed facts/analyses. Unsupported claims trigger `blocking` findings.
+  - `AFFILIATE_DISCLOSURE`: Enforces platform-appropriate affiliate sponsorship disclosure in script or description (`#quangcao`, `#sponsored`, etc.). Missing disclosure triggers `blocking` findings.
+  - `ADVISORY_SUGGESTION`: Style, hook strength, pacing suggestions. Severity: `info` or `warning`.
+- **Deterministic Preflight**: If blocking deterministic findings are detected, the AI provider advisory call is completely skipped, saving token spend and avoiding advisory noise.
+
+### 2. Durable Bounded AI Advisory Review
+- **Bounded Invocations**: At most 1 advisory review call + 1 structured repair call.
+- **Authority Boundary**: AI advisory findings CANNOT introduce `blocking` severity findings, downgrade or override deterministic findings, or approve/reject content.
+- **Provenance Tracking**: Tracks provider (`google`), model (`gemini-3.8-flash`), prompt version, input/output token usage, and latency.
+
+### 3. Exact-Revision Automatic Enqueue & Invalidation
+- **Automatic Re-evaluation**: Every new script revision (initial assembly, manual edit, or change-request regeneration) resets lifecycle to `review_required` and automatically enqueues a fresh compliance evaluation bound to exact revision number and content hash.
+- **Historical Immutability**: Historical evaluations, findings, decisions, and approval snapshots remain permanently immutable.
+
+### 4. Human-Only Approval & Immutable Snapshots
+- **Human Authority**: Only authenticated human operators with `canManage` (editor/owner) can accept or reject revisions. No AI or background worker can invoke approval.
+- **Optimistic Concurrency**: Acceptance/rejection requires exact `expectedVersion`, `revisionNumber`, and `contentHashHex`.
+- **Immutable Approval Snapshot**: Acceptance atomically creates a `content_approval_snapshots` record containing the full snapshot JSON, SHA-256 snapshot hash, policy version, policy hash, evaluation ID, evidence IDs, disclosure state, and approver user ID.
+- **Work Order Completion**: Acceptance transitions the work order status to `completed` and the Chief of Staff assignment office state to `completed`.
+- **Rejection**: Rejection records an immutable decision with a bounded human reason (1..2000 chars) and marks the artifact lifecycle as `rejected`.
+
+### 5. Explicit Checkpoint E Boundary
+Checkpoint D completes compliance review and human approval. It strictly does NOT:
+- Implement Checkpoint E office/board visual polish or employee movement canvas animations;
+- Schedule, publish, or connect social media platform accounts (Sprint 4);
+- Generate production media assets (video rendering, TTS synthesis).

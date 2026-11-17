@@ -26,6 +26,21 @@ export {
   getChangeRequestByIdQuery,
   listScriptUnitsQuery,
 } from './workforce-revision-queries.js';
+export {
+  enqueueComplianceEvaluationTransaction,
+  COMPLIANCE_RESERVED_SPEND_MICROUNITS,
+} from './workforce-compliance-enqueue.js';
+export {
+  settleComplianceReviewJobAtomic,
+  type SettleComplianceReviewParams,
+} from './workforce-compliance-settlement.js';
+export {
+  queryComplianceEvaluation,
+  queryReviewDecisions,
+  queryApprovalSnapshot,
+} from './workforce-compliance-queries.js';
+export { acceptScriptRevisionTransaction } from './workforce-accept-revision.js';
+export { rejectScriptRevisionTransaction } from './workforce-reject-revision.js';
 export { retryFailedScriptUnits } from './workforce-script-retry.js';
 
 export { PostgresWorkforceAdapter } from './postgres-workforce-adapter.js';

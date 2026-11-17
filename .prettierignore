@@ -7,3 +7,5 @@ docs/
 AGENTS.md
 .agents/
 .github/pull_request_template.md
+plans/
+*.code-workspace

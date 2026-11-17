@@ -12,6 +12,10 @@ import { ContentStudioRevisionHistory } from './content-studio-revision-history.
 import { ContentStudioFieldCompare } from './content-studio-field-compare.js';
 import { ContentStudioManualEditor } from './content-studio-manual-editor.js';
 import { ContentStudioRequestChangesDialog } from './content-studio-request-changes-dialog.js';
+import { ContentStudioCompliancePanel } from './content-studio-compliance-panel.js';
+import { ContentStudioAcceptDialog } from './content-studio-accept-dialog.js';
+import { ContentStudioRejectDialog } from './content-studio-reject-dialog.js';
+import { ContentStudioDecisionsHistory } from './content-studio-decisions-history.js';
 
 export interface ContentStudioProps {
   readonly workspaceId: string;
@@ -42,11 +46,29 @@ export function ContentStudio({
     setIsHistoryOpen,
     isRequestChangesOpen,
     setIsRequestChangesOpen,
+    isAcceptDialogOpen,
+    setIsAcceptDialogOpen,
+    isRejectDialogOpen,
+    setIsRejectDialogOpen,
+    isDecisionsOpen,
+    setIsDecisionsOpen,
     isSubmitting,
     statusState,
     error,
     activePackage,
     comparePackage,
+    // Compliance & Decisions
+    complianceEvaluation,
+    isComplianceLoading,
+    complianceError,
+    decisions,
+    isDecisionsLoading,
+    approvalSnapshot,
+    canAccept,
+    canReject,
+    acceptDisabledReason,
+    rejectDisabledReason,
+    // Actions
     handleSaveManualEdit,
     handleCancelManualEdit,
     handleRequestChanges,
@@ -54,8 +76,14 @@ export function ContentStudio({
     handleSelectRevision,
     handleCompareRevision,
     handleResumePolling,
+    handleAcceptRevision,
+    handleRejectRevision,
+    handleRetryCompliance,
     canResumePolling,
-  } = useContentStudioState(workspaceId, artifactId, initialDetail);
+  } = useContentStudioState(workspaceId, artifactId, initialDetail, canManage);
+
+  const advisoryWarnings =
+    complianceEvaluation?.findings.filter((f) => f.severity === 'warning') ?? [];
 
   return (
     <div
@@ -70,8 +98,16 @@ export function ContentStudio({
         isComparing={Boolean(compareRevision)}
         isHistoryOpen={isHistoryOpen}
         onToggleHistory={() => setIsHistoryOpen((prev) => !prev)}
+        isDecisionsOpen={isDecisionsOpen}
+        onToggleDecisions={() => setIsDecisionsOpen((prev) => !prev)}
         onStartEdit={() => setIsEditing(true)}
         onOpenRequestChanges={() => setIsRequestChangesOpen(true)}
+        onOpenAccept={() => setIsAcceptDialogOpen(true)}
+        onOpenReject={() => setIsRejectDialogOpen(true)}
+        canAccept={canAccept}
+        canReject={canReject}
+        acceptDisabledReason={acceptDisabledReason}
+        rejectDisabledReason={rejectDisabledReason}
         onClose={onClose}
       />
 
@@ -86,6 +122,24 @@ export function ContentStudio({
           revision={activeRevision}
           lineage={detail?.lineage}
           lifecycleStatus={detail?.artifact.lifecycleStatus ?? 'review_required'}
+        />
+      )}
+
+      {/* Compliance & Policy Evaluation Panel (Checkpoint D) */}
+      <ContentStudioCompliancePanel
+        evaluation={complianceEvaluation}
+        isLoading={isComplianceLoading}
+        error={complianceError}
+        onRetry={handleRetryCompliance}
+      />
+
+      {/* Decisions History (Checkpoint D) */}
+      {isDecisionsOpen && (
+        <ContentStudioDecisionsHistory
+          decisions={decisions}
+          approvalSnapshot={approvalSnapshot}
+          isLoading={isDecisionsLoading}
+          onClose={() => setIsDecisionsOpen(false)}
         />
       )}
 
@@ -146,6 +200,29 @@ export function ContentStudio({
         error={error}
         onSubmit={handleRequestChanges}
         onClose={handleCloseRequestChanges}
+      />
+
+      {/* Accept Dialog (Checkpoint D) */}
+      <ContentStudioAcceptDialog
+        isOpen={isAcceptDialogOpen}
+        revisionNumber={activeRevision?.revisionNumber ?? 1}
+        contentHashHex={activeRevision?.contentHashHex ?? ''}
+        warnings={advisoryWarnings}
+        isSubmitting={isSubmitting}
+        error={error}
+        onConfirm={handleAcceptRevision}
+        onClose={() => setIsAcceptDialogOpen(false)}
+      />
+
+      {/* Reject Dialog (Checkpoint D) */}
+      <ContentStudioRejectDialog
+        isOpen={isRejectDialogOpen}
+        revisionNumber={activeRevision?.revisionNumber ?? 1}
+        contentHashHex={activeRevision?.contentHashHex ?? ''}
+        isSubmitting={isSubmitting}
+        error={error}
+        onConfirm={handleRejectRevision}
+        onClose={() => setIsRejectDialogOpen(false)}
       />
     </div>
   );

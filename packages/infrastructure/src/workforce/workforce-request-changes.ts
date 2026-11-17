@@ -238,6 +238,29 @@ export async function requestScriptChangesTransaction(
     ],
   );
 
+  // 7b. Record immutable human decision for request_changes
+  const decisionId = generateUuidV7();
+  await client.query(
+    `INSERT INTO content_review_decisions (
+       id, workspace_id, artifact_id, revision_number, content_hash,
+       evaluation_id, decision, actor_user_id, reason, metadata_json, created_at
+     ) VALUES (
+       $1, $2, $3, $4, $5,
+       (SELECT id FROM compliance_evaluations WHERE workspace_id = $2 AND artifact_id = $3 AND revision_number = $4 ORDER BY created_at DESC LIMIT 1),
+       'request_changes', $6, $7, $8::jsonb, NOW()
+     )`,
+    [
+      decisionId,
+      workspaceId,
+      artifactId,
+      baseRevisionNumber,
+      Buffer.from(baseRevRes.rows[0].content_hash),
+      actorUserId,
+      instructionText,
+      JSON.stringify({ changeRequestId, selectedVideoNumbers, targetVariantCount }),
+    ],
+  );
+
   // 8. Enqueue jobs & script units for selected videos
   for (const videoNumber of selectedVideoNumbers) {
     const opId = generateUuidV7();

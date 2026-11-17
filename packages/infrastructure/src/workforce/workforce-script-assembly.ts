@@ -2,12 +2,14 @@ import crypto from 'node:crypto';
 import type pg from 'pg';
 import { generateUuidV7 } from '@affiliate-content-os/application';
 import {
+  parseWorkspaceId,
   validateScriptPackage,
   type ContentBrief,
   type ScriptPackage,
   type ScriptVideo,
 } from '@affiliate-content-os/domain';
 import { DatabaseError } from '../database/errors.js';
+import { enqueueComplianceEvaluationTransaction } from './workforce-compliance-enqueue.js';
 
 export async function assembleScriptPackageInitialAtomic(
   client: pg.PoolClient,
@@ -292,22 +294,23 @@ export async function assembleScriptPackageInitialAtomic(
     [assignmentId, workspaceId],
   );
 
-  // 10. Release compliance_review dependency to ready (honest waiting, not executed)
-  await client.query(
-    `UPDATE work_items
-     SET status = 'ready', updated_at = NOW(), version = version + 1
-     WHERE workspace_id = $1 AND work_order_id = $2
-       AND task_key = 'compliance_review' AND status = 'waiting_dependency'`,
+  // 10. Automatically prepare and enqueue compliance review for exact revision 1
+  const woUserRes = await client.query(
+    `SELECT created_by_user_id FROM work_orders WHERE workspace_id = $1 AND id = $2`,
     [workspaceId, workOrderId],
   );
+  const actorUserId = woUserRes.rows[0]?.created_by_user_id;
 
-  await client.query(
-    `UPDATE agent_assignments
-     SET office_state = 'preparing', waiting_on_work_item_id = NULL, updated_at = NOW(), version = version + 1
-     WHERE workspace_id = $1 AND work_order_id = $2
-       AND work_item_id = (SELECT id FROM work_items WHERE workspace_id = $1 AND work_order_id = $2 AND task_key = 'compliance_review')`,
-    [workspaceId, workOrderId],
-  );
+  if (actorUserId) {
+    await enqueueComplianceEvaluationTransaction(client, {
+      workspaceId: parseWorkspaceId(workspaceId),
+      productId,
+      workOrderId,
+      artifactId,
+      revisionNumber: 1,
+      actorUserId,
+    });
+  }
 
   return true;
 }

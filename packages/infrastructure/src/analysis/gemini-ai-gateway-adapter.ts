@@ -1,11 +1,13 @@
 import { GoogleGenAI } from '@google/genai';
 import type {
   AIAnalysisGatewayResult,
+  AIComplianceAdvisoryInput,
   AIGatewayPort,
   AINicheAnalysisInput,
   AIPlanningRoleInput,
   AIProductAnalysisInput,
   AIScriptVideoInput,
+  ComplianceAdvisoryOutput,
 } from '@affiliate-content-os/application';
 import type {
   AudienceInsightBoard,
@@ -27,6 +29,7 @@ import {
   buildVideoSeriesPlanPrompt,
 } from './gemini-planning-prompt-builder.js';
 import { buildScriptVideoPrompt } from './gemini-script-prompt-builder.js';
+import { buildComplianceAdvisoryPrompt } from './gemini-compliance-prompt-builder.js';
 import { productAnalysisJsonSchema, nicheAnalysisJsonSchema } from './gemini-schemas.js';
 import {
   audienceInsightBoardJsonSchema,
@@ -34,6 +37,7 @@ import {
   videoSeriesPlanJsonSchema,
 } from './gemini-planning-schemas.js';
 import { singleVideoScriptJsonSchema } from './gemini-script-schemas.js';
+import { complianceAdvisoryJsonSchema } from './gemini-compliance-schemas.js';
 import { executeGeminiCall } from './gemini-call-executor.js';
 import type { GeminiClientLike } from './gemini-adapter-helpers.js';
 
@@ -149,6 +153,38 @@ export class GeminiAIGatewayAdapter implements AIGatewayPort {
       'script_video_v1',
       options?.signal,
     );
+  }
+
+  public async executeComplianceAdvisory(
+    input: AIComplianceAdvisoryInput,
+    repairFeedback?: { readonly errorCategory: string; readonly errorPath?: string },
+    options?: { readonly signal?: AbortSignal },
+  ): Promise<AIAnalysisGatewayResult<ComplianceAdvisoryOutput>> {
+    const basePrompt = buildComplianceAdvisoryPrompt(input);
+    const prompt = repairFeedback ? buildRepairPrompt(basePrompt, repairFeedback) : basePrompt;
+    const res = await this.call<ComplianceAdvisoryOutput>(
+      prompt,
+      complianceAdvisoryJsonSchema,
+      'compliance_advisory_v1',
+      options?.signal,
+    );
+
+    if (res.success && res.content) {
+      // Enforce safety invariant: AI findings can ONLY have severity 'info' or 'warning', never 'blocking'
+      const sanitizedFindings = (res.content.findings ?? []).map((f) => ({
+        ...f,
+        severity: (f.severity === 'info' ? 'info' : 'warning') as 'info' | 'warning',
+      }));
+      return {
+        ...res,
+        content: {
+          summary: res.content.summary ?? '',
+          findings: sanitizedFindings,
+        },
+      };
+    }
+
+    return res;
   }
 
   private call<T>(

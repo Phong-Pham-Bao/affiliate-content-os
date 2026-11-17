@@ -167,6 +167,15 @@ export function createFakeCheckpointCGateway(factId: string, analysisId: string)
     }),
 
     executeScriptVideo: async () => ({ success: false, usage: fakeUsage, provenance: fakeProv }),
+    executeComplianceAdvisory: async () => ({
+      success: true,
+      content: {
+        summary: 'Kịch bản đạt yêu cầu tuân thủ thương mại.',
+        findings: [],
+      },
+      usage: fakeUsage,
+      provenance: { ...fakeProv, promptTemplate: 'compliance_advisory_v1' },
+    }),
   };
 }
 

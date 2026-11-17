@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import pg from 'pg';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { setupIsolatedTestDatabase, type TestDatabaseContext } from './helpers/setup.js';
 import {
   seedWorkforceBaseData,
@@ -140,6 +140,16 @@ describe('workforce-checkpoint-c-remediation-02.integration (Terminal States, Dr
       [workOrderId],
     );
     artifactId = artRes.rows[0].id;
+
+    // Checkpoint D auto-enqueues compliance_review on initial assembly; mark it succeeded
+    // so change-request tests only pick up their target scriptwriting units
+    await pool.query(
+      `UPDATE job_executions
+       SET status = 'succeeded', started_at = COALESCE(started_at, created_at), completed_at = NOW(),
+           lease_owner = NULL, lease_expires_at = NULL, last_error_category = NULL, updated_at = NOW()
+       WHERE work_order_id = $1 AND job_type = 'compliance_review'`,
+      [workOrderId],
+    );
   });
 
   afterAll(async () => {
@@ -148,6 +158,15 @@ describe('workforce-checkpoint-c-remediation-02.integration (Terminal States, Dr
   });
 
   describe('1. Assignment State on Change-Request Terminal Outcomes', () => {
+    beforeEach(async () => {
+      await pool.query(
+        `UPDATE job_executions
+         SET status = 'succeeded', started_at = COALESCE(started_at, created_at), completed_at = NOW(),
+             lease_owner = NULL, lease_expires_at = NULL, last_error_category = NULL, updated_at = NOW()
+         WHERE work_order_id = $1 AND job_type = 'compliance_review' AND status IN ('queued', 'retry_wait', 'running')`,
+        [workOrderId],
+      );
+    });
     it('transitions assignment to review_required on completed change request', async () => {
       const artState = await getArtifactState();
 
@@ -388,6 +407,16 @@ describe('workforce-checkpoint-c-remediation-02.integration (Terminal States, Dr
       } finally {
         manualClient.release();
       }
+
+      // Checkpoint D auto-enqueues compliance_review on manual revision; mark it succeeded
+      // so change-request tests only pick up their target scriptwriting unit
+      await pool.query(
+        `UPDATE job_executions
+         SET status = 'succeeded', started_at = COALESCE(started_at, created_at), completed_at = NOW(),
+             lease_owner = NULL, lease_expires_at = NULL, last_error_category = NULL, updated_at = NOW()
+         WHERE work_order_id = $1 AND job_type = 'compliance_review'`,
+        [workOrderId],
+      );
 
       // 3. Now the change request unit finishes and calls settleScriptUnitAtomic (which detects stale base)
       const claimed = await jobAdapter.claimNextJob({

@@ -220,3 +220,96 @@ export const getChangeRequestByIdRouteSchema = {
     additionalProperties: false,
   },
 } as const;
+
+export const getComplianceRouteSchema = {
+  params: {
+    type: 'object',
+    required: ['workspaceId', 'artifactId'],
+    properties: {
+      workspaceId: { type: 'string', pattern: uuidPattern },
+      artifactId: { type: 'string', pattern: uuidPattern },
+    },
+    additionalProperties: false,
+  },
+  querystring: {
+    type: 'object',
+    properties: {
+      revisionNumber: { type: 'integer', minimum: 1 },
+    },
+    additionalProperties: false,
+  },
+} as const;
+
+export const listDecisionsRouteSchema = {
+  params: {
+    type: 'object',
+    required: ['workspaceId', 'artifactId'],
+    properties: {
+      workspaceId: { type: 'string', pattern: uuidPattern },
+      artifactId: { type: 'string', pattern: uuidPattern },
+    },
+    additionalProperties: false,
+  },
+} as const;
+
+export const acceptRevisionRouteSchema = {
+  headers: {
+    type: 'object',
+    required: ['idempotency-key'],
+    properties: {
+      'idempotency-key': { type: 'string', pattern: '^[!-~]{1,128}$' },
+      origin: { type: 'string' },
+    },
+  },
+  params: {
+    type: 'object',
+    required: ['workspaceId', 'artifactId'],
+    properties: {
+      workspaceId: { type: 'string', pattern: uuidPattern },
+      artifactId: { type: 'string', pattern: uuidPattern },
+    },
+    additionalProperties: false,
+  },
+  body: {
+    type: 'object',
+    required: ['expectedVersion', 'revisionNumber', 'contentHashHex'],
+    properties: {
+      expectedVersion: { type: 'integer', minimum: 1 },
+      revisionNumber: { type: 'integer', minimum: 1 },
+      contentHashHex: { type: 'string', pattern: '^[0-9a-fA-F]{64}$' },
+      note: { type: 'string', maxLength: 500 },
+    },
+    additionalProperties: false,
+  },
+} as const;
+
+export const rejectRevisionRouteSchema = {
+  headers: {
+    type: 'object',
+    required: ['idempotency-key'],
+    properties: {
+      'idempotency-key': { type: 'string', pattern: '^[!-~]{1,128}$' },
+      origin: { type: 'string' },
+    },
+  },
+  params: {
+    type: 'object',
+    required: ['workspaceId', 'artifactId'],
+    properties: {
+      workspaceId: { type: 'string', pattern: uuidPattern },
+      artifactId: { type: 'string', pattern: uuidPattern },
+    },
+    additionalProperties: false,
+  },
+  body: {
+    type: 'object',
+    required: ['expectedVersion', 'revisionNumber', 'contentHashHex', 'reason'],
+    properties: {
+      expectedVersion: { type: 'integer', minimum: 1 },
+      revisionNumber: { type: 'integer', minimum: 1 },
+      contentHashHex: { type: 'string', pattern: '^[0-9a-fA-F]{64}$' },
+      reason: { type: 'string', minLength: 1, maxLength: 2000 },
+    },
+    additionalProperties: false,
+  },
+} as const;

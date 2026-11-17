@@ -67,6 +67,72 @@ export const mockArtifactDetail = {
   },
 };
 
+export const mockComplianceEvaluation = {
+  id: '019318b2-5f33-722e-a5df-036f007b8911',
+  workspaceId: TEST_WORKSPACE_ID,
+  artifactId: mockArtifactDetail.artifact.id,
+  revisionNumber: 1,
+  contentHashHex: 'a'.repeat(64),
+  policyVersion: '2026-03-01.1',
+  policyHashHex: 'b'.repeat(64),
+  status: 'completed',
+  blockingCount: 0,
+  warningCount: 1,
+  infoCount: 0,
+  evaluatedAt: '2026-11-08T00:00:00.000Z',
+  evaluatedByActorType: 'system',
+  evaluatedByActorId: '0192b012-3456-789a-8bcd-ef0123456709',
+  operationId: '019318b2-5f33-722e-a5df-036f007b8912',
+  findings: [
+    {
+      id: '019318b2-5f33-722e-a5df-036f007b8913',
+      workspaceId: TEST_WORKSPACE_ID,
+      evaluationId: '019318b2-5f33-722e-a5df-036f007b8911',
+      ruleId: 'COMPL_CLAIM_SUBSTANTIATION',
+      severity: 'warning',
+      source: 'ai_advisory',
+      fingerprintHex: 'c'.repeat(64),
+      videoNumber: 1,
+      fieldPath: 'videos[0].hook.spokenHook',
+      flaggedText: 'Fast shipping',
+      message: 'Consider referencing merchant fact for delivery speed',
+      suggestedFix: null,
+      evidenceReferences: [],
+      createdAt: '2026-11-08T00:00:00.000Z',
+    },
+  ],
+};
+
+export const mockReviewDecision = {
+  id: '019318b2-5f33-722e-a5df-036f007b8921',
+  workspaceId: TEST_WORKSPACE_ID,
+  artifactId: mockArtifactDetail.artifact.id,
+  revisionNumber: 1,
+  contentHashHex: 'a'.repeat(64),
+  actorUserId: '0192b012-3456-789a-8bcd-ef0123456709',
+  decision: 'accepted',
+  reason: null,
+  note: 'Approved for production',
+  complianceEvaluationId: mockComplianceEvaluation.id,
+  createdAt: '2026-11-08T00:00:00.000Z',
+};
+
+export const mockApprovalSnapshot = {
+  id: '019318b2-5f33-722e-a5df-036f007b8931',
+  workspaceId: TEST_WORKSPACE_ID,
+  artifactId: mockArtifactDetail.artifact.id,
+  revisionNumber: 1,
+  contentHashHex: 'a'.repeat(64),
+  approvedByUserId: '0192b012-3456-789a-8bcd-ef0123456709',
+  complianceEvaluationId: mockComplianceEvaluation.id,
+  policyVersion: '2026-03-01.1',
+  policyHashHex: 'b'.repeat(64),
+  snapshotContentJson: {},
+  evidenceReferencesJson: [],
+  affiliateDisclosureText: 'Sponsored affiliate content',
+  createdAt: '2026-11-08T00:00:00.000Z',
+};
+
 export function createTestWorkforceDeps(options?: {
   readonly defaultUserId?: UserId;
   readonly defaultRole?: WorkspaceRole;
@@ -211,6 +277,56 @@ export function createTestWorkforceDeps(options?: {
         version: 1,
       }),
       listScriptUnits: vi.fn().mockResolvedValue([]),
+      getComplianceEvaluation: vi.fn().mockImplementation((_ws, artId, revNum) => {
+        if (artId === mockArtifactDetail.artifact.id && (!revNum || revNum === 1)) {
+          return Promise.resolve(mockComplianceEvaluation);
+        }
+        return Promise.resolve(null);
+      }),
+      listReviewDecisions: vi.fn().mockImplementation((_ws, artId) => {
+        if (artId === mockArtifactDetail.artifact.id) {
+          return Promise.resolve([mockReviewDecision]);
+        }
+        return Promise.resolve([]);
+      }),
+      getApprovalSnapshot: vi.fn().mockImplementation((_ws, artId, revNum) => {
+        if (artId === mockArtifactDetail.artifact.id && (!revNum || revNum === 1)) {
+          return Promise.resolve(mockApprovalSnapshot);
+        }
+        return Promise.resolve(null);
+      }),
+      acceptScriptRevision: vi.fn().mockImplementation((params) => {
+        if (params.revisionNumber !== 1) {
+          throw new Error('Precondition failed: Revision is not current');
+        }
+        return Promise.resolve({
+          artifact: {
+            ...mockArtifactDetail.artifact,
+            currentLifecycleStatus: 'accepted',
+            version: params.expectedVersion + 1,
+          },
+          decision: mockReviewDecision,
+          approvalSnapshot: mockApprovalSnapshot,
+        });
+      }),
+      rejectScriptRevision: vi.fn().mockImplementation((params) => {
+        if (params.revisionNumber !== 1) {
+          throw new Error('Precondition failed: Revision is not current');
+        }
+        return Promise.resolve({
+          artifact: {
+            ...mockArtifactDetail.artifact,
+            currentLifecycleStatus: 'rejected',
+            version: params.expectedVersion + 1,
+          },
+          decision: {
+            ...mockReviewDecision,
+            decision: 'rejected',
+            reason: params.reason,
+            note: null,
+          },
+        });
+      }),
     },
   };
 }

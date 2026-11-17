@@ -98,3 +98,49 @@ export function normalizeRequestChangesPayload(
     targetVariantCount: payload.targetVariantCount,
   });
 }
+
+/**
+ * Normalizes logical accept script revision payload for idempotency key retention comparison.
+ */
+export function normalizeAcceptRevisionPayload(
+  workspaceId: string,
+  artifactId: string,
+  payload: {
+    readonly expectedVersion: number;
+    readonly revisionNumber: number;
+    readonly contentHashHex: string;
+    readonly note?: string | undefined;
+  },
+): string {
+  return JSON.stringify({
+    workspaceId: workspaceId.trim(),
+    artifactId: artifactId.trim(),
+    expectedVersion: payload.expectedVersion,
+    revisionNumber: payload.revisionNumber,
+    contentHashHex: payload.contentHashHex.trim().toLowerCase(),
+    note: payload.note?.trim() || null,
+  });
+}
+
+/**
+ * Normalizes logical reject script revision payload for idempotency key retention comparison.
+ */
+export function normalizeRejectRevisionPayload(
+  workspaceId: string,
+  artifactId: string,
+  payload: {
+    readonly expectedVersion: number;
+    readonly revisionNumber: number;
+    readonly contentHashHex: string;
+    readonly reason: string;
+  },
+): string {
+  return JSON.stringify({
+    workspaceId: workspaceId.trim(),
+    artifactId: artifactId.trim(),
+    expectedVersion: payload.expectedVersion,
+    revisionNumber: payload.revisionNumber,
+    contentHashHex: payload.contentHashHex.trim().toLowerCase(),
+    reason: payload.reason.trim(),
+  });
+}

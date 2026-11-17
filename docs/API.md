@@ -40,6 +40,17 @@ The Checkpoint C content studio, immutable revision history, manual editing, and
 - `POST /api/v1/workspaces/{workspaceId}/artifacts/{artifactId}/request-changes`: Targeted change request by an editor/owner against an exact base revision. Validates instruction text (1..2000 chars), selected video numbers (subset of 1..5), target variant count (1..3), reserves budget, and enqueues durable regeneration units for selected videos only under the 3-concurrency capacity gate. Returns `202 Accepted` with `changeRequestId`.
 - `GET /api/v1/workspaces/{workspaceId}/artifacts/{artifactId}/change-requests/{changeRequestId}`: Polling endpoint for change request execution status (`pending`, `in_progress`, `completed`, `failed`), failure reasons, and resulting revision number once assembled.
 
+### Sprint 3 Checkpoint D: Compliance Review & Human Approval
+
+The Checkpoint D compliance evaluation inspection, review decision history, and human-only accept/reject routes are implemented and documented in OpenAPI (`openapi/openapi.json`):
+
+- `GET /api/v1/workspaces/{workspaceId}/artifacts/{artifactId}/compliance`: Returns latest compliance evaluation for the artifact (or specific revision query param), policy version, policy hash, severity counts, and all compliance findings grouped by source (`deterministic` vs `ai_advisory`) and severity (`info`, `warning`, `blocking`).
+- `GET /api/v1/workspaces/{workspaceId}/artifacts/{artifactId}/decisions`: Lists historical human review decisions (`accept`, `reject`, `request_changes`) with actors, reasons, and timestamps.
+- `POST /api/v1/workspaces/{workspaceId}/artifacts/{artifactId}/accept`: Human-only approval of the current script revision. Requires `canManage` (editor/owner), `Idempotency-Key`, and exact optimistic preconditions (`expectedVersion`, `revisionNumber`, `contentHashHex`). Fails with `422 Unprocessable Content` if blocking compliance findings exist. Creates an immutable approval snapshot (`content_approval_snapshots`), completes work order handoff state, and returns `200 OK`.
+- `POST /api/v1/workspaces/{workspaceId}/artifacts/{artifactId}/reject`: Human-only rejection with bounded reason (1..2000 chars). Sets lifecycle status to `rejected`, records immutable decision, and returns `200 OK`.
+
+Explicit Boundary: No publication scheduling, social OAuth platform connection, media asset generation, or Checkpoint E office animation polish is implemented.
+
 ## 1. Contract principles
 
 - Base path: `/api/v1`.

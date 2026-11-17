@@ -13,6 +13,7 @@ import {
   type RawIdempotencyRow,
 } from '../tenancy/idempotency-row-mapper.js';
 import { getArtifactRevisionByNumberQuery } from './workforce-revision-queries.js';
+import { enqueueComplianceEvaluationTransaction } from './workforce-compliance-enqueue.js';
 
 export async function createManualRevisionTransaction(
   client: pg.PoolClient,
@@ -269,10 +270,20 @@ export async function createManualRevisionTransaction(
   // 10. Update artifact
   await client.query(
     `UPDATE content_artifacts
-     SET current_revision_number = $1, version = version + 1, updated_at = NOW()
+     SET current_revision_number = $1, lifecycle_status = 'review_required', version = version + 1, updated_at = NOW()
      WHERE workspace_id = $2 AND id = $3`,
     [newRevNum, workspaceId, artifactId],
   );
+
+  // Automatically prepare/enqueue compliance evaluation for new manual revision
+  await enqueueComplianceEvaluationTransaction(client, {
+    workspaceId,
+    productId: art.product_id,
+    workOrderId: art.work_order_id,
+    artifactId,
+    revisionNumber: newRevNum,
+    actorUserId,
+  });
 
   // 11. Audit event
   await client.query(

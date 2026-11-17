@@ -227,6 +227,11 @@ describe('workforce-planning-execution.integration (Controlled Fake-Provider Sli
         usage: fakeUsage,
         provenance: fakeProv,
       }),
+      executeComplianceAdvisory: async () => ({
+        success: false,
+        usage: fakeUsage,
+        provenance: fakeProv,
+      }),
     };
   }
 

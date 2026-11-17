@@ -183,3 +183,34 @@ export {
   type ArtifactLineageRecord,
   type ArtifactLineageType,
 } from './artifact-lineage-types.js';
+
+export {
+  COMPLIANCE_ADVISORY_STATUSES,
+  COMPLIANCE_EVALUATION_RESULTS,
+  COMPLIANCE_EVALUATION_STATUSES,
+  COMPLIANCE_SEVERITIES,
+  COMPLIANCE_SOURCES,
+  CONTENT_REVIEW_DECISION_TYPES,
+  type ComplianceAdvisoryStatus,
+  type ComplianceEvaluationResult,
+  type ComplianceEvaluationStatus,
+  type ComplianceEvaluationSnapshot,
+  type ComplianceFinding,
+  type ComplianceReportContent,
+  type ComplianceSeverity,
+  type ComplianceSource,
+  type ContentApprovalSnapshot,
+  type ContentReviewDecisionSnapshot,
+  type ContentReviewDecisionType,
+} from './compliance-types.js';
+
+export {
+  CURRENT_COMPLIANCE_POLICY_VERSION,
+  PROHIBITED_CLAIM_PATTERNS,
+  computeCompliancePolicyHash,
+  computeFindingFingerprint,
+  evaluateDeterministicCompliance,
+  type DeterministicComplianceInput,
+  type DeterministicComplianceResult,
+  type ProhibitedPatternRule,
+} from './compliance-policy.js';

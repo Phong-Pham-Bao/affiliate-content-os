@@ -1,13 +1,20 @@
 import type pg from 'pg';
 import type {
+  AcceptScriptRevisionParams,
+  AcceptScriptRevisionResult,
   ArtifactChangeRequestDTO,
+  ComplianceEvaluationDTO,
+  ContentApprovalSnapshotDTO,
   ContentArtifactDetailDTO,
   ContentArtifactRevisionDTO,
   ContentArtifactSummaryDTO,
+  ContentReviewDecisionDTO,
   CreateManualRevisionParams,
   DecodedWorkOrderCursor,
   KickoffTransactionResult,
   KickoffWorkOrderAtomicParams,
+  RejectScriptRevisionParams,
+  RejectScriptRevisionResult,
   RequestScriptChangesParams,
   RetryWorkOrderPlanningAtomicParams,
   RetryWorkOrderPlanningResult,
@@ -40,6 +47,13 @@ import {
 } from './workforce-revision-queries.js';
 import { createManualRevisionTransaction } from './workforce-manual-revision.js';
 import { requestScriptChangesTransaction } from './workforce-request-changes.js';
+import {
+  queryComplianceEvaluation,
+  queryReviewDecisions,
+  queryApprovalSnapshot,
+} from './workforce-compliance-queries.js';
+import { acceptScriptRevisionTransaction } from './workforce-accept-revision.js';
+import { rejectScriptRevisionTransaction } from './workforce-reject-revision.js';
 import type { KickoffTestHooks } from './workforce-types.js';
 import { mapWorkItemRowToSnapshot } from './workforce-mappers.js';
 
@@ -185,5 +199,44 @@ export class PostgresWorkforceAdapter implements WorkforcePersistencePort {
     workOrderId: WorkOrderId,
   ): Promise<readonly WorkOrderActivityDTO[]> {
     return queryWorkOrderActivities(this.pool, workspaceId, workOrderId);
+  }
+
+  public async getComplianceEvaluation(
+    workspaceId: WorkspaceId,
+    artifactId: string,
+    revisionNumber?: number | undefined,
+  ): Promise<ComplianceEvaluationDTO | null> {
+    return this.withClient((client) =>
+      queryComplianceEvaluation(client, workspaceId, artifactId, revisionNumber),
+    );
+  }
+
+  public async listReviewDecisions(
+    workspaceId: WorkspaceId,
+    artifactId: string,
+  ): Promise<readonly ContentReviewDecisionDTO[]> {
+    return this.withClient((client) => queryReviewDecisions(client, workspaceId, artifactId));
+  }
+
+  public async getApprovalSnapshot(
+    workspaceId: WorkspaceId,
+    artifactId: string,
+    revisionNumber?: number | undefined,
+  ): Promise<ContentApprovalSnapshotDTO | null> {
+    return this.withClient((client) =>
+      queryApprovalSnapshot(client, workspaceId, artifactId, revisionNumber),
+    );
+  }
+
+  public async acceptScriptRevision(
+    params: AcceptScriptRevisionParams,
+  ): Promise<AcceptScriptRevisionResult> {
+    return this.withTransaction((client) => acceptScriptRevisionTransaction(client, params));
+  }
+
+  public async rejectScriptRevision(
+    params: RejectScriptRevisionParams,
+  ): Promise<RejectScriptRevisionResult> {
+    return this.withTransaction((client) => rejectScriptRevisionTransaction(client, params));
   }
 }

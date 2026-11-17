@@ -286,23 +286,26 @@ Exit evidence:
 - Every affirmative product claim resolves to allowed evidence.
 - Full quality gates pass clean: `pnpm format`, `pnpm check`, `pnpm test:integration`, `pnpm db:migrate:validate` (twice), `git diff --check`, secret scan.
 
-### Checkpoint D — Compliance and human approval
+### Checkpoint D — Compliance and human approval (COMPLETED)
 
 Goal: make the package safe and explicitly human-controlled.
 
 Deliverables:
 
-- Versioned deterministic compliance rules.
-- Compliance Reviewer advisory artifact.
-- Blocking unsupported-claim/evidence checks.
-- Accept, reject, and request-changes transitions bound to revision hashes.
-- Final package approval and immutable audit history.
+- Versioned deterministic compliance rules (`2026-11-17` policy, prohibited claims, structure, evidence coherence, affiliate disclosure).
+- Compliance Reviewer advisory artifact and durable worker processor with 1 logical call + 1 repair limit.
+- Deterministic preflight blocking unsupported-claim/evidence checks without provider waste.
+- Accept, reject, and request-changes transitions bound to exact revision hashes and optimistic concurrency.
+- Final package approval snapshot and immutable audit history.
+- Content Studio compliance inspection, warning review, and human accept/reject actions.
+- Explicit handoff to downstream production without publishing or social integration.
 
 Exit evidence:
 
 - AI cannot approve its own output.
-- Material revision invalidates prior approval.
+- Material revision invalidates prior approval and auto-enqueues fresh compliance evaluation.
 - Rejected and blocked artifacts cannot be handed to future publishing workflows.
+- Full quality gates pass clean: `pnpm check`, `pnpm test:integration`, `pnpm db:migrate:validate` (twice), `git diff --check a0df855..HEAD`, secret scan.
 
 ### Checkpoint E — Virtual office experience and Sprint 3 release
 

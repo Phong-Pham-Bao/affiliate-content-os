@@ -201,3 +201,68 @@ export interface WorkOrderActivityDTO {
   readonly occurredAt: IsoTimestamp;
   readonly changesJson: Record<string, unknown>;
 }
+
+export interface ComplianceFindingDTO {
+  readonly fingerprint: string;
+  readonly code: string;
+  readonly severity: 'info' | 'warning' | 'blocking';
+  readonly source: 'deterministic' | 'ai_advisory';
+  readonly videoNumber: number | null;
+  readonly fieldPath: string;
+  readonly message: string;
+  readonly evidenceIds: readonly string[];
+}
+
+export interface ComplianceEvaluationDTO {
+  readonly id: string;
+  readonly workspaceId: WorkspaceId;
+  readonly productId: ProductId;
+  readonly workOrderId: WorkOrderId;
+  readonly artifactId: string;
+  readonly revisionNumber: number;
+  readonly policyVersion: string;
+  readonly policyHashHex: string;
+  readonly status: 'queued' | 'running' | 'completed' | 'failed';
+  readonly result: 'pending' | 'passed' | 'warning' | 'blocked' | 'failed';
+  readonly blockingCount: number;
+  readonly warningCount: number;
+  readonly infoCount: number;
+  readonly deterministicPassed: boolean;
+  readonly aiAdvisoryStatus: 'skipped' | 'pending' | 'completed' | 'failed';
+  readonly evaluationReportArtifactId: string | null;
+  readonly findings: readonly ComplianceFindingDTO[];
+  readonly createdAt: IsoTimestamp;
+  readonly updatedAt: IsoTimestamp;
+}
+
+export interface ContentReviewDecisionDTO {
+  readonly id: string;
+  readonly workspaceId: WorkspaceId;
+  readonly artifactId: string;
+  readonly revisionNumber: number;
+  readonly contentHashHex: string;
+  readonly evaluationId: string | null;
+  readonly decision: 'accept' | 'reject' | 'request_changes';
+  readonly actorUserId: string;
+  readonly reason: string | null;
+  readonly metadata: Record<string, unknown>;
+  readonly createdAt: IsoTimestamp;
+}
+
+export interface ContentApprovalSnapshotDTO {
+  readonly id: string;
+  readonly workspaceId: WorkspaceId;
+  readonly artifactId: string;
+  readonly revisionNumber: number;
+  readonly contentHashHex: string;
+  readonly evaluationId: string;
+  readonly policyVersion: string;
+  readonly policyHashHex: string;
+  readonly decisionId: string;
+  readonly approvedByUserId: string;
+  readonly evidenceIds: readonly string[];
+  readonly disclosureState: Record<string, unknown>;
+  readonly snapshot: Record<string, unknown>;
+  readonly snapshotHashHex: string;
+  readonly createdAt: IsoTimestamp;
+}

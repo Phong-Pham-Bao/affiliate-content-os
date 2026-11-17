@@ -408,16 +408,16 @@ describe('workforce-checkpoint-c-execution.integration (Execution, Capacity, Ide
     expect(swAsgFinal!.officeState).toBe('completed');
 
     const crFinal = woDetailFinal!.workItems.find((w) => w.taskKey === 'compliance_review');
-    expect(crFinal!.status).toBe('ready'); // Unlocked and ready!
+    expect(crFinal!.status).toBe('running'); // Auto-enqueued in Checkpoint D!
     const crAsgFinal = woDetailFinal!.assignments.find((a) => a.roleKey === 'compliance_reviewer');
-    expect(crAsgFinal!.officeState).toBe('preparing');
+    expect(crAsgFinal!.officeState).toBe('queued');
 
-    // Verify zero compliance jobs are queued or running
+    // Verify compliance job is automatically queued for revision 1 in Checkpoint D
     const compJobs = await pool.query(
       `SELECT * FROM job_executions WHERE work_order_id = $1 AND job_type = 'compliance_review'`,
       [params.workOrder.id],
     );
-    expect(compJobs.rows).toHaveLength(0);
+    expect(compJobs.rows).toHaveLength(1);
 
     // 10. Assembly idempotency: calling assembleScriptPackageInitialAtomic again produces no new rows or charges
     const clIdempotent = await pool.connect();

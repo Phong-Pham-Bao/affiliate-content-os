@@ -93,6 +93,11 @@ describe('workforce-processor.integration (Production Worker Processor Path)', (
           outputSchemaVersion: 1,
         },
       }),
+      executeComplianceAdvisory: async () => ({
+        success: false,
+        usage: {} as never,
+        provenance: {} as never,
+      }),
     };
   }
 
