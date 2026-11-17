@@ -6,6 +6,7 @@ export interface ValidatedCompliancePayload {
   readonly workOrderId: string;
   readonly artifactId: string;
   readonly revisionNumber: number;
+  readonly contentHashHex: string;
   readonly policyVersion: string;
   readonly operationId: string;
   readonly aiRunId: string;
@@ -13,7 +14,6 @@ export interface ValidatedCompliancePayload {
   readonly workItemId?: string | null | undefined;
   readonly assignmentId?: string | null | undefined;
   readonly reservedMicrounits?: number | undefined;
-  readonly contentHashHex?: string | undefined;
 }
 
 export function parseAndValidateCompliancePayload(
@@ -52,6 +52,11 @@ export function parseAndValidateCompliancePayload(
   if (typeof p.evaluationId !== 'string' || !p.evaluationId) {
     throw new Error('Missing or invalid evaluationId in compliance payload');
   }
+  if (typeof p.contentHashHex !== 'string' || !/^[0-9a-f]{64}$/i.test(p.contentHashHex)) {
+    throw new Error(
+      'Missing or invalid contentHashHex in compliance payload (must be 64-hex string)',
+    );
+  }
 
   return {
     workspaceId: p.workspaceId,
@@ -59,6 +64,7 @@ export function parseAndValidateCompliancePayload(
     workOrderId: p.workOrderId,
     artifactId: p.artifactId,
     revisionNumber: p.revisionNumber,
+    contentHashHex: p.contentHashHex.toLowerCase(),
     policyVersion: p.policyVersion,
     operationId: p.operationId,
     aiRunId: p.aiRunId,
@@ -66,7 +72,6 @@ export function parseAndValidateCompliancePayload(
     workItemId: typeof p.workItemId === 'string' ? p.workItemId : null,
     assignmentId: typeof p.assignmentId === 'string' ? p.assignmentId : null,
     reservedMicrounits: typeof p.reservedMicrounits === 'number' ? p.reservedMicrounits : undefined,
-    contentHashHex: typeof p.contentHashHex === 'string' ? p.contentHashHex : undefined,
   };
 }
 

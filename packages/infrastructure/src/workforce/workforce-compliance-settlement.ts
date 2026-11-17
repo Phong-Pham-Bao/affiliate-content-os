@@ -3,7 +3,6 @@ import type pg from 'pg';
 import {
   generateUuidV7,
   JobLeaseExpiredError,
-  type AIGatewayPort,
   type ExecuteComplianceAdvisoryResult,
   type AIScriptComplianceInput,
 } from '@affiliate-content-os/application';
@@ -21,6 +20,27 @@ import {
   type ScriptPackage,
 } from '@affiliate-content-os/domain';
 import { DatabaseError } from '../database/errors.js';
+
+export interface BriefSnapshot {
+  readonly briefHashHex: string;
+  readonly briefVersion: number;
+}
+
+export interface PlanningRevisionsSnapshot {
+  readonly productCampaignPlanRevisionId: string;
+  readonly productCampaignPlanRevisionNumber: number;
+  readonly audienceInsightBoardRevisionId: string;
+  readonly audienceInsightBoardRevisionNumber: number;
+  readonly videoSeriesPlanRevisionId: string;
+  readonly videoSeriesPlanRevisionNumber: number;
+}
+
+export interface ContextPackageSnapshot {
+  readonly contextPackageId: string;
+  readonly allowedFactIds: readonly string[];
+  readonly allowedAnalysisIds: readonly string[];
+  readonly revokedEvidenceIds: readonly string[];
+}
 
 export interface PrepareComplianceReviewParams {
   readonly workspaceId: string;
@@ -65,6 +85,9 @@ export type PrepareComplianceResult =
       readonly reservedSpend: number;
       readonly policyVersion: string;
       readonly policyHashHex: string;
+      readonly briefSnapshot: BriefSnapshot;
+      readonly planningRevisionsSnapshot: PlanningRevisionsSnapshot;
+      readonly contextPackageSnapshot: ContextPackageSnapshot;
     };
 
 export async function prepareComplianceReviewExecution(
@@ -164,7 +187,7 @@ export async function prepareComplianceReviewExecution(
 
   // 3. Check evaluation
   const evalRes = await client.query(
-    `SELECT id, status, result, policy_version, policy_hash, revision_number
+    `SELECT id, status, result, policy_version, policy_hash, revision_number, script_content_hash
      FROM compliance_evaluations
      WHERE id = $1 AND workspace_id = $2`,
     [evaluationId, workspaceId],
@@ -207,6 +230,16 @@ export async function prepareComplianceReviewExecution(
   }
   const scriptContent = revRes.rows[0].content_json as ScriptPackage;
   const contentHashHex = Buffer.from(revRes.rows[0].content_hash).toString('hex');
+
+  // Verify evaluation record script content hash matches revision content hash
+  const evalScriptHashHex = Buffer.from(evalRes.rows[0].script_content_hash).toString('hex');
+  if (evalScriptHashHex.toLowerCase() !== contentHashHex.toLowerCase()) {
+    return {
+      kind: 'drift_detected',
+      reason: `Script content hash in evaluation record does not match artifact revision: eval=${evalScriptHashHex}, rev=${contentHashHex}`,
+      reservedSpend,
+    };
+  }
 
   // Verify persisted hash matches expected content hash if provided
   if (
@@ -411,7 +444,7 @@ export async function prepareComplianceReviewExecution(
     };
   }
 
-  // 12. Snapshot provider input
+  // 12. Snapshot provider input and durable context state
   const providerInput: AIScriptComplianceInput = {
     workspaceId: parseWorkspaceId(workspaceId),
     productId: parseProductId(productId),
@@ -426,6 +459,27 @@ export async function prepareComplianceReviewExecution(
     .update(JSON.stringify(providerInput), 'utf8')
     .digest('hex');
 
+  const briefSnapshot: BriefSnapshot = {
+    briefHashHex: actualBriefHashHex,
+    briefVersion: Number(briefRes.rows[0].brief_version),
+  };
+
+  const planningRevisionsSnapshot: PlanningRevisionsSnapshot = {
+    productCampaignPlanRevisionId: campaignRow.current_revision_id,
+    productCampaignPlanRevisionNumber: campaignRow.current_revision_number,
+    audienceInsightBoardRevisionId: audienceRow.current_revision_id,
+    audienceInsightBoardRevisionNumber: audienceRow.current_revision_number,
+    videoSeriesPlanRevisionId: seriesRow.current_revision_id,
+    videoSeriesPlanRevisionNumber: seriesRow.current_revision_number,
+  };
+
+  const contextPackageSnapshot: ContextPackageSnapshot = {
+    contextPackageId,
+    allowedFactIds: Array.from(allowedFactIds).sort(),
+    allowedAnalysisIds: Array.from(allowedAnalysisIds).sort(),
+    revokedEvidenceIds: Array.from(revokedEvidenceIds).sort(),
+  };
+
   return {
     kind: 'execute_advisory',
     providerInput,
@@ -436,6 +490,9 @@ export async function prepareComplianceReviewExecution(
     reservedSpend,
     policyVersion: currentCodePolicyVersion,
     policyHashHex: currentCodePolicyHash,
+    briefSnapshot,
+    planningRevisionsSnapshot,
+    contextPackageSnapshot,
   };
 }
 
@@ -482,7 +539,9 @@ export async function settleCompliancePreflightBlockerAtomic(
 
   // 1. Verify lease
   const jobRes = await client.query(
-    `SELECT id, status, version, lease_owner, work_item_id
+    `SELECT id, status, version, lease_owner, lease_expires_at,
+            (lease_expires_at < NOW()) AS is_lease_expired,
+            work_item_id
      FROM job_executions
      WHERE id = $1 AND workspace_id = $2
      FOR UPDATE`,
@@ -491,6 +550,8 @@ export async function settleCompliancePreflightBlockerAtomic(
   if (jobRes.rowCount === 0 || !jobRes.rows[0]) throw new DatabaseError(`Job ${jobId} not found`);
   const job = jobRes.rows[0];
   if (
+    job.is_lease_expired ||
+    !job.lease_expires_at ||
     Number(job.version) !== jobVersion ||
     job.lease_owner !== workerId ||
     job.status !== 'running'
@@ -592,7 +653,7 @@ export async function settleCompliancePreflightBlockerAtomic(
   );
 
   // 5. Update evaluation
-  await client.query(
+  const evalUpdateRes = await client.query(
     `UPDATE compliance_evaluations
      SET status = 'completed',
          result = 'blocked',
@@ -602,58 +663,78 @@ export async function settleCompliancePreflightBlockerAtomic(
          deterministic_passed = FALSE,
          ai_advisory_status = 'skipped',
          evaluation_report_artifact_id = $4,
+         evaluation_report_revision_number = $5,
+         evaluation_report_content_hash = $6,
          updated_at = NOW(),
          version = version + 1
-     WHERE id = $5 AND workspace_id = $6`,
+     WHERE id = $7 AND workspace_id = $8 AND status IN ('queued', 'running')`,
     [
       deterministicResult.blockingCount,
       deterministicResult.warningCount,
       deterministicResult.infoCount,
       reportArtifactId,
+      reportRevNum,
+      Buffer.from(reportHash),
       evaluationId,
       workspaceId,
     ],
   );
+  if (evalUpdateRes.rowCount !== 1) {
+    throw new DatabaseError(`Failed to update compliance_evaluations ${evaluationId}`);
+  }
 
   // 6. Update operation, ai_run, and job execution
   const resultLocation = `/artifacts/${reportArtifactId}/revisions/${reportRevNum}`;
-  await client.query(
+  const opRes = await client.query(
     `UPDATE operations
      SET status = 'succeeded', progress_percent = 100, result_location = $1,
          started_at = COALESCE(started_at, NOW()), completed_at = NOW(),
          error_category = NULL, error_code = NULL, error_message = NULL,
          updated_at = NOW(), version = version + 1
-     WHERE id = $2 AND workspace_id = $3`,
+     WHERE id = $2 AND workspace_id = $3 AND status IN ('queued', 'running')`,
     [resultLocation, operationId, workspaceId],
   );
+  if (opRes.rowCount !== 1) {
+    throw new DatabaseError(`Failed to update operations ${operationId}`);
+  }
 
-  await client.query(
+  const runRes = await client.query(
     `UPDATE ai_runs
      SET status = 'succeeded', provider = 'deterministic', model = 'rule_engine',
          started_at = COALESCE(started_at, NOW()), completed_at = NOW(),
          output_hash = $1, cost_microunits = 0, token_input = 0, token_output = 0,
          updated_at = NOW(), version = version + 1
-     WHERE id = $2 AND workspace_id = $3`,
+     WHERE id = $2 AND workspace_id = $3 AND status IN ('queued', 'running')`,
     [Buffer.from(reportHash), aiRunId, workspaceId],
   );
+  if (runRes.rowCount !== 1) {
+    throw new DatabaseError(`Failed to update ai_runs ${aiRunId}`);
+  }
 
-  await client.query(
+  const jobUpdateRes = await client.query(
     `UPDATE job_executions
      SET status = 'succeeded', lease_owner = NULL, lease_expires_at = NULL,
+         reserved_spend_microunits = 0,
          started_at = COALESCE(started_at, NOW()), completed_at = NOW(),
          last_error_category = NULL, updated_at = NOW(), version = version + 1
-     WHERE id = $1 AND workspace_id = $2`,
-    [jobId, workspaceId],
+     WHERE id = $1 AND workspace_id = $2 AND status = 'running' AND lease_owner = $3 AND version = $4`,
+    [jobId, workspaceId, workerId, jobVersion],
   );
+  if (jobUpdateRes.rowCount !== 1) {
+    throw new JobLeaseExpiredError(jobId);
+  }
 
   // 7. Work item & assignment
   if (job.work_item_id) {
-    await client.query(
+    const itemRes = await client.query(
       `UPDATE work_items
        SET status = 'review_required', started_at = COALESCE(started_at, NOW()), completed_at = NULL, updated_at = NOW(), version = version + 1
-       WHERE id = $1 AND workspace_id = $2`,
+       WHERE id = $1 AND workspace_id = $2 AND status IN ('queued', 'running')`,
       [job.work_item_id, workspaceId],
     );
+    if (itemRes.rowCount !== 1) {
+      throw new DatabaseError(`Failed to update work_items ${job.work_item_id}`);
+    }
     await client.query(
       `UPDATE agent_assignments
        SET office_state = 'review_required', updated_at = NOW(), version = version + 1
@@ -698,7 +779,9 @@ export async function settleComplianceBudgetExhaustedAtomic(
 
   // Verify lease
   const jobRes = await client.query(
-    `SELECT id, status, version, lease_owner, work_item_id, reserved_spend_microunits
+    `SELECT id, status, version, lease_owner, lease_expires_at,
+            (lease_expires_at < NOW()) AS is_lease_expired,
+            work_item_id, reserved_spend_microunits
      FROM job_executions
      WHERE id = $1 AND workspace_id = $2
      FOR UPDATE`,
@@ -707,6 +790,8 @@ export async function settleComplianceBudgetExhaustedAtomic(
   if (jobRes.rowCount === 0 || !jobRes.rows[0]) throw new DatabaseError(`Job ${jobId} not found`);
   const job = jobRes.rows[0];
   if (
+    job.is_lease_expired ||
+    !job.lease_expires_at ||
     Number(job.version) !== jobVersion ||
     job.lease_owner !== workerId ||
     job.status !== 'running'
@@ -716,13 +801,16 @@ export async function settleComplianceBudgetExhaustedAtomic(
 
   const reserved = Number(job.reserved_spend_microunits ?? 0);
   if (reserved > 0) {
-    await client.query(
+    const budgetRes = await client.query(
       `UPDATE workspace_ai_policies
        SET reserved_spend_microunits = GREATEST(0, reserved_spend_microunits - $1),
            updated_at = NOW(), version = version + 1
        WHERE workspace_id = $2`,
       [reserved, workspaceId],
     );
+    if (budgetRes.rowCount !== 1) {
+      throw new DatabaseError(`Failed to release budget reservation for workspace ${workspaceId}`);
+    }
   }
 
   // Persist findings from deterministic checks for transparency
@@ -750,7 +838,7 @@ export async function settleComplianceBudgetExhaustedAtomic(
   }
 
   // Update evaluation to non-approvable failed state
-  await client.query(
+  const evalUpdateRes = await client.query(
     `UPDATE compliance_evaluations
      SET status = 'failed',
          result = 'failed',
@@ -759,9 +847,12 @@ export async function settleComplianceBudgetExhaustedAtomic(
          info_count = $3,
          deterministic_passed = TRUE,
          ai_advisory_status = 'failed',
+         evaluation_report_artifact_id = NULL,
+         evaluation_report_revision_number = NULL,
+         evaluation_report_content_hash = NULL,
          updated_at = NOW(),
          version = version + 1
-     WHERE id = $4 AND workspace_id = $5`,
+     WHERE id = $4 AND workspace_id = $5 AND status IN ('queued', 'running')`,
     [
       deterministicResult.blockingCount,
       deterministicResult.warningCount,
@@ -770,41 +861,53 @@ export async function settleComplianceBudgetExhaustedAtomic(
       workspaceId,
     ],
   );
+  if (evalUpdateRes.rowCount !== 1) {
+    throw new DatabaseError(`Failed to update compliance_evaluations ${evaluationId}`);
+  }
 
   // Update operation, ai_run, and job execution to failed
-  await client.query(
+  const opUpdateRes = await client.query(
     `UPDATE operations
      SET status = 'failed', progress_percent = NULL,
          error_category = 'budget_exhausted', error_code = 'BUDGET_EXHAUSTED',
          error_message = 'Ngân sách AI của workspace không đủ để thực hiện đánh giá tuân thủ AI.',
          completed_at = NOW(), updated_at = NOW(), version = version + 1
-     WHERE id = $1 AND workspace_id = $2`,
+     WHERE id = $1 AND workspace_id = $2 AND status IN ('queued', 'running')`,
     [operationId, workspaceId],
   );
+  if (opUpdateRes.rowCount !== 1) {
+    throw new DatabaseError(`Failed to update operations ${operationId}`);
+  }
 
-  await client.query(
+  const runUpdateRes = await client.query(
     `UPDATE ai_runs
      SET status = 'failed', error_category = 'budget_exhausted',
          completed_at = NOW(), updated_at = NOW(), version = version + 1
-     WHERE id = $1 AND workspace_id = $2`,
+     WHERE id = $1 AND workspace_id = $2 AND status IN ('queued', 'running')`,
     [aiRunId, workspaceId],
   );
+  if (runUpdateRes.rowCount !== 1) {
+    throw new DatabaseError(`Failed to update ai_runs ${aiRunId}`);
+  }
 
-  await client.query(
+  const jobUpdateRes = await client.query(
     `UPDATE job_executions
      SET status = 'failed', lease_owner = NULL, lease_expires_at = NULL,
-         last_error_category = 'budget_exhausted', completed_at = NOW(),
-         updated_at = NOW(), version = version + 1
-     WHERE id = $1 AND workspace_id = $2`,
-    [jobId, workspaceId],
+         reserved_spend_microunits = 0, last_error_category = 'budget_exhausted',
+         completed_at = NOW(), updated_at = NOW(), version = version + 1
+     WHERE id = $1 AND workspace_id = $2 AND status = 'running' AND lease_owner = $3 AND version = $4`,
+    [jobId, workspaceId, workerId, jobVersion],
   );
+  if (jobUpdateRes.rowCount !== 1) {
+    throw new JobLeaseExpiredError(jobId);
+  }
 
   // Work item & assignment remain in failed / review_required state
   if (job.work_item_id) {
     await client.query(
       `UPDATE work_items
        SET status = 'failed', started_at = COALESCE(started_at, NOW()), completed_at = NOW(), updated_at = NOW(), version = version + 1
-       WHERE id = $1 AND workspace_id = $2`,
+       WHERE id = $1 AND workspace_id = $2 AND status IN ('queued', 'running')`,
       [job.work_item_id, workspaceId],
     );
     await client.query(
@@ -850,7 +953,9 @@ export async function settleComplianceDriftAtomic(
 
   // Verify lease
   const jobRes = await client.query(
-    `SELECT id, status, version, lease_owner, work_item_id
+    `SELECT id, status, version, lease_owner, lease_expires_at,
+            (lease_expires_at < NOW()) AS is_lease_expired,
+            work_item_id
      FROM job_executions
      WHERE id = $1 AND workspace_id = $2
      FOR UPDATE`,
@@ -859,6 +964,8 @@ export async function settleComplianceDriftAtomic(
   if (jobRes.rowCount === 0 || !jobRes.rows[0]) throw new DatabaseError(`Job ${jobId} not found`);
   const job = jobRes.rows[0];
   if (
+    job.is_lease_expired ||
+    !job.lease_expires_at ||
     Number(job.version) !== jobVersion ||
     job.lease_owner !== workerId ||
     job.status !== 'running'
@@ -881,45 +988,60 @@ export async function settleComplianceDriftAtomic(
   }
 
   // Mark evaluation as failed / non-approvable
-  await client.query(
+  const evalUpdateRes = await client.query(
     `UPDATE compliance_evaluations
      SET status = 'failed', result = 'failed', ai_advisory_status = 'failed',
+         evaluation_report_artifact_id = NULL,
+         evaluation_report_revision_number = NULL,
+         evaluation_report_content_hash = NULL,
          updated_at = NOW(), version = version + 1
-     WHERE id = $1 AND workspace_id = $2`,
+     WHERE id = $1 AND workspace_id = $2 AND status IN ('queued', 'running')`,
     [evaluationId, workspaceId],
   );
+  if (evalUpdateRes.rowCount !== 1) {
+    throw new DatabaseError(`Failed to update compliance_evaluations ${evaluationId}`);
+  }
 
   // Mark operation, ai_run, and job as failed
-  await client.query(
+  const opUpdateRes = await client.query(
     `UPDATE operations
      SET status = 'failed', error_category = 'invalid_evidence', error_code = 'CONTEXT_DRIFT',
          error_message = $1, completed_at = NOW(), updated_at = NOW(), version = version + 1
-     WHERE id = $2 AND workspace_id = $3`,
+     WHERE id = $2 AND workspace_id = $3 AND status IN ('queued', 'running')`,
     [reason, operationId, workspaceId],
   );
+  if (opUpdateRes.rowCount !== 1) {
+    throw new DatabaseError(`Failed to update operations ${operationId}`);
+  }
 
-  await client.query(
+  const runUpdateRes = await client.query(
     `UPDATE ai_runs
      SET status = 'failed', error_category = 'invalid_evidence',
          completed_at = NOW(), updated_at = NOW(), version = version + 1
-     WHERE id = $1 AND workspace_id = $2`,
+     WHERE id = $1 AND workspace_id = $2 AND status IN ('queued', 'running')`,
     [aiRunId, workspaceId],
   );
+  if (runUpdateRes.rowCount !== 1) {
+    throw new DatabaseError(`Failed to update ai_runs ${aiRunId}`);
+  }
 
-  await client.query(
+  const jobUpdateRes = await client.query(
     `UPDATE job_executions
      SET status = 'failed', lease_owner = NULL, lease_expires_at = NULL,
-         last_error_category = 'invalid_evidence', completed_at = NOW(),
-         updated_at = NOW(), version = version + 1
-     WHERE id = $1 AND workspace_id = $2`,
-    [jobId, workspaceId],
+         reserved_spend_microunits = 0, last_error_category = 'invalid_evidence',
+         completed_at = NOW(), updated_at = NOW(), version = version + 1
+     WHERE id = $1 AND workspace_id = $2 AND status = 'running' AND lease_owner = $3 AND version = $4`,
+    [jobId, workspaceId, workerId, jobVersion],
   );
+  if (jobUpdateRes.rowCount !== 1) {
+    throw new JobLeaseExpiredError(jobId);
+  }
 
   if (job.work_item_id) {
     await client.query(
       `UPDATE work_items
        SET status = 'failed', started_at = COALESCE(started_at, NOW()), completed_at = NOW(), updated_at = NOW(), version = version + 1
-       WHERE id = $1 AND workspace_id = $2`,
+       WHERE id = $1 AND workspace_id = $2 AND status IN ('queued', 'running')`,
       [job.work_item_id, workspaceId],
     );
     await client.query(
@@ -950,6 +1072,11 @@ export interface SettleComplianceReviewExecutionParams {
   readonly reservedSpend: number;
   readonly policyVersion: string;
   readonly policyHashHex: string;
+  readonly providerInput: AIScriptComplianceInput;
+  readonly providerInputHash: string;
+  readonly briefSnapshot: BriefSnapshot;
+  readonly planningRevisionsSnapshot: PlanningRevisionsSnapshot;
+  readonly contextPackageSnapshot: ContextPackageSnapshot;
   readonly providerResult: ExecuteComplianceAdvisoryResult | null;
 }
 
@@ -977,10 +1104,36 @@ export async function settleComplianceReviewExecutionAtomic(
     reservedSpend,
     policyVersion,
     policyHashHex,
+    providerInput,
+    providerInputHash,
+    briefSnapshot,
+    planningRevisionsSnapshot,
+    contextPackageSnapshot,
     providerResult,
   } = params;
 
-  // 1. Post-provider fencing: lease check
+  // 1. Post-provider fencing: provider input hash re-verification
+  const computedProviderInputHash = crypto
+    .createHash('sha256')
+    .update(JSON.stringify(providerInput), 'utf8')
+    .digest('hex');
+  if (computedProviderInputHash.toLowerCase() !== providerInputHash.toLowerCase()) {
+    await settleComplianceDriftAtomic(client, {
+      workspaceId,
+      jobId,
+      jobVersion,
+      workerId,
+      operationId,
+      aiRunId,
+      evaluationId,
+      workOrderId,
+      reason: 'Post-provider input hash does not match prepared provider input',
+      reservedSpend,
+    });
+    return { status: 'drift_canceled', evaluationId };
+  }
+
+  // 2. Post-provider fencing: lease check
   const jobRes = await client.query(
     `SELECT id, status, version, lease_owner, lease_expires_at,
             (lease_expires_at < NOW()) AS is_lease_expired,
@@ -1003,7 +1156,7 @@ export async function settleComplianceReviewExecutionAtomic(
     throw new JobLeaseExpiredError(jobId);
   }
 
-  // 2. Post-provider fencing: artifact current revision check
+  // 3. Post-provider fencing: artifact current revision check
   const artRes = await client.query(
     `SELECT current_revision_number
      FROM content_artifacts
@@ -1013,7 +1166,6 @@ export async function settleComplianceReviewExecutionAtomic(
   if (artRes.rowCount === 0 || !artRes.rows[0])
     throw new DatabaseError(`Artifact ${artifactId} not found`);
   if (Number(artRes.rows[0].current_revision_number) !== revisionNumber) {
-    // Post-provider revision drift!
     await settleComplianceDriftAtomic(client, {
       workspaceId,
       jobId,
@@ -1077,14 +1229,216 @@ export async function settleComplianceReviewExecutionAtomic(
     return { status: 'drift_canceled', evaluationId };
   }
 
-  // 3. Evaluate Provider Result
+  // Post-provider lineage and brief check
+  const lineageRes = await client.query(
+    `SELECT content_brief_hash, content_brief_version, planning_revision_ids_json
+     FROM content_artifact_lineage
+     WHERE workspace_id = $1 AND artifact_id = $2 AND revision_number = $3`,
+    [workspaceId, artifactId, revisionNumber],
+  );
+  if (lineageRes.rowCount === 0 || !lineageRes.rows[0]) {
+    await settleComplianceDriftAtomic(client, {
+      workspaceId,
+      jobId,
+      jobVersion,
+      workerId,
+      operationId,
+      aiRunId,
+      evaluationId,
+      workOrderId,
+      reason: `Lineage not found for script revision ${revisionNumber}`,
+      reservedSpend,
+    });
+    return { status: 'drift_canceled', evaluationId };
+  }
+
+  const expectedBriefHashHex = Buffer.from(lineageRes.rows[0].content_brief_hash).toString('hex');
+  const briefRes = await client.query(
+    `SELECT brief_hash, brief_version
+     FROM content_briefs
+     WHERE workspace_id = $1 AND work_order_id = $2
+     ORDER BY brief_version DESC LIMIT 1`,
+    [workspaceId, workOrderId],
+  );
+  if (briefRes.rowCount === 0 || !briefRes.rows[0]) {
+    await settleComplianceDriftAtomic(client, {
+      workspaceId,
+      jobId,
+      jobVersion,
+      workerId,
+      operationId,
+      aiRunId,
+      evaluationId,
+      workOrderId,
+      reason: `Content brief not found for work order ${workOrderId}`,
+      reservedSpend,
+    });
+    return { status: 'drift_canceled', evaluationId };
+  }
+  const actualBriefHashHex = Buffer.from(briefRes.rows[0].brief_hash).toString('hex');
+  const actualBriefVersion = Number(briefRes.rows[0].brief_version);
+  if (
+    expectedBriefHashHex.toLowerCase() !== actualBriefHashHex.toLowerCase() ||
+    actualBriefHashHex.toLowerCase() !== briefSnapshot.briefHashHex.toLowerCase() ||
+    actualBriefVersion !== briefSnapshot.briefVersion
+  ) {
+    await settleComplianceDriftAtomic(client, {
+      workspaceId,
+      jobId,
+      jobVersion,
+      workerId,
+      operationId,
+      aiRunId,
+      evaluationId,
+      workOrderId,
+      reason: 'Authoritative content brief drifted during compliance execution',
+      reservedSpend,
+    });
+    return { status: 'drift_canceled', evaluationId };
+  }
+
+  // Post-provider planning revisions check
+  const planningRes = await client.query<{
+    artifact_type: string;
+    current_revision_number: number;
+    current_revision_id: string;
+  }>(
+    `SELECT a.artifact_type, a.current_revision_number, r.id AS current_revision_id
+     FROM content_artifacts a
+     JOIN content_artifact_revisions r
+       ON r.artifact_id = a.id
+      AND r.revision_number = a.current_revision_number
+      AND r.workspace_id = a.workspace_id
+     WHERE a.workspace_id = $1 AND a.work_order_id = $2 AND a.product_id = $3
+       AND a.artifact_type IN ('product_campaign_plan', 'audience_insight_board', 'video_series_plan')`,
+    [workspaceId, workOrderId, productId],
+  );
+
+  const planningMap = new Map(planningRes.rows.map((r) => [r.artifact_type, r]));
+  const campaignRow = planningMap.get('product_campaign_plan');
+  const audienceRow = planningMap.get('audience_insight_board');
+  const seriesRow = planningMap.get('video_series_plan');
+
+  const isPlanningDrift =
+    planningRes.rowCount !== 3 ||
+    !campaignRow ||
+    campaignRow.current_revision_id !== planningRevisionsSnapshot.productCampaignPlanRevisionId ||
+    campaignRow.current_revision_number !==
+      planningRevisionsSnapshot.productCampaignPlanRevisionNumber ||
+    !audienceRow ||
+    audienceRow.current_revision_id !== planningRevisionsSnapshot.audienceInsightBoardRevisionId ||
+    audienceRow.current_revision_number !==
+      planningRevisionsSnapshot.audienceInsightBoardRevisionNumber ||
+    !seriesRow ||
+    seriesRow.current_revision_id !== planningRevisionsSnapshot.videoSeriesPlanRevisionId ||
+    seriesRow.current_revision_number !== planningRevisionsSnapshot.videoSeriesPlanRevisionNumber;
+
+  if (isPlanningDrift) {
+    await settleComplianceDriftAtomic(client, {
+      workspaceId,
+      jobId,
+      jobVersion,
+      workerId,
+      operationId,
+      aiRunId,
+      evaluationId,
+      workOrderId,
+      reason: 'Authoritative planning revisions drifted during compliance execution',
+      reservedSpend,
+    });
+    return { status: 'drift_canceled', evaluationId };
+  }
+
+  // Post-provider context package & evidence check
+  const woRes = await client.query(
+    `SELECT context_package_id FROM work_orders WHERE workspace_id = $1 AND id = $2`,
+    [workspaceId, workOrderId],
+  );
+  if (
+    woRes.rowCount === 0 ||
+    !woRes.rows[0] ||
+    woRes.rows[0].context_package_id !== contextPackageSnapshot.contextPackageId
+  ) {
+    await settleComplianceDriftAtomic(client, {
+      workspaceId,
+      jobId,
+      jobVersion,
+      workerId,
+      operationId,
+      aiRunId,
+      evaluationId,
+      workOrderId,
+      reason: 'Authoritative context package drifted during compliance execution',
+      reservedSpend,
+    });
+    return { status: 'drift_canceled', evaluationId };
+  }
+
+  const cpId = contextPackageSnapshot.contextPackageId;
+  const currentFactsRes = await client.query(
+    `SELECT f.id
+     FROM product_facts f
+     JOIN context_packages cp ON cp.fact_set_id = f.fact_set_id AND cp.workspace_id = f.workspace_id
+     WHERE cp.workspace_id = $1 AND cp.id = $2 AND f.confidence = 'confirmed' AND f.claim_usage = 'allowed'`,
+    [workspaceId, cpId],
+  );
+  const currentAllowedFactIds = new Set(currentFactsRes.rows.map((r) => r.id));
+
+  const currentAnalysesRes = await client.query(
+    `SELECT cpa.analysis_id AS id
+     FROM context_package_analyses cpa
+     JOIN analyses a ON a.id = cpa.analysis_id AND a.workspace_id = cpa.workspace_id
+     WHERE cpa.workspace_id = $1 AND cpa.context_package_id = $2 AND a.status = 'accepted'`,
+    [workspaceId, cpId],
+  );
+  const currentAllowedAnalysisIds = new Set(currentAnalysesRes.rows.map((r) => r.id));
+
+  const currentRevokedRes = await client.query(
+    `SELECT f.id
+     FROM product_facts f
+     JOIN context_packages cp ON cp.fact_set_id = f.fact_set_id AND cp.workspace_id = f.workspace_id
+     WHERE cp.workspace_id = $1 AND cp.id = $2 AND (f.confidence != 'confirmed' OR f.claim_usage != 'allowed')
+     UNION
+     SELECT cpa.analysis_id AS id
+     FROM context_package_analyses cpa
+     JOIN analyses a ON a.id = cpa.analysis_id AND a.workspace_id = cpa.workspace_id
+     WHERE cpa.workspace_id = $1 AND cpa.context_package_id = $2 AND a.status != 'accepted'`,
+    [workspaceId, cpId],
+  );
+  const currentRevokedIds = new Set(currentRevokedRes.rows.map((r) => r.id));
+
+  const factsStillAllowed = contextPackageSnapshot.allowedFactIds.every((id) =>
+    currentAllowedFactIds.has(id),
+  );
+  const analysesStillAllowed = contextPackageSnapshot.allowedAnalysisIds.every((id) =>
+    currentAllowedAnalysisIds.has(id),
+  );
+  const noNewRevocations =
+    contextPackageSnapshot.allowedFactIds.every((id) => !currentRevokedIds.has(id)) &&
+    contextPackageSnapshot.allowedAnalysisIds.every((id) => !currentRevokedIds.has(id));
+
+  if (!factsStillAllowed || !analysesStillAllowed || !noNewRevocations) {
+    await settleComplianceDriftAtomic(client, {
+      workspaceId,
+      jobId,
+      jobVersion,
+      workerId,
+      operationId,
+      aiRunId,
+      evaluationId,
+      workOrderId,
+      reason: 'Authoritative context evidence state drifted or was revoked during execution',
+      reservedSpend,
+    });
+    return { status: 'drift_canceled', evaluationId };
+  }
+
+  // 4. Evaluate Provider Result
   const isProviderSuccess = Boolean(
     providerResult && providerResult.success && providerResult.content,
   );
 
   if (!isProviderSuccess) {
-    // Provider failed or returned error:
-    // "A provider error, invalid/failed structured output after the one allowed repair, or advisory execution failure must result in a non-approvable failed/error evaluation. Do not mark it completed/passed with ai_advisory_status = failed."
     if (reservedSpend > 0) {
       const budgetRes = await client.query(
         `UPDATE workspace_ai_policies
@@ -1123,12 +1477,14 @@ export async function settleComplianceReviewExecutionAtomic(
     }
 
     // Mark evaluation as failed (NON-APPROVABLE)
-    await client.query(
+    const evalUpdateRes = await client.query(
       `UPDATE compliance_evaluations
        SET status = 'failed', result = 'failed', ai_advisory_status = 'failed',
            blocking_count = $1, warning_count = $2, info_count = $3,
-           deterministic_passed = TRUE, updated_at = NOW(), version = version + 1
-       WHERE id = $4 AND workspace_id = $5`,
+           deterministic_passed = TRUE, evaluation_report_artifact_id = NULL,
+           evaluation_report_revision_number = NULL, evaluation_report_content_hash = NULL,
+           updated_at = NOW(), version = version + 1
+       WHERE id = $4 AND workspace_id = $5 AND status IN ('queued', 'running')`,
       [
         deterministicResult.blockingCount,
         deterministicResult.warningCount,
@@ -1137,38 +1493,51 @@ export async function settleComplianceReviewExecutionAtomic(
         workspaceId,
       ],
     );
+    if (evalUpdateRes.rowCount !== 1) {
+      throw new DatabaseError(`Failed to update compliance_evaluations ${evaluationId}`);
+    }
 
     const safeCategory = providerResult?.errorCategory ?? 'provider_unavailable';
-    await client.query(
+    const opUpdateRes = await client.query(
       `UPDATE operations
        SET status = 'failed', error_category = $1, error_code = 'PROVIDER_ERROR',
            error_message = 'Đánh giá tư vấn AI gặp lỗi từ phía nhà cung cấp mô hình.',
            completed_at = NOW(), updated_at = NOW(), version = version + 1
-       WHERE id = $2 AND workspace_id = $3`,
+       WHERE id = $2 AND workspace_id = $3 AND status IN ('queued', 'running')`,
       [safeCategory, operationId, workspaceId],
     );
+    if (opUpdateRes.rowCount !== 1) {
+      throw new DatabaseError(`Failed to update operations ${operationId}`);
+    }
 
-    await client.query(
+    const runUpdateRes = await client.query(
       `UPDATE ai_runs
        SET status = 'failed', error_category = $1, completed_at = NOW(),
            updated_at = NOW(), version = version + 1
-       WHERE id = $2 AND workspace_id = $3`,
+       WHERE id = $2 AND workspace_id = $3 AND status IN ('queued', 'running')`,
       [safeCategory, aiRunId, workspaceId],
     );
+    if (runUpdateRes.rowCount !== 1) {
+      throw new DatabaseError(`Failed to update ai_runs ${aiRunId}`);
+    }
 
-    await client.query(
+    const jobUpdateRes = await client.query(
       `UPDATE job_executions
        SET status = 'failed', lease_owner = NULL, lease_expires_at = NULL,
-         last_error_category = $1, completed_at = NOW(), updated_at = NOW(), version = version + 1
-       WHERE id = $2 AND workspace_id = $3`,
-      [safeCategory, jobId, workspaceId],
+           reserved_spend_microunits = 0, last_error_category = $1,
+           completed_at = NOW(), updated_at = NOW(), version = version + 1
+       WHERE id = $2 AND workspace_id = $3 AND status = 'running' AND lease_owner = $4 AND version = $5`,
+      [safeCategory, jobId, workspaceId, workerId, jobVersion],
     );
+    if (jobUpdateRes.rowCount !== 1) {
+      throw new JobLeaseExpiredError(jobId);
+    }
 
     if (job.work_item_id) {
       await client.query(
         `UPDATE work_items
          SET status = 'failed', started_at = COALESCE(started_at, NOW()), completed_at = NOW(), updated_at = NOW(), version = version + 1
-         WHERE id = $1 AND workspace_id = $2`,
+         WHERE id = $1 AND workspace_id = $2 AND status IN ('queued', 'running')`,
         [job.work_item_id, workspaceId],
       );
       await client.query(
@@ -1182,11 +1551,157 @@ export async function settleComplianceReviewExecutionAtomic(
     return { status: 'failed', evaluationId };
   }
 
-  // 4. Provider Succeeded!
+  // 5. Provider Succeeded -> Validate Cost (Fail Closed on invalid or over-reservation cost)
   const advisoryRes = providerResult!;
+  const reportedCost = advisoryRes.usage.costMicrounits;
+  const isCostValid =
+    typeof reportedCost === 'number' &&
+    Number.isFinite(reportedCost) &&
+    Number.isInteger(reportedCost) &&
+    reportedCost >= 0 &&
+    reportedCost <= reservedSpend;
+
+  if (!isCostValid) {
+    if (reservedSpend > 0) {
+      const budgetRes = await client.query(
+        `UPDATE workspace_ai_policies
+         SET reserved_spend_microunits = GREATEST(0, reserved_spend_microunits - $1),
+             updated_at = NOW(), version = version + 1
+         WHERE workspace_id = $2`,
+        [reservedSpend, workspaceId],
+      );
+      if (budgetRes.rowCount !== 1) {
+        throw new DatabaseError(`Failed to release budget reservation on invalid cost`);
+      }
+    }
+
+    for (const f of deterministicResult.findings) {
+      await client.query(
+        `INSERT INTO compliance_findings (
+           id, workspace_id, evaluation_id, fingerprint, code, severity, source,
+           video_number, field_path, message, evidence_ids_json, created_at
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, NOW())
+         ON CONFLICT (workspace_id, evaluation_id, fingerprint) DO NOTHING`,
+        [
+          generateUuidV7(),
+          workspaceId,
+          evaluationId,
+          Buffer.from(f.fingerprint, 'hex'),
+          f.code,
+          f.severity,
+          f.source,
+          f.videoNumber,
+          f.fieldPath,
+          f.message,
+          JSON.stringify(f.evidenceIds),
+        ],
+      );
+    }
+
+    const evalUpdateRes = await client.query(
+      `UPDATE compliance_evaluations
+       SET status = 'failed', result = 'failed', ai_advisory_status = 'failed',
+           blocking_count = $1, warning_count = $2, info_count = $3,
+           deterministic_passed = TRUE, evaluation_report_artifact_id = NULL,
+           evaluation_report_revision_number = NULL, evaluation_report_content_hash = NULL,
+           updated_at = NOW(), version = version + 1
+       WHERE id = $4 AND workspace_id = $5 AND status IN ('queued', 'running')`,
+      [
+        deterministicResult.blockingCount,
+        deterministicResult.warningCount,
+        deterministicResult.infoCount,
+        evaluationId,
+        workspaceId,
+      ],
+    );
+    if (evalUpdateRes.rowCount !== 1) {
+      throw new DatabaseError(`Failed to update compliance_evaluations ${evaluationId}`);
+    }
+
+    const errorMsg =
+      reportedCost !== undefined && reportedCost > reservedSpend
+        ? `Provider cost (${reportedCost}) exceeds reserved budget (${reservedSpend})`
+        : `Provider cost is invalid (${reportedCost})`;
+
+    const opUpdateRes = await client.query(
+      `UPDATE operations
+       SET status = 'failed', error_category = 'budget_exhausted', error_code = 'COST_EXCEEDS_RESERVATION',
+           error_message = $1, completed_at = NOW(), updated_at = NOW(), version = version + 1
+       WHERE id = $2 AND workspace_id = $3 AND status IN ('queued', 'running')`,
+      [errorMsg, operationId, workspaceId],
+    );
+    if (opUpdateRes.rowCount !== 1) {
+      throw new DatabaseError(`Failed to update operations ${operationId}`);
+    }
+
+    const runUpdateRes = await client.query(
+      `UPDATE ai_runs
+       SET status = 'failed', error_category = 'budget_exhausted', completed_at = NOW(),
+           updated_at = NOW(), version = version + 1
+       WHERE id = $1 AND workspace_id = $2 AND status IN ('queued', 'running')`,
+      [aiRunId, workspaceId],
+    );
+    if (runUpdateRes.rowCount !== 1) {
+      throw new DatabaseError(`Failed to update ai_runs ${aiRunId}`);
+    }
+
+    const jobUpdateRes = await client.query(
+      `UPDATE job_executions
+       SET status = 'failed', lease_owner = NULL, lease_expires_at = NULL,
+           reserved_spend_microunits = 0, last_error_category = 'budget_exhausted',
+           completed_at = NOW(), updated_at = NOW(), version = version + 1
+       WHERE id = $1 AND workspace_id = $2 AND status = 'running' AND lease_owner = $3 AND version = $4`,
+      [jobId, workspaceId, workerId, jobVersion],
+    );
+    if (jobUpdateRes.rowCount !== 1) {
+      throw new JobLeaseExpiredError(jobId);
+    }
+
+    if (job.work_item_id) {
+      await client.query(
+        `UPDATE work_items
+         SET status = 'failed', started_at = COALESCE(started_at, NOW()), completed_at = NOW(), updated_at = NOW(), version = version + 1
+         WHERE id = $1 AND workspace_id = $2 AND status IN ('queued', 'running')`,
+        [job.work_item_id, workspaceId],
+      );
+      await client.query(
+        `UPDATE agent_assignments
+         SET office_state = 'failed', updated_at = NOW(), version = version + 1
+         WHERE workspace_id = $1 AND work_order_id = $2 AND work_item_id = $3`,
+        [workspaceId, workOrderId, job.work_item_id],
+      );
+    }
+
+    return { status: 'failed', evaluationId };
+  }
+
+  // 6. Valid Cost: Settle Spend Atomically
+  const actualSpend = reportedCost;
+  if (reservedSpend > 0) {
+    const budgetRes = await client.query(
+      `UPDATE workspace_ai_policies
+       SET current_spend_microunits = current_spend_microunits + $1,
+           reserved_spend_microunits = GREATEST(0, reserved_spend_microunits - $2),
+           updated_at = NOW(),
+           version = version + 1
+       WHERE workspace_id = $3`,
+      [actualSpend, reservedSpend, workspaceId],
+    );
+    if (budgetRes.rowCount !== 1) {
+      throw new DatabaseError(`Failed to settle budget spend for workspace ${workspaceId}`);
+    }
+  }
+
+  // 7. Constrain finding evidence IDs to authoritative context package snapshot
+  const allowedEvidenceIdSet = new Set([
+    ...contextPackageSnapshot.allowedFactIds,
+    ...contextPackageSnapshot.allowedAnalysisIds,
+  ]);
+
   const allFindings: ComplianceFinding[] = [...deterministicResult.findings];
 
   for (const f of advisoryRes.content?.findings ?? []) {
+    const safeEvidenceIds = (f.evidenceIds ?? []).filter((id) => allowedEvidenceIdSet.has(id));
     const fp = computeFindingFingerprint({
       code: f.code,
       severity: f.severity === 'info' ? 'info' : 'warning',
@@ -1202,7 +1717,7 @@ export async function settleComplianceReviewExecutionAtomic(
       videoNumber: f.videoNumber ?? null,
       fieldPath: f.fieldPath,
       message: f.message,
-      evidenceIds: Object.freeze([...(f.evidenceIds ?? [])]),
+      evidenceIds: Object.freeze(safeEvidenceIds),
     });
   }
 
@@ -1226,25 +1741,7 @@ export async function settleComplianceReviewExecutionAtomic(
     finalEvalResult = 'passed';
   }
 
-  // 5. Settle Budget: never charge more than reserved maximum
-  const actualSpend = Math.min(advisoryRes.usage.costMicrounits ?? 0, reservedSpend);
-
-  if (reservedSpend > 0) {
-    const budgetRes = await client.query(
-      `UPDATE workspace_ai_policies
-       SET current_spend_microunits = current_spend_microunits + $1,
-           reserved_spend_microunits = GREATEST(0, reserved_spend_microunits - $2),
-           updated_at = NOW(),
-           version = version + 1
-       WHERE workspace_id = $3`,
-      [actualSpend, reservedSpend, workspaceId],
-    );
-    if (budgetRes.rowCount !== 1) {
-      throw new DatabaseError(`Failed to settle budget spend for workspace ${workspaceId}`);
-    }
-  }
-
-  // 6. Persist findings
+  // 8. Persist findings
   for (const f of finalFindings) {
     await client.query(
       `INSERT INTO compliance_findings (
@@ -1268,7 +1765,7 @@ export async function settleComplianceReviewExecutionAtomic(
     );
   }
 
-  // 7. Persist compliance_report artifact
+  // 9. Persist compliance_report artifact revision
   const { reportArtifactId, reportRevNum } = await findOrCreateReportArtifact(
     client,
     workspaceId,
@@ -1333,8 +1830,8 @@ export async function settleComplianceReviewExecutionAtomic(
     ],
   );
 
-  // 8. Settle evaluation
-  await client.query(
+  // 10. Settle evaluation with exact report binding
+  const evalUpdateRes = await client.query(
     `UPDATE compliance_evaluations
      SET status = 'completed',
          result = $1,
@@ -1344,9 +1841,11 @@ export async function settleComplianceReviewExecutionAtomic(
          deterministic_passed = $5,
          ai_advisory_status = 'completed',
          evaluation_report_artifact_id = $6,
+         evaluation_report_revision_number = $7,
+         evaluation_report_content_hash = $8,
          updated_at = NOW(),
          version = version + 1
-     WHERE id = $7 AND workspace_id = $8`,
+     WHERE id = $9 AND workspace_id = $10 AND status IN ('queued', 'running')`,
     [
       finalEvalResult,
       blockingCount,
@@ -1354,31 +1853,39 @@ export async function settleComplianceReviewExecutionAtomic(
       infoCount,
       deterministicResult.passed,
       reportArtifactId,
+      reportRevNum,
+      Buffer.from(reportHash),
       evaluationId,
       workspaceId,
     ],
   );
+  if (evalUpdateRes.rowCount !== 1) {
+    throw new DatabaseError(`Failed to update compliance_evaluations ${evaluationId}`);
+  }
 
-  // 9. Settle operation, AI run, job execution
+  // 11. Settle operation, AI run, job execution
   const resultLocation = `/artifacts/${reportArtifactId}/revisions/${reportRevNum}`;
-  await client.query(
+  const opRes = await client.query(
     `UPDATE operations
      SET status = 'succeeded', progress_percent = 100, result_location = $1,
          started_at = COALESCE(started_at, NOW()), completed_at = NOW(),
          error_category = NULL, error_code = NULL, error_message = NULL,
          updated_at = NOW(), version = version + 1
-     WHERE id = $2 AND workspace_id = $3`,
+     WHERE id = $2 AND workspace_id = $3 AND status IN ('queued', 'running')`,
     [resultLocation, operationId, workspaceId],
   );
+  if (opRes.rowCount !== 1) {
+    throw new DatabaseError(`Failed to update operations ${operationId}`);
+  }
 
-  await client.query(
+  const runRes = await client.query(
     `UPDATE ai_runs
      SET status = 'succeeded', provider = $1, model = $2,
          prompt_template = $3, prompt_version = $4, output_hash = $5,
          token_input = $6, token_output = $7, cost_microunits = $8,
          cost_currency = $9, latency_ms = $10, started_at = COALESCE(started_at, NOW()),
          completed_at = NOW(), error_category = NULL, updated_at = NOW(), version = version + 1
-     WHERE id = $11 AND workspace_id = $12`,
+     WHERE id = $11 AND workspace_id = $12 AND status IN ('queued', 'running')`,
     [
       advisoryRes.provenance.provider,
       advisoryRes.provenance.model,
@@ -1394,24 +1901,34 @@ export async function settleComplianceReviewExecutionAtomic(
       workspaceId,
     ],
   );
+  if (runRes.rowCount !== 1) {
+    throw new DatabaseError(`Failed to update ai_runs ${aiRunId}`);
+  }
 
-  await client.query(
+  const jobUpdateRes = await client.query(
     `UPDATE job_executions
      SET status = 'succeeded', lease_owner = NULL, lease_expires_at = NULL,
+         reserved_spend_microunits = 0,
          started_at = COALESCE(started_at, NOW()), completed_at = NOW(),
          last_error_category = NULL, updated_at = NOW(), version = version + 1
-     WHERE id = $1 AND workspace_id = $2`,
-    [jobId, workspaceId],
+     WHERE id = $1 AND workspace_id = $2 AND status = 'running' AND lease_owner = $3 AND version = $4`,
+    [jobId, workspaceId, workerId, jobVersion],
   );
+  if (jobUpdateRes.rowCount !== 1) {
+    throw new JobLeaseExpiredError(jobId);
+  }
 
-  // 10. Update work item & assignment
+  // 12. Update work item & assignment
   if (job.work_item_id) {
-    await client.query(
+    const itemRes = await client.query(
       `UPDATE work_items
        SET status = 'review_required', started_at = COALESCE(started_at, NOW()), completed_at = NULL, updated_at = NOW(), version = version + 1
-       WHERE id = $1 AND workspace_id = $2`,
+       WHERE id = $1 AND workspace_id = $2 AND status IN ('queued', 'running')`,
       [job.work_item_id, workspaceId],
     );
+    if (itemRes.rowCount !== 1) {
+      throw new DatabaseError(`Failed to update work_items ${job.work_item_id}`);
+    }
 
     await client.query(
       `UPDATE agent_assignments
@@ -1472,61 +1989,133 @@ async function findOrCreateReportArtifact(
   return { reportArtifactId, reportRevNum };
 }
 
-// Orchestrator for backwards compatibility and tests:
-export async function settleComplianceReviewJobAtomic(
+export interface SettleComplianceMalformedJobParams {
+  readonly workspaceId: string;
+  readonly jobId: string;
+  readonly workerId?: string | undefined;
+}
+
+export async function settleComplianceMalformedJobAtomic(
   client: pg.PoolClient,
-  gatewayPort: AIGatewayPort,
-  params: PrepareComplianceReviewParams,
-): Promise<{
-  readonly status: 'completed' | 'drift_canceled' | 'blocked' | 'failed' | 'budget_exhausted';
-  readonly evaluationId: string;
-}> {
-  const prep = await prepareComplianceReviewExecution(client, params);
+  params: SettleComplianceMalformedJobParams,
+): Promise<void> {
+  const { workspaceId, jobId } = params;
 
-  if (prep.kind === 'already_terminal') {
-    return { status: 'completed', evaluationId: prep.evaluationId };
+  // 1. Lock job execution row using ONLY trusted columns from the DB
+  const jobRes = await client.query(
+    `SELECT id, workspace_id, operation_id, ai_run_id, work_order_id, work_item_id,
+            reserved_spend_microunits, status, version, lease_owner
+     FROM job_executions
+     WHERE id = $1 AND workspace_id = $2
+     FOR UPDATE`,
+    [jobId, workspaceId],
+  );
+
+  if (jobRes.rowCount === 0 || !jobRes.rows[0]) {
+    return;
+  }
+  const job = jobRes.rows[0];
+
+  // If already terminal, nothing to clean up
+  if (job.status === 'succeeded' || job.status === 'failed') {
+    return;
   }
 
-  if (prep.kind === 'drift_detected') {
-    return settleComplianceDriftAtomic(client, {
-      ...params,
-      reason: prep.reason,
-      reservedSpend: prep.reservedSpend,
-    });
+  // 2. Release any reserved budget exactly once
+  const reservedSpend = Number(job.reserved_spend_microunits ?? 0);
+  if (reservedSpend > 0) {
+    const budgetRes = await client.query(
+      `UPDATE workspace_ai_policies
+       SET reserved_spend_microunits = GREATEST(0, reserved_spend_microunits - $1),
+           updated_at = NOW(),
+           version = version + 1
+       WHERE workspace_id = $2`,
+      [reservedSpend, workspaceId],
+    );
+    if (budgetRes.rowCount !== 1) {
+      throw new DatabaseError(`Failed to release budget reservation for workspace ${workspaceId}`);
+    }
   }
 
-  if (prep.kind === 'preflight_blocked') {
-    return settleCompliancePreflightBlockerAtomic(client, {
-      ...params,
-      deterministicResult: prep.deterministicResult,
-      scriptContent: prep.scriptContent,
-      contentHashHex: prep.contentHashHex,
-      reservedSpend: prep.reservedSpend,
-    });
+  // 3. Mark job_executions as failed, clear lease & reservation
+  await client.query(
+    `UPDATE job_executions
+     SET status = 'failed',
+         last_error_category = 'internal_error',
+         lease_owner = NULL,
+         lease_expires_at = NULL,
+         reserved_spend_microunits = 0,
+         completed_at = NOW(),
+         updated_at = NOW(),
+         version = version + 1
+     WHERE id = $1 AND workspace_id = $2`,
+    [jobId, workspaceId],
+  );
+
+  // 4. Mark linked operations row as failed
+  if (job.operation_id) {
+    await client.query(
+      `UPDATE operations
+       SET status = 'failed',
+           error_category = 'internal_error',
+           error_code = 'MALFORMED_JOB_PAYLOAD',
+           error_message = 'Job payload is malformed or invalid',
+           completed_at = NOW(),
+           updated_at = NOW(),
+           version = version + 1
+       WHERE id = $1 AND workspace_id = $2 AND status IN ('queued', 'running')`,
+      [job.operation_id, workspaceId],
+    );
   }
 
-  if (prep.kind === 'budget_exhausted') {
-    return settleComplianceBudgetExhaustedAtomic(client, {
-      ...params,
-      deterministicResult: prep.deterministicResult,
-    });
+  // 5. Mark linked ai_runs row as failed
+  if (job.ai_run_id) {
+    await client.query(
+      `UPDATE ai_runs
+       SET status = 'failed',
+           error_category = 'internal_error',
+           completed_at = NOW(),
+           updated_at = NOW(),
+           version = version + 1
+       WHERE id = $1 AND workspace_id = $2 AND status IN ('queued', 'running')`,
+      [job.ai_run_id, workspaceId],
+    );
   }
 
-  // Execute advisory
-  let advisoryRes: ExecuteComplianceAdvisoryResult | null;
-  try {
-    advisoryRes = await gatewayPort.executeComplianceAdvisory(prep.providerInput);
-  } catch {
-    advisoryRes = null;
-  }
+  // 6. Mark any linked compliance_evaluations row as failed
+  await client.query(
+    `UPDATE compliance_evaluations
+     SET status = 'failed',
+         result = 'failed',
+         ai_advisory_status = 'failed',
+         evaluation_report_artifact_id = NULL,
+         evaluation_report_revision_number = NULL,
+         evaluation_report_content_hash = NULL,
+         updated_at = NOW(),
+         version = version + 1
+     WHERE job_id = $1 AND workspace_id = $2 AND status IN ('queued', 'running')`,
+    [jobId, workspaceId],
+  );
 
-  return settleComplianceReviewExecutionAtomic(client, {
-    ...params,
-    contentHashHex: prep.contentHashHex,
-    deterministicResult: prep.deterministicResult,
-    reservedSpend: prep.reservedSpend,
-    policyVersion: prep.policyVersion,
-    policyHashHex: prep.policyHashHex,
-    providerResult: advisoryRes,
-  });
+  // 7. Work item & assignment
+  if (job.work_item_id) {
+    await client.query(
+      `UPDATE work_items
+       SET status = 'failed',
+           completed_at = NOW(),
+           updated_at = NOW(),
+           version = version + 1
+       WHERE id = $1 AND workspace_id = $2 AND status IN ('queued', 'running')`,
+      [job.work_item_id, workspaceId],
+    );
+
+    await client.query(
+      `UPDATE agent_assignments
+       SET office_state = 'failed',
+           updated_at = NOW(),
+           version = version + 1
+       WHERE workspace_id = $1 AND work_item_id = $2 AND office_state = 'queued'`,
+      [workspaceId, job.work_item_id],
+    );
+  }
 }

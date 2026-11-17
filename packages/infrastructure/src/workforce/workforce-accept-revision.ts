@@ -21,6 +21,7 @@ import {
   CURRENT_COMPLIANCE_POLICY_VERSION,
   computeCompliancePolicyHash,
   parseIsoTimestamp,
+  type ComplianceReportContent,
 } from '@affiliate-content-os/domain';
 import { computeIdempotencyAdvisoryLockKey } from '../tenancy/postgres-idempotency-adapter.js';
 import {
@@ -158,8 +159,10 @@ export async function acceptScriptRevisionTransaction(
   const currentPolicyHash = Buffer.from(currentPolicyHashHex, 'hex');
 
   const evalRes = await client.query(
-    `SELECT id, status, result, blocking_count, warning_count, ai_advisory_status,
-            policy_version, policy_hash, evaluation_report_artifact_id
+    `SELECT id, status, result, blocking_count, warning_count, info_count, ai_advisory_status,
+            policy_version, policy_hash, evaluation_report_artifact_id,
+            evaluation_report_revision_number, evaluation_report_content_hash,
+            script_content_hash
      FROM compliance_evaluations
      WHERE workspace_id = $1 AND artifact_id = $2 AND revision_number = $3
        AND policy_version = $4 AND policy_hash = $5
@@ -186,20 +189,19 @@ export async function acceptScriptRevisionTransaction(
   if (evalRow.ai_advisory_status === 'failed') {
     throw new ComplianceEvaluationNotApprovableError('AI advisory review failed');
   }
-  if (!evalRow.evaluation_report_artifact_id) {
-    throw new ComplianceEvaluationNotApprovableError('compliance report artifact link missing');
+  if (
+    !evalRow.evaluation_report_artifact_id ||
+    evalRow.evaluation_report_revision_number == null ||
+    !evalRow.evaluation_report_content_hash
+  ) {
+    throw new ComplianceEvaluationNotApprovableError('compliance report binding missing');
   }
 
-  // Verify compliance report artifact exists
-  const reportCheck = await client.query(
-    `SELECT id, current_revision_number
-     FROM content_artifacts
-     WHERE workspace_id = $1 AND id = $2 AND artifact_type = 'compliance_report'`,
-    [workspaceId, evalRow.evaluation_report_artifact_id],
-  );
-  if (reportCheck.rowCount === 0 || !reportCheck.rows[0]) {
-    throw new ComplianceEvaluationNotApprovableError(
-      'immutable compliance report artifact not found',
+  // Verify script content hash bound in evaluation matches actual revision content hash
+  const evalScriptHashHex = Buffer.from(evalRow.script_content_hash).toString('hex');
+  if (evalScriptHashHex.toLowerCase() !== actualHashHex.toLowerCase()) {
+    throw new ComplianceEvaluationStaleError(
+      `Evaluation was performed against script content hash ${evalScriptHashHex}, current is ${actualHashHex}`,
     );
   }
 
@@ -214,18 +216,246 @@ export async function acceptScriptRevisionTransaction(
     );
   }
 
-  // 7. Fetch evidence references for snapshot
+  // Verify compliance report artifact container exists and has not advanced past the evaluation's report revision
+  const reportCheck = await client.query(
+    `SELECT id, current_revision_number
+     FROM content_artifacts
+     WHERE workspace_id = $1 AND id = $2 AND artifact_type = 'compliance_report'`,
+    [workspaceId, evalRow.evaluation_report_artifact_id],
+  );
+  if (reportCheck.rowCount === 0 || !reportCheck.rows[0]) {
+    throw new ComplianceEvaluationNotApprovableError(
+      'immutable compliance report artifact not found',
+    );
+  }
+  if (
+    Number(reportCheck.rows[0].current_revision_number) !==
+    Number(evalRow.evaluation_report_revision_number)
+  ) {
+    throw new ComplianceEvaluationStaleError(
+      `Compliance report artifact container has advanced to revision ${reportCheck.rows[0].current_revision_number}, evaluation is bound to revision ${evalRow.evaluation_report_revision_number}`,
+    );
+  }
+
+  // Load exact immutable report revision
+  const reportRevRes = await client.query(
+    `SELECT id, content_json, content_hash
+     FROM content_artifact_revisions
+     WHERE workspace_id = $1 AND artifact_id = $2 AND revision_number = $3`,
+    [workspaceId, evalRow.evaluation_report_artifact_id, evalRow.evaluation_report_revision_number],
+  );
+  if (reportRevRes.rowCount === 0 || !reportRevRes.rows[0]) {
+    throw new ComplianceEvaluationNotApprovableError(
+      'immutable compliance report revision not found',
+    );
+  }
+  const reportRev = reportRevRes.rows[0];
+  const actualReportHashHex = Buffer.from(reportRev.content_hash).toString('hex');
+  const expectedReportHashHex = Buffer.from(evalRow.evaluation_report_content_hash).toString('hex');
+  if (actualReportHashHex.toLowerCase() !== expectedReportHashHex.toLowerCase()) {
+    throw new ComplianceEvaluationNotApprovableError(
+      'compliance report revision content hash mismatch with evaluation',
+    );
+  }
+
+  const reportContent = reportRev.content_json as ComplianceReportContent;
+  if (
+    !reportContent ||
+    reportContent.scriptArtifactId !== artifactId ||
+    reportContent.scriptRevisionNumber !== revisionNumber ||
+    (reportContent.scriptContentHash &&
+      reportContent.scriptContentHash.toLowerCase() !== actualHashHex.toLowerCase()) ||
+    reportContent.policyVersion !== currentPolicyVersion ||
+    (reportContent.policyHash &&
+      reportContent.policyHash.toLowerCase() !== currentPolicyHashHex.toLowerCase()) ||
+    reportContent.result !== evalRow.result ||
+    reportContent.blockingCount !== Number(evalRow.blocking_count) ||
+    reportContent.warningCount !== Number(evalRow.warning_count) ||
+    reportContent.aiAdvisoryStatus !== evalRow.ai_advisory_status
+  ) {
+    throw new ComplianceEvaluationNotApprovableError(
+      'compliance report content does not match evaluation contract',
+    );
+  }
+
+  // Revalidate authoritative freshness: lineage brief, planning revisions, context package and evidence
+  const lineageRes = await client.query(
+    `SELECT content_brief_hash, content_brief_version, planning_revision_ids_json
+     FROM content_artifact_lineage
+     WHERE workspace_id = $1 AND artifact_id = $2 AND revision_number = $3`,
+    [workspaceId, artifactId, revisionNumber],
+  );
+  if (lineageRes.rowCount === 0 || !lineageRes.rows[0]) {
+    throw new ComplianceEvaluationStaleError(
+      `Lineage not found for script revision ${revisionNumber}`,
+    );
+  }
+  const expectedBriefHashHex = Buffer.from(lineageRes.rows[0].content_brief_hash).toString('hex');
+  const expectedPlanningRevs = lineageRes.rows[0].planning_revision_ids_json as {
+    readonly productCampaignPlanRevisionId?: string;
+    readonly productCampaignPlanRevisionNumber?: number;
+    readonly audienceInsightBoardRevisionId?: string;
+    readonly audienceInsightBoardRevisionNumber?: number;
+    readonly videoSeriesPlanRevisionId?: string;
+    readonly videoSeriesPlanRevisionNumber?: number;
+  };
+
+  const briefRes = await client.query(
+    `SELECT brief_hash, brief_version
+     FROM content_briefs
+     WHERE workspace_id = $1 AND work_order_id = $2
+     ORDER BY brief_version DESC LIMIT 1`,
+    [workspaceId, art.work_order_id],
+  );
+  if (briefRes.rowCount === 0 || !briefRes.rows[0]) {
+    throw new ComplianceEvaluationStaleError(
+      `Content brief not found for work order ${art.work_order_id}`,
+    );
+  }
+  const actualBriefHashHex = Buffer.from(briefRes.rows[0].brief_hash).toString('hex');
+  if (expectedBriefHashHex.toLowerCase() !== actualBriefHashHex.toLowerCase()) {
+    throw new ComplianceEvaluationStaleError(
+      'Authoritative content brief has drifted from script lineage',
+    );
+  }
+
+  const planningRes = await client.query<{
+    artifact_type: string;
+    current_revision_number: number;
+    current_revision_id: string;
+  }>(
+    `SELECT a.artifact_type, a.current_revision_number, r.id AS current_revision_id
+     FROM content_artifacts a
+     JOIN content_artifact_revisions r
+       ON r.artifact_id = a.id
+      AND r.revision_number = a.current_revision_number
+      AND r.workspace_id = a.workspace_id
+     WHERE a.workspace_id = $1 AND a.work_order_id = $2 AND a.product_id = $3
+       AND a.artifact_type IN ('product_campaign_plan', 'audience_insight_board', 'video_series_plan')`,
+    [workspaceId, art.work_order_id, art.product_id],
+  );
+  const planningMap = new Map(planningRes.rows.map((r) => [r.artifact_type, r]));
+  const campaignRow = planningMap.get('product_campaign_plan');
+  const audienceRow = planningMap.get('audience_insight_board');
+  const seriesRow = planningMap.get('video_series_plan');
+
+  const isPlanningDrift =
+    planningRes.rowCount !== 3 ||
+    !campaignRow ||
+    campaignRow.current_revision_id !== expectedPlanningRevs.productCampaignPlanRevisionId ||
+    campaignRow.current_revision_number !==
+      expectedPlanningRevs.productCampaignPlanRevisionNumber ||
+    !audienceRow ||
+    audienceRow.current_revision_id !== expectedPlanningRevs.audienceInsightBoardRevisionId ||
+    audienceRow.current_revision_number !==
+      expectedPlanningRevs.audienceInsightBoardRevisionNumber ||
+    !seriesRow ||
+    seriesRow.current_revision_id !== expectedPlanningRevs.videoSeriesPlanRevisionId ||
+    seriesRow.current_revision_number !== expectedPlanningRevs.videoSeriesPlanRevisionNumber;
+
+  if (isPlanningDrift) {
+    throw new ComplianceEvaluationStaleError(
+      'Authoritative planning revisions have drifted from script lineage',
+    );
+  }
+
+  const woRes = await client.query(
+    `SELECT context_package_id FROM work_orders WHERE workspace_id = $1 AND id = $2`,
+    [workspaceId, art.work_order_id],
+  );
+  if (woRes.rowCount === 0 || !woRes.rows[0]) {
+    throw new ComplianceEvaluationStaleError(`Work order ${art.work_order_id} not found`);
+  }
+  const contextPackageId = woRes.rows[0].context_package_id;
+
+  const allowedFactsRes = await client.query(
+    `SELECT f.id
+     FROM product_facts f
+     JOIN context_packages cp ON cp.fact_set_id = f.fact_set_id AND cp.workspace_id = f.workspace_id
+     WHERE cp.workspace_id = $1 AND cp.id = $2 AND f.confidence = 'confirmed' AND f.claim_usage = 'allowed'`,
+    [workspaceId, contextPackageId],
+  );
+  const allowedFactIdSet = new Set(allowedFactsRes.rows.map((r) => r.id));
+
+  const allowedAnalysesRes = await client.query(
+    `SELECT cpa.analysis_id AS id
+     FROM context_package_analyses cpa
+     JOIN analyses a ON a.id = cpa.analysis_id AND a.workspace_id = cpa.workspace_id
+     WHERE cpa.workspace_id = $1 AND cpa.context_package_id = $2 AND a.status = 'accepted'`,
+    [workspaceId, contextPackageId],
+  );
+  const allowedAnalysisIdSet = new Set(allowedAnalysesRes.rows.map((r) => r.id));
+
+  const revokedRes = await client.query(
+    `SELECT f.id
+     FROM product_facts f
+     JOIN context_packages cp ON cp.fact_set_id = f.fact_set_id AND cp.workspace_id = f.workspace_id
+     WHERE cp.workspace_id = $1 AND cp.id = $2 AND (f.confidence != 'confirmed' OR f.claim_usage != 'allowed')
+     UNION
+     SELECT cpa.analysis_id AS id
+     FROM context_package_analyses cpa
+     JOIN analyses a ON a.id = cpa.analysis_id AND a.workspace_id = cpa.workspace_id
+     WHERE cpa.workspace_id = $1 AND cpa.context_package_id = $2 AND a.status != 'accepted'`,
+    [workspaceId, contextPackageId],
+  );
+  const revokedEvidenceIdSet = new Set(revokedRes.rows.map((r) => r.id));
+
+  // Extract disclosure state and check video evidence
+  const scriptPkg = revRes.rows[0].content_json;
+  const videos = Array.isArray(scriptPkg?.videos) ? scriptPkg.videos : [];
+
+  for (const v of videos) {
+    for (const eid of v.evidenceIds ?? []) {
+      if (revokedEvidenceIdSet.has(eid)) {
+        throw new ComplianceEvaluationStaleError(
+          `Evidence ${eid} referenced in video ${v.videoNumber} has been revoked or disallowed`,
+        );
+      }
+      if (!allowedFactIdSet.has(eid) && !allowedAnalysisIdSet.has(eid)) {
+        throw new ComplianceEvaluationStaleError(
+          `Evidence ${eid} referenced in video ${v.videoNumber} is no longer in allowed context package`,
+        );
+      }
+    }
+  }
+
+  for (const f of reportContent.findings ?? []) {
+    for (const eid of f.evidenceIds ?? []) {
+      if (revokedEvidenceIdSet.has(eid)) {
+        throw new ComplianceEvaluationStaleError(
+          `Evidence ${eid} referenced in report findings has been revoked`,
+        );
+      }
+    }
+  }
+
+  // 7. Fetch evidence references for snapshot and verify freshness
   const evidenceRes = await client.query(
     `SELECT source_kind, source_id
      FROM artifact_evidence_refs
      WHERE workspace_id = $1 AND artifact_id = $2 AND revision_number = $3`,
     [workspaceId, artifactId, revisionNumber],
   );
+  for (const ref of evidenceRes.rows) {
+    if (revokedEvidenceIdSet.has(ref.source_id)) {
+      throw new ComplianceEvaluationStaleError(
+        `Referenced evidence ${ref.source_id} has been revoked or disallowed`,
+      );
+    }
+    const isAllowed =
+      ref.source_kind === 'product_fact'
+        ? allowedFactIdSet.has(ref.source_id)
+        : ref.source_kind === 'analysis'
+          ? allowedAnalysisIdSet.has(ref.source_id)
+          : false;
+    if (!isAllowed) {
+      throw new ComplianceEvaluationStaleError(
+        `Referenced evidence ${ref.source_id} is no longer in allowed context package`,
+      );
+    }
+  }
   const evidenceIds = evidenceRes.rows.map((r) => r.source_id);
 
-  // Extract disclosure state
-  const scriptPkg = revRes.rows[0].content_json;
-  const videos = Array.isArray(scriptPkg?.videos) ? scriptPkg.videos : [];
   const disclosureState = {
     disclosures: videos.map((v: { videoNumber?: number; disclosure?: unknown }) => ({
       videoNumber: v.videoNumber,

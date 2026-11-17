@@ -220,6 +220,7 @@ export interface ComplianceEvaluationDTO {
   readonly workOrderId: WorkOrderId;
   readonly artifactId: string;
   readonly revisionNumber: number;
+  readonly scriptContentHashHex: string;
   readonly policyVersion: string;
   readonly policyHashHex: string;
   readonly status: 'queued' | 'running' | 'completed' | 'failed';
@@ -230,6 +231,8 @@ export interface ComplianceEvaluationDTO {
   readonly deterministicPassed: boolean;
   readonly aiAdvisoryStatus: 'skipped' | 'pending' | 'completed' | 'failed';
   readonly evaluationReportArtifactId: string | null;
+  readonly evaluationReportRevisionNumber: number | null;
+  readonly evaluationReportContentHashHex: string | null;
   readonly findings: readonly ComplianceFindingDTO[];
   readonly createdAt: IsoTimestamp;
   readonly updatedAt: IsoTimestamp;

@@ -19,8 +19,9 @@ export async function queryComplianceEvaluation(
   if (revisionNumber !== undefined) {
     query = `
       SELECT id, workspace_id, product_id, work_order_id, artifact_id, revision_number,
-             policy_version, policy_hash, status, result, blocking_count, warning_count,
+             script_content_hash, policy_version, policy_hash, status, result, blocking_count, warning_count,
              info_count, deterministic_passed, ai_advisory_status, evaluation_report_artifact_id,
+             evaluation_report_revision_number, evaluation_report_content_hash,
              created_at, updated_at, version
       FROM compliance_evaluations
       WHERE workspace_id = $1 AND artifact_id = $2 AND revision_number = $3
@@ -32,8 +33,9 @@ export async function queryComplianceEvaluation(
     // Current revision
     query = `
       SELECT ce.id, ce.workspace_id, ce.product_id, ce.work_order_id, ce.artifact_id, ce.revision_number,
-             ce.policy_version, ce.policy_hash, ce.status, ce.result, ce.blocking_count, ce.warning_count,
+             ce.script_content_hash, ce.policy_version, ce.policy_hash, ce.status, ce.result, ce.blocking_count, ce.warning_count,
              ce.info_count, ce.deterministic_passed, ce.ai_advisory_status, ce.evaluation_report_artifact_id,
+             ce.evaluation_report_revision_number, ce.evaluation_report_content_hash,
              ce.created_at, ce.updated_at, ce.version
       FROM compliance_evaluations ce
       JOIN content_artifacts ca ON ca.id = ce.artifact_id AND ca.workspace_id = ce.workspace_id
@@ -76,6 +78,7 @@ export async function queryComplianceEvaluation(
     workOrderId: row.work_order_id,
     artifactId: row.artifact_id,
     revisionNumber: Number(row.revision_number),
+    scriptContentHashHex: Buffer.from(row.script_content_hash).toString('hex'),
     policyVersion: row.policy_version,
     policyHashHex: Buffer.from(row.policy_hash).toString('hex'),
     status: row.status,
@@ -86,6 +89,14 @@ export async function queryComplianceEvaluation(
     deterministicPassed: Boolean(row.deterministic_passed),
     aiAdvisoryStatus: row.ai_advisory_status,
     evaluationReportArtifactId: row.evaluation_report_artifact_id ?? null,
+    evaluationReportRevisionNumber:
+      row.evaluation_report_revision_number !== null
+        ? Number(row.evaluation_report_revision_number)
+        : null,
+    evaluationReportContentHashHex:
+      row.evaluation_report_content_hash !== null
+        ? Buffer.from(row.evaluation_report_content_hash).toString('hex')
+        : null,
     findings,
     createdAt: parseIsoTimestamp(
       row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at),

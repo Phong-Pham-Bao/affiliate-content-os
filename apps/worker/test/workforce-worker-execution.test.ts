@@ -21,6 +21,10 @@ import {
   parseAndValidateWorkforcePlanningPayload,
   crossCheckWorkforcePlanningPayload,
 } from '../src/workforce-payload-validator.js';
+import {
+  parseAndValidateCompliancePayload,
+  crossCheckCompliancePayload,
+} from '../src/compliance-payload-validator.js';
 import { validateWorkforceArtifactOutput } from '../src/workforce-output-validator.js';
 
 describe('Workforce Worker Execution Components', () => {
@@ -174,5 +178,47 @@ describe('Workforce Worker Execution Components', () => {
     await expect(processJobExecution(jobSnapshot, mockDeps)).rejects.toThrow(
       /Database pool required to process workforce_planning job/,
     );
+  });
+
+  it('validates and cross-checks compliance review payload', () => {
+    const validCompliancePayload = {
+      workspaceId: wsId,
+      productId: prodId,
+      workOrderId: woId,
+      artifactId: '019318b2-5f33-722e-a5df-036f007b89ee',
+      revisionNumber: 1,
+      contentHashHex: 'a'.repeat(64),
+      policyVersion: '2026-11-17',
+      operationId: opId,
+      aiRunId: runId,
+      evaluationId: '019318b2-5f33-722e-a5df-036f007b89ef',
+      reservedMicrounits: 50000,
+    };
+
+    const parsed = parseAndValidateCompliancePayload(validCompliancePayload);
+    expect(parsed.revisionNumber).toBe(1);
+    expect(parsed.contentHashHex).toBe('a'.repeat(64));
+
+    const jobSnapshot = createMockJobSnapshot(validCompliancePayload, {
+      jobType: 'compliance_review',
+    });
+
+    expect(() => crossCheckCompliancePayload(parsed, jobSnapshot)).not.toThrow();
+
+    // Rejects non-64-hex contentHashHex
+    expect(() =>
+      parseAndValidateCompliancePayload({
+        ...validCompliancePayload,
+        contentHashHex: 'short',
+      }),
+    ).toThrow(/contentHashHex/);
+
+    // Cross-check rejects mismatched operationId
+    expect(() =>
+      crossCheckCompliancePayload(parsed, {
+        ...jobSnapshot,
+        operationId: parseOperationId('019318b2-5f33-722e-a5df-036f007b8999'),
+      }),
+    ).toThrow(/Operation mismatch/);
   });
 });

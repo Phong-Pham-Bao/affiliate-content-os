@@ -48,6 +48,7 @@ export interface EnqueueComplianceEvaluationParams {
   readonly revisionNumber: number;
   readonly actorUserId: string;
   readonly policyVersion?: string | undefined;
+  readonly expectedContentHashHex?: string | undefined;
 }
 
 export interface EnqueueComplianceEvaluationResult {

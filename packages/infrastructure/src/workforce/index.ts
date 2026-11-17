@@ -36,13 +36,17 @@ export {
   settleCompliancePreflightBlockerAtomic,
   settleComplianceBudgetExhaustedAtomic,
   settleComplianceDriftAtomic,
-  settleComplianceReviewJobAtomic,
+  settleComplianceMalformedJobAtomic,
   type PrepareComplianceReviewParams,
   type PrepareComplianceResult,
   type SettleComplianceReviewExecutionParams,
   type SettleCompliancePreflightBlockerParams,
   type SettleComplianceBudgetExhaustedParams,
   type SettleComplianceDriftParams,
+  type SettleComplianceMalformedJobParams,
+  type BriefSnapshot,
+  type PlanningRevisionsSnapshot,
+  type ContextPackageSnapshot,
 } from './workforce-compliance-settlement.js';
 export {
   queryComplianceEvaluation,

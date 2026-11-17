@@ -8,6 +8,7 @@ import {
   CURRENT_COMPLIANCE_POLICY_VERSION,
   computeCompliancePolicyHash,
 } from '@affiliate-content-os/domain';
+import { DatabaseError } from '../database/errors.js';
 import { queryComplianceEvaluation } from './workforce-compliance-queries.js';
 
 export const COMPLIANCE_RESERVED_SPEND_MICROUNITS = 10_000;
@@ -25,6 +26,30 @@ export async function enqueueComplianceEvaluationTransaction(
     actorUserId,
     policyVersion = CURRENT_COMPLIANCE_POLICY_VERSION,
   } = params;
+
+  // 0. Fetch and validate exact script revision
+  const revRes = await client.query(
+    `SELECT content_hash, schema_version
+     FROM content_artifact_revisions
+     WHERE workspace_id = $1 AND artifact_id = $2 AND revision_number = $3`,
+    [workspaceId, artifactId, revisionNumber],
+  );
+  if (revRes.rowCount === 0 || !revRes.rows[0]) {
+    throw new DatabaseError(
+      `Script revision ${revisionNumber} not found for artifact ${artifactId}`,
+    );
+  }
+  const scriptContentHash: Buffer = revRes.rows[0].content_hash;
+  const contentHashHex = scriptContentHash.toString('hex');
+
+  if (
+    params.expectedContentHashHex &&
+    params.expectedContentHashHex.toLowerCase() !== contentHashHex.toLowerCase()
+  ) {
+    throw new DatabaseError(
+      `Script content hash mismatch at enqueue: expected ${params.expectedContentHashHex}, found ${contentHashHex}`,
+    );
+  }
 
   const policyHashHex = computeCompliancePolicyHash(policyVersion);
   const policyHash = Buffer.from(policyHashHex, 'hex');
@@ -135,6 +160,7 @@ export async function enqueueComplianceEvaluationTransaction(
     workOrderId,
     artifactId,
     revisionNumber,
+    contentHashHex,
     policyVersion,
     operationId: opId,
     aiRunId,
@@ -176,14 +202,18 @@ export async function enqueueComplianceEvaluationTransaction(
   await client.query(
     `INSERT INTO compliance_evaluations (
        id, workspace_id, product_id, work_order_id, artifact_id, revision_number,
-       policy_version, policy_hash, status, result, blocking_count, warning_count,
-       info_count, deterministic_passed, ai_advisory_status, evaluation_report_artifact_id,
-       ai_run_id, job_id, operation_id, created_at, updated_at, version
+       script_content_hash, policy_version, policy_hash, status, result,
+       blocking_count, warning_count, info_count, deterministic_passed,
+       ai_advisory_status, evaluation_report_artifact_id, evaluation_report_revision_number,
+       evaluation_report_content_hash, ai_run_id, job_id, operation_id,
+       created_at, updated_at, version
      ) VALUES (
        $1, $2, $3, $4, $5, $6,
-       $7, $8, 'queued', 'pending', 0, 0,
-       0, FALSE, 'pending', NULL,
-       $9, $10, $11, NOW(), NOW(), 1
+       $7, $8, $9, 'queued', 'pending',
+       0, 0, 0, FALSE,
+       'pending', NULL, NULL,
+       NULL, $10, $11, $12,
+       NOW(), NOW(), 1
      )`,
     [
       evalId,
@@ -192,6 +222,7 @@ export async function enqueueComplianceEvaluationTransaction(
       workOrderId,
       artifactId,
       revisionNumber,
+      scriptContentHash,
       policyVersion,
       policyHash,
       aiRunId,

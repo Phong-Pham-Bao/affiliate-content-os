@@ -37,6 +37,11 @@ ALTER TABLE ai_runs
     )
   );
 
+-- 1b. Unique composite constraint on content_artifact_revisions to allow exact hash foreign keys
+ALTER TABLE content_artifact_revisions
+  ADD CONSTRAINT content_artifact_revisions_ws_art_rev_hash_unique
+  UNIQUE (workspace_id, artifact_id, revision_number, content_hash);
+
 -- 2. Compliance evaluations table
 CREATE TABLE compliance_evaluations (
   id UUID PRIMARY KEY,
@@ -45,6 +50,7 @@ CREATE TABLE compliance_evaluations (
   work_order_id UUID NOT NULL,
   artifact_id UUID NOT NULL,
   revision_number INTEGER NOT NULL,
+  script_content_hash BYTEA NOT NULL,
   policy_version TEXT NOT NULL,
   policy_hash BYTEA NOT NULL,
   status TEXT NOT NULL,
@@ -55,6 +61,8 @@ CREATE TABLE compliance_evaluations (
   deterministic_passed BOOLEAN NOT NULL DEFAULT FALSE,
   ai_advisory_status TEXT NOT NULL DEFAULT 'pending',
   evaluation_report_artifact_id UUID NULL,
+  evaluation_report_revision_number INTEGER NULL,
+  evaluation_report_content_hash BYTEA NULL,
   ai_run_id UUID NULL,
   job_id UUID NULL,
   operation_id UUID NULL,
@@ -64,14 +72,22 @@ CREATE TABLE compliance_evaluations (
   CONSTRAINT compliance_evaluations_workspace_id_id_unique UNIQUE (workspace_id, id),
   CONSTRAINT compliance_evaluations_ws_art_rev_policy_unique UNIQUE (workspace_id, artifact_id, revision_number, policy_version, policy_hash),
   CONSTRAINT compliance_evaluations_ws_report_fk FOREIGN KEY (workspace_id, evaluation_report_artifact_id) REFERENCES content_artifacts(workspace_id, id) ON DELETE RESTRICT,
+  CONSTRAINT compliance_evaluations_ws_report_rev_fk FOREIGN KEY (workspace_id, evaluation_report_artifact_id, evaluation_report_revision_number, evaluation_report_content_hash) REFERENCES content_artifact_revisions(workspace_id, artifact_id, revision_number, content_hash) ON DELETE RESTRICT,
   CONSTRAINT compliance_evaluations_workspace_product_fk FOREIGN KEY (workspace_id, product_id) REFERENCES products(workspace_id, id) ON DELETE RESTRICT,
   CONSTRAINT compliance_evaluations_workspace_work_order_fk FOREIGN KEY (workspace_id, work_order_id) REFERENCES work_orders(workspace_id, id) ON DELETE RESTRICT,
   CONSTRAINT compliance_evaluations_workspace_artifact_fk FOREIGN KEY (workspace_id, artifact_id) REFERENCES content_artifacts(workspace_id, id) ON DELETE RESTRICT,
-  CONSTRAINT compliance_evaluations_workspace_rev_fk FOREIGN KEY (workspace_id, artifact_id, revision_number) REFERENCES content_artifact_revisions(workspace_id, artifact_id, revision_number) ON DELETE RESTRICT,
+  CONSTRAINT compliance_evaluations_workspace_rev_fk FOREIGN KEY (workspace_id, artifact_id, revision_number, script_content_hash) REFERENCES content_artifact_revisions(workspace_id, artifact_id, revision_number, content_hash) ON DELETE RESTRICT,
   CONSTRAINT compliance_evaluations_workspace_job_fk FOREIGN KEY (workspace_id, job_id) REFERENCES job_executions(workspace_id, id) ON DELETE RESTRICT,
   CONSTRAINT compliance_evaluations_workspace_op_fk FOREIGN KEY (workspace_id, operation_id) REFERENCES operations(workspace_id, id) ON DELETE RESTRICT,
   CONSTRAINT compliance_evaluations_workspace_ai_run_fk FOREIGN KEY (workspace_id, ai_run_id) REFERENCES ai_runs(workspace_id, id) ON DELETE RESTRICT,
+  CONSTRAINT compliance_evaluations_script_hash_len CHECK (octet_length(script_content_hash) = 32),
   CONSTRAINT compliance_evaluations_policy_hash_len CHECK (octet_length(policy_hash) = 32),
+  CONSTRAINT compliance_evaluations_report_hash_len CHECK (evaluation_report_content_hash IS NULL OR octet_length(evaluation_report_content_hash) = 32),
+  CONSTRAINT compliance_evaluations_report_binding_check CHECK (
+    (evaluation_report_artifact_id IS NULL AND evaluation_report_revision_number IS NULL AND evaluation_report_content_hash IS NULL) OR
+    (evaluation_report_artifact_id IS NOT NULL AND evaluation_report_revision_number IS NOT NULL AND evaluation_report_content_hash IS NOT NULL)
+  ),
+  CONSTRAINT compliance_evaluations_report_rev_num_check CHECK (evaluation_report_revision_number IS NULL OR evaluation_report_revision_number >= 1),
   CONSTRAINT compliance_evaluations_status_check CHECK (status IN ('queued', 'running', 'completed', 'failed')),
   CONSTRAINT compliance_evaluations_result_check CHECK (result IN ('pending', 'passed', 'warning', 'blocked', 'failed')),
   CONSTRAINT compliance_evaluations_ai_advisory_check CHECK (ai_advisory_status IN ('skipped', 'pending', 'completed', 'failed')),
@@ -163,7 +179,7 @@ CREATE TABLE content_review_decisions (
   created_at TIMESTAMPTZ NOT NULL,
   CONSTRAINT content_review_decisions_workspace_id_id_unique UNIQUE (workspace_id, id),
   CONSTRAINT content_review_decisions_ws_art_fk FOREIGN KEY (workspace_id, artifact_id) REFERENCES content_artifacts(workspace_id, id) ON DELETE RESTRICT,
-  CONSTRAINT content_review_decisions_ws_rev_fk FOREIGN KEY (workspace_id, artifact_id, revision_number) REFERENCES content_artifact_revisions(workspace_id, artifact_id, revision_number) ON DELETE RESTRICT,
+  CONSTRAINT content_review_decisions_ws_rev_fk FOREIGN KEY (workspace_id, artifact_id, revision_number, content_hash) REFERENCES content_artifact_revisions(workspace_id, artifact_id, revision_number, content_hash) ON DELETE RESTRICT,
   CONSTRAINT content_review_decisions_ws_eval_fk FOREIGN KEY (workspace_id, evaluation_id) REFERENCES compliance_evaluations(workspace_id, id) ON DELETE RESTRICT,
   CONSTRAINT content_review_decisions_hash_len CHECK (octet_length(content_hash) = 32),
   CONSTRAINT content_review_decisions_type_check CHECK (decision IN ('accept', 'reject', 'request_changes')),
@@ -208,7 +224,7 @@ CREATE TABLE content_approval_snapshots (
   CONSTRAINT content_approval_snapshots_workspace_id_id_unique UNIQUE (workspace_id, id),
   CONSTRAINT content_approval_snapshots_ws_art_rev_unique UNIQUE (workspace_id, artifact_id, revision_number),
   CONSTRAINT content_approval_snapshots_ws_art_fk FOREIGN KEY (workspace_id, artifact_id) REFERENCES content_artifacts(workspace_id, id) ON DELETE RESTRICT,
-  CONSTRAINT content_approval_snapshots_ws_rev_fk FOREIGN KEY (workspace_id, artifact_id, revision_number) REFERENCES content_artifact_revisions(workspace_id, artifact_id, revision_number) ON DELETE RESTRICT,
+  CONSTRAINT content_approval_snapshots_ws_rev_fk FOREIGN KEY (workspace_id, artifact_id, revision_number, content_hash) REFERENCES content_artifact_revisions(workspace_id, artifact_id, revision_number, content_hash) ON DELETE RESTRICT,
   CONSTRAINT content_approval_snapshots_ws_eval_fk FOREIGN KEY (workspace_id, evaluation_id) REFERENCES compliance_evaluations(workspace_id, id) ON DELETE RESTRICT,
   CONSTRAINT content_approval_snapshots_ws_dec_fk FOREIGN KEY (workspace_id, decision_id) REFERENCES content_review_decisions(workspace_id, id) ON DELETE RESTRICT,
   CONSTRAINT content_approval_snapshots_content_hash_len CHECK (octet_length(content_hash) = 32),

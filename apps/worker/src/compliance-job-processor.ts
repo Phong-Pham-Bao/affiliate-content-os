@@ -9,6 +9,7 @@ import {
   prepareComplianceReviewExecution,
   settleComplianceBudgetExhaustedAtomic,
   settleComplianceDriftAtomic,
+  settleComplianceMalformedJobAtomic,
   settleCompliancePreflightBlockerAtomic,
   settleComplianceReviewExecutionAtomic,
 } from '@affiliate-content-os/infrastructure/workforce';
@@ -35,13 +36,15 @@ export async function processComplianceReviewJob(
   } catch (_err) {
     const client = await deps.pool.connect();
     try {
-      await client.query(
-        `UPDATE job_executions
-         SET status = 'failed', last_error_category = 'internal_error',
-             completed_at = NOW(), updated_at = NOW(), version = version + 1
-         WHERE id = $1 AND workspace_id = $2`,
-        [job.id, job.workspaceId],
-      );
+      await client.query('BEGIN');
+      await settleComplianceMalformedJobAtomic(client, {
+        workspaceId: job.workspaceId,
+        jobId: job.id,
+        workerId: deps.workerId,
+      });
+      await client.query('COMMIT');
+    } catch {
+      await client.query('ROLLBACK');
     } finally {
       client.release();
     }
@@ -165,6 +168,11 @@ export async function processComplianceReviewJob(
       reservedSpend: prep.reservedSpend,
       policyVersion: prep.policyVersion,
       policyHashHex: prep.policyHashHex,
+      providerInput: prep.providerInput,
+      providerInputHash: prep.providerInputHash,
+      briefSnapshot: prep.briefSnapshot,
+      planningRevisionsSnapshot: prep.planningRevisionsSnapshot,
+      contextPackageSnapshot: prep.contextPackageSnapshot,
       providerResult: advisoryRes,
     });
     await settleClient.query('COMMIT');

@@ -34,11 +34,15 @@ export interface ComplianceEvaluationDTO {
   readonly artifactId: string;
   readonly revisionNumber: number;
   readonly contentHashHex: string;
+  readonly scriptContentHashHex?: string | undefined;
   readonly policyVersion: string;
   readonly policyHashHex: string;
   readonly status: ComplianceEvaluationStatus;
   readonly result?: 'pending' | 'passed' | 'warning' | 'blocked' | 'failed' | undefined;
   readonly aiAdvisoryStatus?: 'skipped' | 'pending' | 'completed' | 'failed' | undefined;
+  readonly evaluationReportArtifactId?: string | null | undefined;
+  readonly evaluationReportRevisionNumber?: number | null | undefined;
+  readonly evaluationReportContentHashHex?: string | null | undefined;
   readonly blockingCount: number;
   readonly warningCount: number;
   readonly infoCount: number;
