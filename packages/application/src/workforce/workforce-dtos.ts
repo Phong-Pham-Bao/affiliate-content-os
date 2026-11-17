@@ -218,6 +218,7 @@ export interface ComplianceEvaluationDTO {
   readonly workspaceId: WorkspaceId;
   readonly productId: ProductId;
   readonly workOrderId: WorkOrderId;
+  readonly contextPackageId: string;
   readonly artifactId: string;
   readonly revisionNumber: number;
   readonly scriptContentHashHex: string;

@@ -192,12 +192,14 @@ describe('Workforce Worker Execution Components', () => {
       operationId: opId,
       aiRunId: runId,
       evaluationId: '019318b2-5f33-722e-a5df-036f007b89ef',
+      contextPackageId: cpId,
       reservedMicrounits: 50000,
     };
 
     const parsed = parseAndValidateCompliancePayload(validCompliancePayload);
     expect(parsed.revisionNumber).toBe(1);
     expect(parsed.contentHashHex).toBe('a'.repeat(64));
+    expect(parsed.contextPackageId).toBe(cpId);
 
     const jobSnapshot = createMockJobSnapshot(validCompliancePayload, {
       jobType: 'compliance_review',

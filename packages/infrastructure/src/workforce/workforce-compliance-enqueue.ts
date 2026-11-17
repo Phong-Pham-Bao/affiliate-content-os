@@ -42,6 +42,16 @@ export async function enqueueComplianceEvaluationTransaction(
   const scriptContentHash: Buffer = revRes.rows[0].content_hash;
   const contentHashHex = scriptContentHash.toString('hex');
 
+  // 0b. Fetch context_package_id from work_orders
+  const woRes = await client.query(
+    `SELECT context_package_id FROM work_orders WHERE workspace_id = $1 AND id = $2`,
+    [workspaceId, workOrderId],
+  );
+  if (woRes.rowCount === 0 || !woRes.rows[0]) {
+    throw new DatabaseError(`Work order ${workOrderId} not found for workspace ${workspaceId}`);
+  }
+  const contextPackageId: string = woRes.rows[0].context_package_id;
+
   if (
     params.expectedContentHashHex &&
     params.expectedContentHashHex.toLowerCase() !== contentHashHex.toLowerCase()
@@ -158,6 +168,7 @@ export async function enqueueComplianceEvaluationTransaction(
     workspaceId,
     productId,
     workOrderId,
+    contextPackageId,
     artifactId,
     revisionNumber,
     contentHashHex,
@@ -201,18 +212,18 @@ export async function enqueueComplianceEvaluationTransaction(
   // 8. Insert compliance evaluation
   await client.query(
     `INSERT INTO compliance_evaluations (
-       id, workspace_id, product_id, work_order_id, artifact_id, revision_number,
+       id, workspace_id, product_id, work_order_id, context_package_id, artifact_id, revision_number,
        script_content_hash, policy_version, policy_hash, status, result,
        blocking_count, warning_count, info_count, deterministic_passed,
        ai_advisory_status, evaluation_report_artifact_id, evaluation_report_revision_number,
        evaluation_report_content_hash, ai_run_id, job_id, operation_id,
        created_at, updated_at, version
      ) VALUES (
-       $1, $2, $3, $4, $5, $6,
-       $7, $8, $9, 'queued', 'pending',
+       $1, $2, $3, $4, $5, $6, $7,
+       $8, $9, $10, 'queued', 'pending',
        0, 0, 0, FALSE,
        'pending', NULL, NULL,
-       NULL, $10, $11, $12,
+       NULL, $11, $12, $13,
        NOW(), NOW(), 1
      )`,
     [
@@ -220,6 +231,7 @@ export async function enqueueComplianceEvaluationTransaction(
       workspaceId,
       productId,
       workOrderId,
+      contextPackageId,
       artifactId,
       revisionNumber,
       scriptContentHash,

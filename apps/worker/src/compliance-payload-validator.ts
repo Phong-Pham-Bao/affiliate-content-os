@@ -4,6 +4,7 @@ export interface ValidatedCompliancePayload {
   readonly workspaceId: string;
   readonly productId: string;
   readonly workOrderId: string;
+  readonly contextPackageId?: string | null | undefined;
   readonly artifactId: string;
   readonly revisionNumber: number;
   readonly contentHashHex: string;
@@ -62,6 +63,7 @@ export function parseAndValidateCompliancePayload(
     workspaceId: p.workspaceId,
     productId: p.productId,
     workOrderId: p.workOrderId,
+    contextPackageId: typeof p.contextPackageId === 'string' ? p.contextPackageId : null,
     artifactId: p.artifactId,
     revisionNumber: p.revisionNumber,
     contentHashHex: p.contentHashHex.toLowerCase(),

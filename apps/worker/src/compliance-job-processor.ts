@@ -40,11 +40,16 @@ export async function processComplianceReviewJob(
       await settleComplianceMalformedJobAtomic(client, {
         workspaceId: job.workspaceId,
         jobId: job.id,
+        jobVersion: job.version,
         workerId: deps.workerId,
       });
       await client.query('COMMIT');
-    } catch {
+    } catch (err) {
       await client.query('ROLLBACK');
+      if (err instanceof JobLeaseExpiredError) {
+        return;
+      }
+      throw err;
     } finally {
       client.release();
     }
@@ -186,8 +191,8 @@ export async function processComplianceReviewJob(
         `UPDATE job_executions
          SET status = 'failed', last_error_category = 'internal_error',
              completed_at = NOW(), updated_at = NOW(), version = version + 1
-         WHERE id = $1 AND workspace_id = $2 AND status = 'running'`,
-        [job.id, job.workspaceId],
+         WHERE id = $1 AND workspace_id = $2 AND status = 'running' AND lease_owner = $3 AND version = $4`,
+        [job.id, job.workspaceId, deps.workerId, job.version],
       );
     } catch {
       // Ignore fallback failure

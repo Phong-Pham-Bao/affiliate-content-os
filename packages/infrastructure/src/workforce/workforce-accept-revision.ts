@@ -159,10 +159,10 @@ export async function acceptScriptRevisionTransaction(
   const currentPolicyHash = Buffer.from(currentPolicyHashHex, 'hex');
 
   const evalRes = await client.query(
-    `SELECT id, status, result, blocking_count, warning_count, info_count, ai_advisory_status,
+    `SELECT id, status, result, blocking_count, warning_count, info_count, deterministic_passed, ai_advisory_status,
             policy_version, policy_hash, evaluation_report_artifact_id,
             evaluation_report_revision_number, evaluation_report_content_hash,
-            script_content_hash
+            script_content_hash, context_package_id
      FROM compliance_evaluations
      WHERE workspace_id = $1 AND artifact_id = $2 AND revision_number = $3
        AND policy_version = $4 AND policy_hash = $5
@@ -271,6 +271,8 @@ export async function acceptScriptRevisionTransaction(
     reportContent.result !== evalRow.result ||
     reportContent.blockingCount !== Number(evalRow.blocking_count) ||
     reportContent.warningCount !== Number(evalRow.warning_count) ||
+    reportContent.infoCount !== Number(evalRow.info_count) ||
+    reportContent.deterministicPassed !== Boolean(evalRow.deterministic_passed) ||
     reportContent.aiAdvisoryStatus !== evalRow.ai_advisory_status
   ) {
     throw new ComplianceEvaluationNotApprovableError(
@@ -368,6 +370,12 @@ export async function acceptScriptRevisionTransaction(
   }
   const contextPackageId = woRes.rows[0].context_package_id;
 
+  if (evalRow.context_package_id !== contextPackageId) {
+    throw new ComplianceEvaluationStaleError(
+      `Evaluation was performed against context package ${evalRow.context_package_id}, but current work order context package is ${contextPackageId}`,
+    );
+  }
+
   const allowedFactsRes = await client.query(
     `SELECT f.id
      FROM product_facts f
@@ -405,17 +413,48 @@ export async function acceptScriptRevisionTransaction(
   const videos = Array.isArray(scriptPkg?.videos) ? scriptPkg.videos : [];
 
   for (const v of videos) {
-    for (const eid of v.evidenceIds ?? []) {
+    const videoRefs = Array.isArray(v.evidenceReferences) ? v.evidenceReferences : [];
+    for (const ref of videoRefs) {
+      const eid = ref.sourceId;
       if (revokedEvidenceIdSet.has(eid)) {
         throw new ComplianceEvaluationStaleError(
           `Evidence ${eid} referenced in video ${v.videoNumber} has been revoked or disallowed`,
         );
       }
-      if (!allowedFactIdSet.has(eid) && !allowedAnalysisIdSet.has(eid)) {
+      const isAllowed =
+        ref.sourceKind === 'product_fact'
+          ? allowedFactIdSet.has(eid)
+          : ref.sourceKind === 'analysis'
+            ? allowedAnalysisIdSet.has(eid)
+            : false;
+      if (!isAllowed) {
         throw new ComplianceEvaluationStaleError(
           `Evidence ${eid} referenced in video ${v.videoNumber} is no longer in allowed context package`,
         );
       }
+    }
+  }
+
+  const pkgEvidenceRefs = Array.isArray(scriptPkg?.evidenceReferences)
+    ? scriptPkg.evidenceReferences
+    : [];
+  for (const ref of pkgEvidenceRefs) {
+    const eid = ref.sourceId;
+    if (revokedEvidenceIdSet.has(eid)) {
+      throw new ComplianceEvaluationStaleError(
+        `Package evidence ${eid} has been revoked or disallowed`,
+      );
+    }
+    const isAllowed =
+      ref.sourceKind === 'product_fact'
+        ? allowedFactIdSet.has(eid)
+        : ref.sourceKind === 'analysis'
+          ? allowedAnalysisIdSet.has(eid)
+          : false;
+    if (!isAllowed) {
+      throw new ComplianceEvaluationStaleError(
+        `Package evidence ${eid} is no longer in allowed context package`,
+      );
     }
   }
 
@@ -497,6 +536,7 @@ export async function acceptScriptRevisionTransaction(
     contentHashHex: actualHashHex,
     content: scriptPkg,
     evaluationId: evalRow.id,
+    contextPackageId: evalRow.context_package_id,
     policyVersion: evalRow.policy_version,
     policyHashHex: Buffer.from(evalRow.policy_hash).toString('hex'),
     decisionId,

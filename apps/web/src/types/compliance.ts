@@ -31,6 +31,7 @@ export interface ComplianceFindingDTO {
 export interface ComplianceEvaluationDTO {
   readonly id: string;
   readonly workspaceId: string;
+  readonly contextPackageId?: string | undefined;
   readonly artifactId: string;
   readonly revisionNumber: number;
   readonly contentHashHex: string;

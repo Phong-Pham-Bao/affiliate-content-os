@@ -187,7 +187,7 @@ export async function prepareComplianceReviewExecution(
 
   // 3. Check evaluation
   const evalRes = await client.query(
-    `SELECT id, status, result, policy_version, policy_hash, revision_number, script_content_hash
+    `SELECT id, status, result, policy_version, policy_hash, revision_number, script_content_hash, context_package_id
      FROM compliance_evaluations
      WHERE id = $1 AND workspace_id = $2`,
     [evaluationId, workspaceId],
@@ -373,6 +373,16 @@ export async function prepareComplianceReviewExecution(
     throw new DatabaseError(`Work order ${workOrderId} not found`);
   }
   const contextPackageId = woRes.rows[0].context_package_id;
+  if (
+    evalRes.rows[0].context_package_id &&
+    evalRes.rows[0].context_package_id !== contextPackageId
+  ) {
+    return {
+      kind: 'drift_detected',
+      reason: 'Authoritative work order context package drifted from compliance evaluation',
+      reservedSpend,
+    };
+  }
 
   // Allowed facts
   const factsRes = await client.query(
@@ -563,10 +573,10 @@ export async function settleCompliancePreflightBlockerAtomic(
   if (reservedSpend > 0) {
     const budgetRes = await client.query(
       `UPDATE workspace_ai_policies
-       SET reserved_spend_microunits = GREATEST(0, reserved_spend_microunits - $1),
+       SET reserved_spend_microunits = reserved_spend_microunits - $1,
            updated_at = NOW(),
            version = version + 1
-       WHERE workspace_id = $2`,
+       WHERE workspace_id = $2 AND reserved_spend_microunits >= $1`,
       [reservedSpend, workspaceId],
     );
     if (budgetRes.rowCount !== 1) {
@@ -735,12 +745,17 @@ export async function settleCompliancePreflightBlockerAtomic(
     if (itemRes.rowCount !== 1) {
       throw new DatabaseError(`Failed to update work_items ${job.work_item_id}`);
     }
-    await client.query(
+    const asgRes = await client.query(
       `UPDATE agent_assignments
        SET office_state = 'review_required', updated_at = NOW(), version = version + 1
        WHERE workspace_id = $1 AND work_order_id = $2 AND work_item_id = $3`,
       [workspaceId, workOrderId, job.work_item_id],
     );
+    if (asgRes.rowCount !== 1) {
+      throw new DatabaseError(
+        `Failed to update agent_assignments for work item ${job.work_item_id}`,
+      );
+    }
   }
 
   return { status: 'blocked', evaluationId };
@@ -803,9 +818,9 @@ export async function settleComplianceBudgetExhaustedAtomic(
   if (reserved > 0) {
     const budgetRes = await client.query(
       `UPDATE workspace_ai_policies
-       SET reserved_spend_microunits = GREATEST(0, reserved_spend_microunits - $1),
+       SET reserved_spend_microunits = reserved_spend_microunits - $1,
            updated_at = NOW(), version = version + 1
-       WHERE workspace_id = $2`,
+       WHERE workspace_id = $2 AND reserved_spend_microunits >= $1`,
       [reserved, workspaceId],
     );
     if (budgetRes.rowCount !== 1) {
@@ -904,18 +919,26 @@ export async function settleComplianceBudgetExhaustedAtomic(
 
   // Work item & assignment remain in failed / review_required state
   if (job.work_item_id) {
-    await client.query(
+    const itemRes = await client.query(
       `UPDATE work_items
        SET status = 'failed', started_at = COALESCE(started_at, NOW()), completed_at = NOW(), updated_at = NOW(), version = version + 1
        WHERE id = $1 AND workspace_id = $2 AND status IN ('queued', 'running')`,
       [job.work_item_id, workspaceId],
     );
-    await client.query(
+    if (itemRes.rowCount !== 1) {
+      throw new DatabaseError(`Failed to update work_items ${job.work_item_id}`);
+    }
+    const asgRes = await client.query(
       `UPDATE agent_assignments
        SET office_state = 'failed', updated_at = NOW(), version = version + 1
        WHERE workspace_id = $1 AND work_order_id = $2 AND work_item_id = $3`,
       [workspaceId, workOrderId, job.work_item_id],
     );
+    if (asgRes.rowCount !== 1) {
+      throw new DatabaseError(
+        `Failed to update agent_assignments for work item ${job.work_item_id}`,
+      );
+    }
   }
 
   return { status: 'budget_exhausted', evaluationId };
@@ -977,9 +1000,9 @@ export async function settleComplianceDriftAtomic(
   if (reservedSpend > 0) {
     const budgetRes = await client.query(
       `UPDATE workspace_ai_policies
-       SET reserved_spend_microunits = GREATEST(0, reserved_spend_microunits - $1),
+       SET reserved_spend_microunits = reserved_spend_microunits - $1,
            updated_at = NOW(), version = version + 1
-       WHERE workspace_id = $2`,
+       WHERE workspace_id = $2 AND reserved_spend_microunits >= $1`,
       [reservedSpend, workspaceId],
     );
     if (budgetRes.rowCount !== 1) {
@@ -1038,18 +1061,26 @@ export async function settleComplianceDriftAtomic(
   }
 
   if (job.work_item_id) {
-    await client.query(
+    const itemRes = await client.query(
       `UPDATE work_items
        SET status = 'failed', started_at = COALESCE(started_at, NOW()), completed_at = NOW(), updated_at = NOW(), version = version + 1
        WHERE id = $1 AND workspace_id = $2 AND status IN ('queued', 'running')`,
       [job.work_item_id, workspaceId],
     );
-    await client.query(
+    if (itemRes.rowCount !== 1) {
+      throw new DatabaseError(`Failed to update work_items ${job.work_item_id}`);
+    }
+    const asgRes = await client.query(
       `UPDATE agent_assignments
        SET office_state = 'failed', updated_at = NOW(), version = version + 1
        WHERE workspace_id = $1 AND work_order_id = $2 AND work_item_id = $3`,
       [workspaceId, workOrderId, job.work_item_id],
     );
+    if (asgRes.rowCount !== 1) {
+      throw new DatabaseError(
+        `Failed to update agent_assignments for work item ${job.work_item_id}`,
+      );
+    }
   }
 
   return { status: 'drift_canceled', evaluationId };
@@ -1442,9 +1473,9 @@ export async function settleComplianceReviewExecutionAtomic(
     if (reservedSpend > 0) {
       const budgetRes = await client.query(
         `UPDATE workspace_ai_policies
-         SET reserved_spend_microunits = GREATEST(0, reserved_spend_microunits - $1),
+         SET reserved_spend_microunits = reserved_spend_microunits - $1,
              updated_at = NOW(), version = version + 1
-         WHERE workspace_id = $2`,
+         WHERE workspace_id = $2 AND reserved_spend_microunits >= $1`,
         [reservedSpend, workspaceId],
       );
       if (budgetRes.rowCount !== 1) {
@@ -1534,18 +1565,26 @@ export async function settleComplianceReviewExecutionAtomic(
     }
 
     if (job.work_item_id) {
-      await client.query(
+      const itemRes = await client.query(
         `UPDATE work_items
          SET status = 'failed', started_at = COALESCE(started_at, NOW()), completed_at = NOW(), updated_at = NOW(), version = version + 1
          WHERE id = $1 AND workspace_id = $2 AND status IN ('queued', 'running')`,
         [job.work_item_id, workspaceId],
       );
-      await client.query(
+      if (itemRes.rowCount !== 1) {
+        throw new DatabaseError(`Failed to update work_items ${job.work_item_id}`);
+      }
+      const asgRes = await client.query(
         `UPDATE agent_assignments
          SET office_state = 'failed', updated_at = NOW(), version = version + 1
          WHERE workspace_id = $1 AND work_order_id = $2 AND work_item_id = $3`,
         [workspaceId, workOrderId, job.work_item_id],
       );
+      if (asgRes.rowCount !== 1) {
+        throw new DatabaseError(
+          `Failed to update agent_assignments for work item ${job.work_item_id}`,
+        );
+      }
     }
 
     return { status: 'failed', evaluationId };
@@ -1565,9 +1604,9 @@ export async function settleComplianceReviewExecutionAtomic(
     if (reservedSpend > 0) {
       const budgetRes = await client.query(
         `UPDATE workspace_ai_policies
-         SET reserved_spend_microunits = GREATEST(0, reserved_spend_microunits - $1),
+         SET reserved_spend_microunits = reserved_spend_microunits - $1,
              updated_at = NOW(), version = version + 1
-         WHERE workspace_id = $2`,
+         WHERE workspace_id = $2 AND reserved_spend_microunits >= $1`,
         [reservedSpend, workspaceId],
       );
       if (budgetRes.rowCount !== 1) {
@@ -1658,18 +1697,26 @@ export async function settleComplianceReviewExecutionAtomic(
     }
 
     if (job.work_item_id) {
-      await client.query(
+      const itemRes = await client.query(
         `UPDATE work_items
          SET status = 'failed', started_at = COALESCE(started_at, NOW()), completed_at = NOW(), updated_at = NOW(), version = version + 1
          WHERE id = $1 AND workspace_id = $2 AND status IN ('queued', 'running')`,
         [job.work_item_id, workspaceId],
       );
-      await client.query(
+      if (itemRes.rowCount !== 1) {
+        throw new DatabaseError(`Failed to update work_items ${job.work_item_id}`);
+      }
+      const asgRes = await client.query(
         `UPDATE agent_assignments
          SET office_state = 'failed', updated_at = NOW(), version = version + 1
          WHERE workspace_id = $1 AND work_order_id = $2 AND work_item_id = $3`,
         [workspaceId, workOrderId, job.work_item_id],
       );
+      if (asgRes.rowCount !== 1) {
+        throw new DatabaseError(
+          `Failed to update agent_assignments for work item ${job.work_item_id}`,
+        );
+      }
     }
 
     return { status: 'failed', evaluationId };
@@ -1681,10 +1728,10 @@ export async function settleComplianceReviewExecutionAtomic(
     const budgetRes = await client.query(
       `UPDATE workspace_ai_policies
        SET current_spend_microunits = current_spend_microunits + $1,
-           reserved_spend_microunits = GREATEST(0, reserved_spend_microunits - $2),
+           reserved_spend_microunits = reserved_spend_microunits - $2,
            updated_at = NOW(),
            version = version + 1
-       WHERE workspace_id = $3`,
+       WHERE workspace_id = $3 AND reserved_spend_microunits >= $2`,
       [actualSpend, reservedSpend, workspaceId],
     );
     if (budgetRes.rowCount !== 1) {
@@ -1930,12 +1977,17 @@ export async function settleComplianceReviewExecutionAtomic(
       throw new DatabaseError(`Failed to update work_items ${job.work_item_id}`);
     }
 
-    await client.query(
+    const asgRes = await client.query(
       `UPDATE agent_assignments
        SET office_state = 'review_required', updated_at = NOW(), version = version + 1
        WHERE workspace_id = $1 AND work_order_id = $2 AND work_item_id = $3`,
       [workspaceId, workOrderId, job.work_item_id],
     );
+    if (asgRes.rowCount !== 1) {
+      throw new DatabaseError(
+        `Failed to update agent_assignments for work item ${job.work_item_id}`,
+      );
+    }
   }
 
   return { status: 'completed', evaluationId };
@@ -1949,7 +2001,7 @@ async function findOrCreateReportArtifact(
   workItemId?: string | null,
 ): Promise<{ readonly reportArtifactId: string; readonly reportRevNum: number }> {
   const reportArtRes = await client.query(
-    `SELECT id, current_revision_number FROM content_artifacts
+    `SELECT id, current_revision_number, version FROM content_artifacts
      WHERE workspace_id = $1 AND work_order_id = $2 AND artifact_type = 'compliance_report'
      FOR UPDATE`,
     [workspaceId, workOrderId],
@@ -1978,12 +2030,15 @@ async function findOrCreateReportArtifact(
   } else {
     reportArtifactId = reportArtRes.rows[0].id;
     reportRevNum = Number(reportArtRes.rows[0].current_revision_number) + 1;
-    await client.query(
+    const reportUpdateRes = await client.query(
       `UPDATE content_artifacts
        SET current_revision_number = $1, updated_at = NOW(), version = version + 1
-       WHERE workspace_id = $2 AND id = $3`,
-      [reportRevNum, workspaceId, reportArtifactId],
+       WHERE workspace_id = $2 AND id = $3 AND version = $4`,
+      [reportRevNum, workspaceId, reportArtifactId, reportArtRes.rows[0].version],
     );
+    if (reportUpdateRes.rowCount !== 1) {
+      throw new DatabaseError(`Failed to update report artifact container ${reportArtifactId}`);
+    }
   }
 
   return { reportArtifactId, reportRevNum };
@@ -1992,19 +2047,21 @@ async function findOrCreateReportArtifact(
 export interface SettleComplianceMalformedJobParams {
   readonly workspaceId: string;
   readonly jobId: string;
-  readonly workerId?: string | undefined;
+  readonly jobVersion: number;
+  readonly workerId: string;
 }
 
 export async function settleComplianceMalformedJobAtomic(
   client: pg.PoolClient,
   params: SettleComplianceMalformedJobParams,
 ): Promise<void> {
-  const { workspaceId, jobId } = params;
+  const { workspaceId, jobId, jobVersion, workerId } = params;
 
-  // 1. Lock job execution row using ONLY trusted columns from the DB
+  // 1. Lock job execution row using ONLY trusted columns from the DB and verify live lease fence
   const jobRes = await client.query(
     `SELECT id, workspace_id, operation_id, ai_run_id, work_order_id, work_item_id,
-            reserved_spend_microunits, status, version, lease_owner
+            reserved_spend_microunits, status, version, lease_owner, lease_expires_at,
+            (lease_expires_at < NOW()) AS is_lease_expired
      FROM job_executions
      WHERE id = $1 AND workspace_id = $2
      FOR UPDATE`,
@@ -2012,24 +2069,29 @@ export async function settleComplianceMalformedJobAtomic(
   );
 
   if (jobRes.rowCount === 0 || !jobRes.rows[0]) {
-    return;
+    throw new DatabaseError(`Job ${jobId} not found`);
   }
   const job = jobRes.rows[0];
 
-  // If already terminal, nothing to clean up
-  if (job.status === 'succeeded' || job.status === 'failed') {
-    return;
+  if (
+    job.is_lease_expired ||
+    !job.lease_expires_at ||
+    Number(job.version) !== jobVersion ||
+    job.lease_owner !== workerId ||
+    job.status !== 'running'
+  ) {
+    throw new JobLeaseExpiredError(jobId);
   }
 
-  // 2. Release any reserved budget exactly once
+  // 2. Release any reserved budget exactly once with fail-closed accounting predicate
   const reservedSpend = Number(job.reserved_spend_microunits ?? 0);
   if (reservedSpend > 0) {
     const budgetRes = await client.query(
       `UPDATE workspace_ai_policies
-       SET reserved_spend_microunits = GREATEST(0, reserved_spend_microunits - $1),
+       SET reserved_spend_microunits = reserved_spend_microunits - $1,
            updated_at = NOW(),
            version = version + 1
-       WHERE workspace_id = $2`,
+       WHERE workspace_id = $2 AND reserved_spend_microunits >= $1`,
       [reservedSpend, workspaceId],
     );
     if (budgetRes.rowCount !== 1) {
@@ -2038,7 +2100,7 @@ export async function settleComplianceMalformedJobAtomic(
   }
 
   // 3. Mark job_executions as failed, clear lease & reservation
-  await client.query(
+  const jobUpdateRes = await client.query(
     `UPDATE job_executions
      SET status = 'failed',
          last_error_category = 'internal_error',
@@ -2048,13 +2110,16 @@ export async function settleComplianceMalformedJobAtomic(
          completed_at = NOW(),
          updated_at = NOW(),
          version = version + 1
-     WHERE id = $1 AND workspace_id = $2`,
-    [jobId, workspaceId],
+     WHERE id = $1 AND workspace_id = $2 AND status = 'running' AND lease_owner = $3 AND version = $4`,
+    [jobId, workspaceId, workerId, jobVersion],
   );
+  if (jobUpdateRes.rowCount !== 1) {
+    throw new JobLeaseExpiredError(jobId);
+  }
 
   // 4. Mark linked operations row as failed
   if (job.operation_id) {
-    await client.query(
+    const opRes = await client.query(
       `UPDATE operations
        SET status = 'failed',
            error_category = 'internal_error',
@@ -2066,11 +2131,14 @@ export async function settleComplianceMalformedJobAtomic(
        WHERE id = $1 AND workspace_id = $2 AND status IN ('queued', 'running')`,
       [job.operation_id, workspaceId],
     );
+    if (opRes.rowCount !== 1) {
+      throw new DatabaseError(`Failed to update operations ${job.operation_id}`);
+    }
   }
 
   // 5. Mark linked ai_runs row as failed
   if (job.ai_run_id) {
-    await client.query(
+    const runRes = await client.query(
       `UPDATE ai_runs
        SET status = 'failed',
            error_category = 'internal_error',
@@ -2080,26 +2148,41 @@ export async function settleComplianceMalformedJobAtomic(
        WHERE id = $1 AND workspace_id = $2 AND status IN ('queued', 'running')`,
       [job.ai_run_id, workspaceId],
     );
+    if (runRes.rowCount !== 1) {
+      throw new DatabaseError(`Failed to update ai_runs ${job.ai_run_id}`);
+    }
   }
 
   // 6. Mark any linked compliance_evaluations row as failed
-  await client.query(
-    `UPDATE compliance_evaluations
-     SET status = 'failed',
-         result = 'failed',
-         ai_advisory_status = 'failed',
-         evaluation_report_artifact_id = NULL,
-         evaluation_report_revision_number = NULL,
-         evaluation_report_content_hash = NULL,
-         updated_at = NOW(),
-         version = version + 1
-     WHERE job_id = $1 AND workspace_id = $2 AND status IN ('queued', 'running')`,
+  const evalCheckRes = await client.query(
+    `SELECT id, status
+     FROM compliance_evaluations
+     WHERE job_id = $1 AND workspace_id = $2
+     FOR UPDATE`,
     [jobId, workspaceId],
   );
+  if (evalCheckRes.rowCount !== 0) {
+    const evalUpdateRes = await client.query(
+      `UPDATE compliance_evaluations
+       SET status = 'failed',
+           result = 'failed',
+           ai_advisory_status = 'failed',
+           evaluation_report_artifact_id = NULL,
+           evaluation_report_revision_number = NULL,
+           evaluation_report_content_hash = NULL,
+           updated_at = NOW(),
+           version = version + 1
+       WHERE job_id = $1 AND workspace_id = $2 AND status IN ('queued', 'running')`,
+      [jobId, workspaceId],
+    );
+    if (evalUpdateRes.rowCount !== evalCheckRes.rowCount) {
+      throw new DatabaseError(`Failed to update compliance_evaluations for job ${jobId}`);
+    }
+  }
 
   // 7. Work item & assignment
   if (job.work_item_id) {
-    await client.query(
+    const itemRes = await client.query(
       `UPDATE work_items
        SET status = 'failed',
            completed_at = NOW(),
@@ -2108,14 +2191,22 @@ export async function settleComplianceMalformedJobAtomic(
        WHERE id = $1 AND workspace_id = $2 AND status IN ('queued', 'running')`,
       [job.work_item_id, workspaceId],
     );
+    if (itemRes.rowCount !== 1) {
+      throw new DatabaseError(`Failed to update work_items ${job.work_item_id}`);
+    }
 
-    await client.query(
+    const asgRes = await client.query(
       `UPDATE agent_assignments
        SET office_state = 'failed',
            updated_at = NOW(),
            version = version + 1
-       WHERE workspace_id = $1 AND work_item_id = $2 AND office_state = 'queued'`,
+       WHERE workspace_id = $1 AND work_item_id = $2`,
       [workspaceId, job.work_item_id],
     );
+    if (asgRes.rowCount !== 1) {
+      throw new DatabaseError(
+        `Failed to update agent_assignments for work item ${job.work_item_id}`,
+      );
+    }
   }
 }

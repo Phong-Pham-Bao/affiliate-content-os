@@ -48,6 +48,7 @@ CREATE TABLE compliance_evaluations (
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE RESTRICT,
   product_id UUID NOT NULL,
   work_order_id UUID NOT NULL,
+  context_package_id UUID NOT NULL,
   artifact_id UUID NOT NULL,
   revision_number INTEGER NOT NULL,
   script_content_hash BYTEA NOT NULL,
@@ -75,6 +76,7 @@ CREATE TABLE compliance_evaluations (
   CONSTRAINT compliance_evaluations_ws_report_rev_fk FOREIGN KEY (workspace_id, evaluation_report_artifact_id, evaluation_report_revision_number, evaluation_report_content_hash) REFERENCES content_artifact_revisions(workspace_id, artifact_id, revision_number, content_hash) ON DELETE RESTRICT,
   CONSTRAINT compliance_evaluations_workspace_product_fk FOREIGN KEY (workspace_id, product_id) REFERENCES products(workspace_id, id) ON DELETE RESTRICT,
   CONSTRAINT compliance_evaluations_workspace_work_order_fk FOREIGN KEY (workspace_id, work_order_id) REFERENCES work_orders(workspace_id, id) ON DELETE RESTRICT,
+  CONSTRAINT compliance_evaluations_workspace_context_pkg_fk FOREIGN KEY (workspace_id, context_package_id) REFERENCES context_packages(workspace_id, id) ON DELETE RESTRICT,
   CONSTRAINT compliance_evaluations_workspace_artifact_fk FOREIGN KEY (workspace_id, artifact_id) REFERENCES content_artifacts(workspace_id, id) ON DELETE RESTRICT,
   CONSTRAINT compliance_evaluations_workspace_rev_fk FOREIGN KEY (workspace_id, artifact_id, revision_number, script_content_hash) REFERENCES content_artifact_revisions(workspace_id, artifact_id, revision_number, content_hash) ON DELETE RESTRICT,
   CONSTRAINT compliance_evaluations_workspace_job_fk FOREIGN KEY (workspace_id, job_id) REFERENCES job_executions(workspace_id, id) ON DELETE RESTRICT,
@@ -99,6 +101,7 @@ CREATE TABLE compliance_evaluations (
 CREATE INDEX idx_compliance_evals_artifact_rev ON compliance_evaluations (workspace_id, artifact_id, revision_number DESC);
 CREATE INDEX idx_compliance_evals_status ON compliance_evaluations (workspace_id, status);
 CREATE INDEX idx_compliance_evals_order ON compliance_evaluations (workspace_id, work_order_id);
+CREATE INDEX idx_compliance_evals_context_pkg ON compliance_evaluations (workspace_id, context_package_id);
 
 CREATE OR REPLACE FUNCTION enforce_compliance_evaluations_immutability() RETURNS trigger
 LANGUAGE plpgsql AS $$

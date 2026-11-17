@@ -29,6 +29,7 @@ import {
   settleComplianceReviewExecutionAtomic,
 } from '../../src/workforce/workforce-compliance-settlement.js';
 import { createManualRevisionTransaction } from '../../src/workforce/workforce-manual-revision.js';
+import { DatabaseError } from '../../src/database/errors.js';
 import {
   generateUuidV7,
   ComplianceEvaluationNotApprovableError,
@@ -37,9 +38,11 @@ import {
 } from '@affiliate-content-os/application';
 import {
   CURRENT_COMPLIANCE_POLICY_VERSION,
+  computeCompliancePolicyHash,
   evaluateDeterministicCompliance,
   parseUserId,
   parseWorkspaceId,
+  type ComplianceReportContent,
   type ScriptPackage,
 } from '@affiliate-content-os/domain';
 
@@ -1976,6 +1979,7 @@ describe('workforce-checkpoint-d.integration (Compliance Evaluation, Immutabilit
       await settleComplianceMalformedJobAtomic(clClean, {
         workspaceId: wsId,
         jobId: enqJobId,
+        jobVersion: claimed!.version,
         workerId: 'worker-corrupted-test',
       });
       await clClean.query('COMMIT');
@@ -2006,6 +2010,205 @@ describe('workforce-checkpoint-d.integration (Compliance Evaluation, Immutabilit
     expect(evalRows.rows[0].status).toBe('failed');
     expect(evalRows.rows[0].result).toBe('failed');
     expect(evalRows.rows[0].evaluation_report_artifact_id).toBeNull();
+  });
+
+  it('stale worker calling malformed payload cleanup on expired/reclaimed job is rejected with zero mutations', async () => {
+    const revStale = await createTestRevision('Test stale malformed worker race');
+    const revNum = revStale.artifact.currentRevisionNumber;
+
+    // Worker 1 claims job
+    const claimedW1 = await jobAdapter.claimNextJob({
+      workerId: 'worker-stale-1',
+      leaseDurationSeconds: 30,
+    });
+    expect(claimedW1?.payloadJson.revisionNumber).toBe(revNum);
+    const staleJobId = claimedW1!.id;
+    const staleVersion = claimedW1!.version;
+
+    // Force lease expiration
+    await pool.query(
+      `UPDATE job_executions
+       SET lease_expires_at = NOW() - INTERVAL '10 seconds'
+       WHERE id = $1`,
+      [staleJobId],
+    );
+
+    // Worker 2 reclaims the job
+    const claimedW2 = await jobAdapter.claimNextJob({
+      workerId: 'worker-reclaim-2',
+      leaseDurationSeconds: 30,
+    });
+    expect(claimedW2).not.toBeNull();
+    expect(claimedW2!.id).toBe(staleJobId);
+    expect(claimedW2!.leaseOwner).toBe('worker-reclaim-2');
+    expect(claimedW2!.version).toBeGreaterThan(staleVersion);
+
+    // Capture state before stale worker tries cleanup
+    const policyBefore = await pool.query(
+      `SELECT reserved_spend_microunits FROM workspace_ai_policies WHERE workspace_id = $1`,
+      [wsId],
+    );
+    const reservedBefore = Number(policyBefore.rows[0].reserved_spend_microunits);
+
+    // Worker 1 tries to settle malformed job with old version
+    const clStale = await pool.connect();
+    try {
+      await clStale.query('BEGIN');
+      await expect(
+        settleComplianceMalformedJobAtomic(clStale, {
+          workspaceId: wsId,
+          jobId: staleJobId,
+          jobVersion: staleVersion,
+          workerId: 'worker-stale-1',
+        }),
+      ).rejects.toThrow(JobLeaseExpiredError);
+      await clStale.query('ROLLBACK');
+    } finally {
+      clStale.release();
+    }
+
+    // Verify 0 mutations occurred: job is still running owned by worker-reclaim-2
+    const jobRow = await pool.query(
+      `SELECT status, lease_owner, version FROM job_executions WHERE id = $1`,
+      [staleJobId],
+    );
+    expect(jobRow.rows[0].status).toBe('running');
+    expect(jobRow.rows[0].lease_owner).toBe('worker-reclaim-2');
+    expect(Number(jobRow.rows[0].version)).toBe(claimedW2!.version);
+
+    // Reservation is untouched
+    const policyAfter = await pool.query(
+      `SELECT reserved_spend_microunits FROM workspace_ai_policies WHERE workspace_id = $1`,
+      [wsId],
+    );
+    expect(Number(policyAfter.rows[0].reserved_spend_microunits)).toBe(reservedBefore);
+
+    // Evaluation is still queued (untouched by stale worker)
+    const evalRow = await pool.query(
+      `SELECT id, status FROM compliance_evaluations WHERE artifact_id = $1 AND revision_number = $2`,
+      [artifactId, revNum],
+    );
+    expect(evalRow.rows[0].status).toBe('queued');
+
+    // Clean up test job
+    await pool.query(
+      `UPDATE job_executions
+       SET status = 'failed', completed_at = NOW(), last_error_category = 'internal_error', lease_owner = NULL, lease_expires_at = NULL
+       WHERE id = $1`,
+      [staleJobId],
+    );
+    await pool.query(
+      `UPDATE compliance_evaluations
+       SET status = 'failed', result = 'failed'
+       WHERE id = $1`,
+      [evalRow.rows[0].id],
+    );
+  });
+
+  it('malformed cleanup fails closed and rolls back if reserved spend invariant is violated', async () => {
+    await createTestRevision('Test accounting invariant violation');
+    const claimedInv = await jobAdapter.claimNextJob({
+      workerId: 'worker-inv-test',
+      leaseDurationSeconds: 30,
+    });
+    expect(claimedInv).not.toBeNull();
+    const invJobId = claimedInv!.id;
+
+    const policyBefore = await pool.query(
+      `SELECT reserved_spend_microunits FROM workspace_ai_policies WHERE workspace_id = $1`,
+      [wsId],
+    );
+    const origReserved = Number(policyBefore.rows[0].reserved_spend_microunits);
+
+    // Artificially corrupt workspace reserved spend to 0 (less than 10_000 reserved by job)
+    await pool.query(
+      `UPDATE workspace_ai_policies SET reserved_spend_microunits = 0 WHERE workspace_id = $1`,
+      [wsId],
+    );
+
+    const clInv = await pool.connect();
+    try {
+      await clInv.query('BEGIN');
+      await expect(
+        settleComplianceMalformedJobAtomic(clInv, {
+          workspaceId: wsId,
+          jobId: invJobId,
+          jobVersion: claimedInv!.version,
+          workerId: 'worker-inv-test',
+        }),
+      ).rejects.toThrow(DatabaseError);
+      await clInv.query('ROLLBACK');
+    } finally {
+      clInv.release();
+    }
+
+    // Verify job is still running and not corrupted by partial settlement
+    const jobRow = await pool.query(`SELECT status FROM job_executions WHERE id = $1`, [invJobId]);
+    expect(jobRow.rows[0].status).toBe('running');
+
+    // Restore reserved spend
+    await pool.query(
+      `UPDATE workspace_ai_policies SET reserved_spend_microunits = $1 WHERE workspace_id = $2`,
+      [origReserved, wsId],
+    );
+
+    // Clean up test job
+    await pool.query(
+      `UPDATE job_executions
+       SET status = 'failed', completed_at = NOW(), last_error_category = 'internal_error', lease_owner = NULL, lease_expires_at = NULL
+       WHERE id = $1`,
+      [invJobId],
+    );
+  });
+
+  it('malformed cleanup rolls back if linked operation is already terminal', async () => {
+    await createTestRevision('Test already terminal op');
+    const claimedOp = await jobAdapter.claimNextJob({
+      workerId: 'worker-terminal-op',
+      leaseDurationSeconds: 30,
+    });
+    expect(claimedOp).not.toBeNull();
+    const opJobId = claimedOp!.id;
+
+    // Get the operation id from the job
+    const jobRes = await pool.query(`SELECT operation_id FROM job_executions WHERE id = $1`, [
+      opJobId,
+    ]);
+    const opId = jobRes.rows[0].operation_id;
+
+    // Artificially mark the operation as canceled ahead of time
+    await pool.query(
+      `UPDATE operations SET status = 'canceled', completed_at = NOW() WHERE id = $1`,
+      [opId],
+    );
+
+    const clOp = await pool.connect();
+    try {
+      await clOp.query('BEGIN');
+      await expect(
+        settleComplianceMalformedJobAtomic(clOp, {
+          workspaceId: wsId,
+          jobId: opJobId,
+          jobVersion: claimedOp!.version,
+          workerId: 'worker-terminal-op',
+        }),
+      ).rejects.toThrow(DatabaseError);
+      await clOp.query('ROLLBACK');
+    } finally {
+      clOp.release();
+    }
+
+    // Verify job is still running (rolled back)
+    const jobAfter = await pool.query(`SELECT status FROM job_executions WHERE id = $1`, [opJobId]);
+    expect(jobAfter.rows[0].status).toBe('running');
+
+    // Clean up test job
+    await pool.query(
+      `UPDATE job_executions
+       SET status = 'failed', completed_at = NOW(), last_error_category = 'internal_error', lease_owner = NULL, lease_expires_at = NULL
+       WHERE id = $1`,
+      [opJobId],
+    );
   });
 
   it('post-provider drift fencing detects state changes during execution and cancels with reservation release', async () => {
@@ -2940,6 +3143,25 @@ describe('workforce-checkpoint-d.integration (Compliance Evaluation, Immutabilit
         ),
       }),
     ).rejects.toThrow(ComplianceEvaluationStaleError);
+
+    // Restore content brief state by inserting higher version with original hash
+    const origBriefRes = await pool.query(
+      `SELECT brief_hash, brief_json FROM content_briefs WHERE work_order_id = $1 AND brief_version = 1`,
+      [workOrderId],
+    );
+    await pool.query(
+      `INSERT INTO content_briefs (
+         id, workspace_id, product_id, work_order_id, brief_version, brief_json, brief_hash, created_at
+       ) VALUES ($1, $2, $3, $4, 1000, $5::jsonb, $6, NOW())`,
+      [
+        generateUuidV7(),
+        wsId,
+        FIXTURE_IDS.prodId,
+        workOrderId,
+        JSON.stringify(origBriefRes.rows[0].brief_json),
+        origBriefRes.rows[0].brief_hash,
+      ],
+    );
   });
 
   it('enforces live lease expiry and checked row counts across all terminalizers', async () => {
@@ -3049,5 +3271,462 @@ describe('workforce-checkpoint-d.integration (Compliance Evaluation, Immutabilit
     } finally {
       clTest.release();
     }
+
+    // Clean up expired test job so it does not poison subsequent tests
+    await pool.query(
+      `UPDATE job_executions
+       SET status = 'failed', completed_at = NOW(), last_error_category = 'provider_timeout', lease_owner = NULL, lease_expires_at = NULL
+       WHERE id = $1`,
+      [jobId],
+    );
+    await pool.query(
+      `UPDATE compliance_evaluations
+       SET status = 'failed', result = 'failed'
+       WHERE id = $1`,
+      [evalId],
+    );
+  });
+
+  async function insertScriptRevisionWithEvaluation(options: {
+    scriptContent: ScriptPackage;
+    reportContent: ComplianceReportContent;
+    evalOverrides?: Partial<{
+      status: string;
+      result: string;
+      blockingCount: number;
+      warningCount: number;
+      infoCount: number;
+      deterministicPassed: boolean;
+      aiAdvisoryStatus: string;
+      contextPackageId: string;
+    }>;
+  }) {
+    const artRes = await pool.query(
+      `SELECT current_revision_number, version FROM content_artifacts WHERE id = $1`,
+      [artifactId],
+    );
+    const targetRevNum = Number(artRes.rows[0].current_revision_number) + 1;
+    const scriptHash = crypto
+      .createHash('sha256')
+      .update(JSON.stringify(options.scriptContent), 'utf8')
+      .digest();
+
+    // 1. Script revision
+    await pool.query(
+      `INSERT INTO content_artifact_revisions (
+         id, workspace_id, artifact_id, revision_number, content_json, content_hash,
+         schema_version, prompt_template, prompt_version, provider, model,
+         author_role_key, created_at
+       ) VALUES (
+         $1, $2, $3, $4, $5::jsonb, $6,
+         1, 'test', '1.0', 'test', 'test',
+         'scriptwriter', NOW()
+       )`,
+      [
+        generateUuidV7(),
+        wsId,
+        artifactId,
+        targetRevNum,
+        JSON.stringify(options.scriptContent),
+        scriptHash,
+      ],
+    );
+
+    // 2. Lineage
+    const linRes = await pool.query(
+      `SELECT content_brief_hash, content_brief_version, planning_revision_ids_json
+       FROM content_artifact_lineage
+       WHERE workspace_id = $1 AND artifact_id = $2 AND revision_number = 1`,
+      [wsId, artifactId],
+    );
+    await pool.query(
+      `INSERT INTO content_artifact_lineage (
+         id, workspace_id, artifact_id, revision_number, lineage_type,
+         content_brief_hash, content_brief_version, planning_revision_ids_json, created_at
+       ) VALUES ($1, $2, $3, $4, 'human_edited', $5, $6, $7::jsonb, NOW())`,
+      [
+        generateUuidV7(),
+        wsId,
+        artifactId,
+        targetRevNum,
+        linRes.rows[0].content_brief_hash,
+        linRes.rows[0].content_brief_version,
+        JSON.stringify(linRes.rows[0].planning_revision_ids_json),
+      ],
+    );
+
+    // 3. Advance artifact current_revision_number
+    const upArt = await pool.query(
+      `UPDATE content_artifacts
+       SET current_revision_number = $1, version = version + 1, updated_at = NOW()
+       WHERE id = $2
+       RETURNING version`,
+      [targetRevNum, artifactId],
+    );
+    const expectedVersion = Number(upArt.rows[0].version);
+
+    // 4. Report revision
+    const repArtRes = await pool.query(
+      `SELECT id FROM content_artifacts WHERE workspace_id = $1 AND artifact_type = 'compliance_report' LIMIT 1`,
+      [wsId],
+    );
+    const repArtId = repArtRes.rows[0].id;
+    const repRevNumRes = await pool.query(
+      `SELECT COALESCE(MAX(revision_number), 0) + 1 AS next_rev FROM content_artifact_revisions WHERE artifact_id = $1`,
+      [repArtId],
+    );
+    const repRevNum = Number(repRevNumRes.rows[0].next_rev);
+    const repHash = crypto
+      .createHash('sha256')
+      .update(JSON.stringify(options.reportContent), 'utf8')
+      .digest();
+
+    await pool.query(
+      `INSERT INTO content_artifact_revisions (
+         id, workspace_id, artifact_id, revision_number, content_json, content_hash,
+         schema_version, prompt_template, prompt_version, provider, model,
+         author_role_key, created_at
+       ) VALUES (
+         $1, $2, $3, $4, $5::jsonb, $6,
+         1, 'test', '1.0', 'test', 'test',
+         'compliance_reviewer', NOW()
+       )`,
+      [generateUuidV7(), wsId, repArtId, repRevNum, JSON.stringify(options.reportContent), repHash],
+    );
+    await pool.query(
+      `UPDATE content_artifacts SET current_revision_number = $1, version = version + 1 WHERE id = $2`,
+      [repRevNum, repArtId],
+    );
+
+    // 5. Compliance evaluation
+    const evalId = generateUuidV7();
+    const policyVersion = CURRENT_COMPLIANCE_POLICY_VERSION;
+    const policyHash = Buffer.from(computeCompliancePolicyHash(policyVersion), 'hex');
+    const woRow = await pool.query(`SELECT context_package_id FROM work_orders WHERE id = $1`, [
+      workOrderId,
+    ]);
+    const cpId = options.evalOverrides?.contextPackageId ?? woRow.rows[0].context_package_id;
+
+    await pool.query(
+      `INSERT INTO compliance_evaluations (
+         id, workspace_id, product_id, work_order_id, artifact_id, revision_number,
+         policy_version, policy_hash, status, result, blocking_count, warning_count,
+         info_count, deterministic_passed, ai_advisory_status,
+         evaluation_report_artifact_id, evaluation_report_revision_number,
+         evaluation_report_content_hash, script_content_hash, context_package_id,
+         created_at, updated_at
+       ) VALUES (
+         $1, $2, $3, $4, $5, $6,
+         $7, $8, $9, $10, $11, $12,
+         $13, $14, $15,
+         $16, $17,
+         $18, $19, $20,
+         NOW(), NOW()
+       )`,
+      [
+        evalId,
+        wsId,
+        FIXTURE_IDS.prodId,
+        workOrderId,
+        artifactId,
+        targetRevNum,
+        policyVersion,
+        policyHash,
+        options.evalOverrides?.status ?? 'completed',
+        options.evalOverrides?.result ?? 'passed',
+        options.evalOverrides?.blockingCount ?? 0,
+        options.evalOverrides?.warningCount ?? 0,
+        options.evalOverrides?.infoCount ?? 0,
+        options.evalOverrides?.deterministicPassed ?? true,
+        options.evalOverrides?.aiAdvisoryStatus ?? 'skipped',
+        repArtId,
+        repRevNum,
+        repHash,
+        scriptHash,
+        cpId,
+      ],
+    );
+
+    return {
+      revisionNumber: targetRevNum,
+      expectedVersion,
+      contentHashHex: scriptHash.toString('hex'),
+      evalId,
+    };
+  }
+
+  it('acceptance rejects report with mismatched infoCount or deterministicPassed', async () => {
+    const rev1Row = await pool.query(
+      `SELECT content_json FROM content_artifact_revisions WHERE artifact_id = $1 AND revision_number = 1`,
+      [artifactId],
+    );
+    const cleanPkg = rev1Row.rows[0].content_json as ScriptPackage;
+
+    const makeIdemp = (rawKey: string, routeKey: string) => ({
+      rawKey,
+      keyHash: new Uint8Array(crypto.createHash('sha256').update(rawKey).digest()),
+      requestHash: new Uint8Array(32),
+      routeKey,
+    });
+
+    const baseReportContent: ComplianceReportContent = {
+      schemaVersion: 1,
+      policyVersion: CURRENT_COMPLIANCE_POLICY_VERSION,
+      policyHash: computeCompliancePolicyHash(CURRENT_COMPLIANCE_POLICY_VERSION),
+      scriptArtifactId: artifactId,
+      scriptRevisionNumber: 999,
+      scriptContentHash: '',
+      result: 'passed',
+      blockingCount: 0,
+      warningCount: 0,
+      infoCount: 0,
+      deterministicPassed: true,
+      aiAdvisoryStatus: 'skipped',
+      findings: [],
+      summary: 'Clean deterministic test',
+      evaluatedAt: new Date().toISOString(),
+    };
+
+    const artRes = await pool.query(
+      `SELECT current_revision_number FROM content_artifacts WHERE id = $1`,
+      [artifactId],
+    );
+    const nextRevNum = Number(artRes.rows[0].current_revision_number) + 1;
+    const scriptHashHex = crypto
+      .createHash('sha256')
+      .update(JSON.stringify(cleanPkg), 'utf8')
+      .digest('hex');
+
+    // 1. Report infoCount (0) mismatches evaluation info_count (99)
+    const repMismatchInfo: ComplianceReportContent = {
+      ...baseReportContent,
+      scriptRevisionNumber: nextRevNum,
+      scriptContentHash: scriptHashHex,
+      infoCount: 0,
+    };
+
+    const test1 = await insertScriptRevisionWithEvaluation({
+      scriptContent: cleanPkg,
+      reportContent: repMismatchInfo,
+      evalOverrides: { infoCount: 99 },
+    });
+
+    await expect(
+      adapter.acceptScriptRevision({
+        workspaceId: typedWsId,
+        artifactId,
+        actorUserId: typedUserId,
+        expectedVersion: test1.expectedVersion,
+        revisionNumber: test1.revisionNumber,
+        contentHashHex: test1.contentHashHex,
+        idempotency: makeIdemp(
+          generateUuidV7(),
+          `POST /api/v1/workspaces/${wsId}/artifacts/${artifactId}/accept`,
+        ),
+      }),
+    ).rejects.toThrow(ComplianceEvaluationNotApprovableError);
+
+    // 2. Report deterministicPassed (true) mismatches evaluation deterministic_passed (false)
+    const artRes2 = await pool.query(
+      `SELECT current_revision_number FROM content_artifacts WHERE id = $1`,
+      [artifactId],
+    );
+    const nextRevNum2 = Number(artRes2.rows[0].current_revision_number) + 1;
+
+    const repMismatchDet: ComplianceReportContent = {
+      ...baseReportContent,
+      scriptRevisionNumber: nextRevNum2,
+      scriptContentHash: scriptHashHex,
+      deterministicPassed: true,
+    };
+
+    const test2 = await insertScriptRevisionWithEvaluation({
+      scriptContent: cleanPkg,
+      reportContent: repMismatchDet,
+      evalOverrides: { deterministicPassed: false },
+    });
+
+    await expect(
+      adapter.acceptScriptRevision({
+        workspaceId: typedWsId,
+        artifactId,
+        actorUserId: typedUserId,
+        expectedVersion: test2.expectedVersion,
+        revisionNumber: test2.revisionNumber,
+        contentHashHex: test2.contentHashHex,
+        idempotency: makeIdemp(
+          generateUuidV7(),
+          `POST /api/v1/workspaces/${wsId}/artifacts/${artifactId}/accept`,
+        ),
+      }),
+    ).rejects.toThrow(ComplianceEvaluationNotApprovableError);
+  });
+
+  it('acceptance rejects evaluation if work order is repointed to a different context package even with same facts', async () => {
+    const rev1Row = await pool.query(
+      `SELECT content_json FROM content_artifact_revisions WHERE artifact_id = $1 AND revision_number = 1`,
+      [artifactId],
+    );
+    const cleanPkg = rev1Row.rows[0].content_json as ScriptPackage;
+    const scriptHashHex = crypto
+      .createHash('sha256')
+      .update(JSON.stringify(cleanPkg), 'utf8')
+      .digest('hex');
+
+    const artRes = await pool.query(
+      `SELECT current_revision_number FROM content_artifacts WHERE id = $1`,
+      [artifactId],
+    );
+    const nextRevNum = Number(artRes.rows[0].current_revision_number) + 1;
+
+    const reportContent: ComplianceReportContent = {
+      schemaVersion: 1,
+      policyVersion: CURRENT_COMPLIANCE_POLICY_VERSION,
+      policyHash: computeCompliancePolicyHash(CURRENT_COMPLIANCE_POLICY_VERSION),
+      scriptArtifactId: artifactId,
+      scriptRevisionNumber: nextRevNum,
+      scriptContentHash: scriptHashHex,
+      result: 'passed',
+      blockingCount: 0,
+      warningCount: 0,
+      infoCount: 0,
+      deterministicPassed: true,
+      aiAdvisoryStatus: 'skipped',
+      findings: [],
+      summary: 'Clean report',
+      evaluatedAt: new Date().toISOString(),
+    };
+
+    const inserted = await insertScriptRevisionWithEvaluation({
+      scriptContent: cleanPkg,
+      reportContent,
+    });
+
+    // Create second context package with same fact set
+    const secondCpId = generateUuidV7();
+    await pool.query(
+      `INSERT INTO context_packages (id, workspace_id, product_id, fact_set_id, context_schema_version, context_hash, created_by_user_id, created_at)
+       VALUES ($1, $2, $3, $4, 1, $5, $6, NOW())`,
+      [secondCpId, wsId, FIXTURE_IDS.prodId, factSetId, Buffer.alloc(32, 5), userId],
+    );
+
+    const woOrig = await pool.query(`SELECT context_package_id FROM work_orders WHERE id = $1`, [
+      workOrderId,
+    ]);
+    const origCp = woOrig.rows[0].context_package_id;
+
+    // Repoint work order to second context package
+    await pool.query(`UPDATE work_orders SET context_package_id = $1 WHERE id = $2`, [
+      secondCpId,
+      workOrderId,
+    ]);
+
+    const makeIdemp = (rawKey: string, routeKey: string) => ({
+      rawKey,
+      keyHash: new Uint8Array(crypto.createHash('sha256').update(rawKey).digest()),
+      requestHash: new Uint8Array(32),
+      routeKey,
+    });
+
+    try {
+      await expect(
+        adapter.acceptScriptRevision({
+          workspaceId: typedWsId,
+          artifactId,
+          actorUserId: typedUserId,
+          expectedVersion: inserted.expectedVersion,
+          revisionNumber: inserted.revisionNumber,
+          contentHashHex: inserted.contentHashHex,
+          idempotency: makeIdemp(
+            generateUuidV7(),
+            `POST /api/v1/workspaces/${wsId}/artifacts/${artifactId}/accept`,
+          ),
+        }),
+      ).rejects.toThrow(ComplianceEvaluationStaleError);
+    } finally {
+      // Restore original context package
+      await pool.query(`UPDATE work_orders SET context_package_id = $1 WHERE id = $2`, [
+        origCp,
+        workOrderId,
+      ]);
+    }
+  });
+
+  it('acceptance validates video.evidenceReferences and catches unallowed evidence in video', async () => {
+    const rev1Row = await pool.query(
+      `SELECT content_json FROM content_artifact_revisions WHERE artifact_id = $1 AND revision_number = 1`,
+      [artifactId],
+    );
+    const cleanPkg = rev1Row.rows[0].content_json as ScriptPackage;
+
+    // Video 1 references an unallowed foreign evidence ID
+    const foreignFactId = generateUuidV7();
+    const tamperedVideos = cleanPkg.videos.map((v) =>
+      v.videoNumber === 1
+        ? {
+            ...v,
+            evidenceReferences: [{ sourceKind: 'product_fact', sourceId: foreignFactId }],
+          }
+        : v,
+    );
+    const scriptWithForeignEv: ScriptPackage = {
+      ...cleanPkg,
+      videos: tamperedVideos as unknown as ScriptPackage['videos'],
+    };
+    const scriptHashHex = crypto
+      .createHash('sha256')
+      .update(JSON.stringify(scriptWithForeignEv), 'utf8')
+      .digest('hex');
+
+    const artRes = await pool.query(
+      `SELECT current_revision_number FROM content_artifacts WHERE id = $1`,
+      [artifactId],
+    );
+    const nextRevNum = Number(artRes.rows[0].current_revision_number) + 1;
+
+    const reportContent: ComplianceReportContent = {
+      schemaVersion: 1,
+      policyVersion: CURRENT_COMPLIANCE_POLICY_VERSION,
+      policyHash: computeCompliancePolicyHash(CURRENT_COMPLIANCE_POLICY_VERSION),
+      scriptArtifactId: artifactId,
+      scriptRevisionNumber: nextRevNum,
+      scriptContentHash: scriptHashHex,
+      result: 'passed',
+      blockingCount: 0,
+      warningCount: 0,
+      infoCount: 0,
+      deterministicPassed: true,
+      aiAdvisoryStatus: 'skipped',
+      findings: [],
+      summary: 'Clean report',
+      evaluatedAt: new Date().toISOString(),
+    };
+
+    const inserted = await insertScriptRevisionWithEvaluation({
+      scriptContent: scriptWithForeignEv,
+      reportContent,
+    });
+
+    const makeIdemp = (rawKey: string, routeKey: string) => ({
+      rawKey,
+      keyHash: new Uint8Array(crypto.createHash('sha256').update(rawKey).digest()),
+      requestHash: new Uint8Array(32),
+      routeKey,
+    });
+
+    await expect(
+      adapter.acceptScriptRevision({
+        workspaceId: typedWsId,
+        artifactId,
+        actorUserId: typedUserId,
+        expectedVersion: inserted.expectedVersion,
+        revisionNumber: inserted.revisionNumber,
+        contentHashHex: inserted.contentHashHex,
+        idempotency: makeIdemp(
+          generateUuidV7(),
+          `POST /api/v1/workspaces/${wsId}/artifacts/${artifactId}/accept`,
+        ),
+      }),
+    ).rejects.toThrow(ComplianceEvaluationStaleError);
   });
 });

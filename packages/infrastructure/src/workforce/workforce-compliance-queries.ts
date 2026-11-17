@@ -18,7 +18,7 @@ export async function queryComplianceEvaluation(
 
   if (revisionNumber !== undefined) {
     query = `
-      SELECT id, workspace_id, product_id, work_order_id, artifact_id, revision_number,
+      SELECT id, workspace_id, product_id, work_order_id, context_package_id, artifact_id, revision_number,
              script_content_hash, policy_version, policy_hash, status, result, blocking_count, warning_count,
              info_count, deterministic_passed, ai_advisory_status, evaluation_report_artifact_id,
              evaluation_report_revision_number, evaluation_report_content_hash,
@@ -32,7 +32,7 @@ export async function queryComplianceEvaluation(
   } else {
     // Current revision
     query = `
-      SELECT ce.id, ce.workspace_id, ce.product_id, ce.work_order_id, ce.artifact_id, ce.revision_number,
+      SELECT ce.id, ce.workspace_id, ce.product_id, ce.work_order_id, ce.context_package_id, ce.artifact_id, ce.revision_number,
              ce.script_content_hash, ce.policy_version, ce.policy_hash, ce.status, ce.result, ce.blocking_count, ce.warning_count,
              ce.info_count, ce.deterministic_passed, ce.ai_advisory_status, ce.evaluation_report_artifact_id,
              ce.evaluation_report_revision_number, ce.evaluation_report_content_hash,
@@ -76,6 +76,7 @@ export async function queryComplianceEvaluation(
     workspaceId: row.workspace_id,
     productId: row.product_id,
     workOrderId: row.work_order_id,
+    contextPackageId: row.context_package_id,
     artifactId: row.artifact_id,
     revisionNumber: Number(row.revision_number),
     scriptContentHashHex: Buffer.from(row.script_content_hash).toString('hex'),
