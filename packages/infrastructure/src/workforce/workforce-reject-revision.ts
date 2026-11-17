@@ -6,9 +6,11 @@ import {
   type RejectScriptRevisionParams,
   type RejectScriptRevisionResult,
   type ContentReviewDecisionDTO,
+  ArtifactNotFoundError,
+  ArtifactRevisionConflictError,
+  ContentReviewDecisionConflictError,
 } from '@affiliate-content-os/application';
 import { CURRENT_COMPLIANCE_POLICY_VERSION, parseIsoTimestamp } from '@affiliate-content-os/domain';
-import { DatabaseError } from '../database/errors.js';
 import { computeIdempotencyAdvisoryLockKey } from '../tenancy/postgres-idempotency-adapter.js';
 import {
   validateAndMapIdempotencyRow,
@@ -75,7 +77,21 @@ export async function rejectScriptRevisionTransaction(
     }
   }
 
-  // 3. Fetch artifact with optimistic lock
+  // 3. Prevent conflicting terminal human decisions for the same exact revision
+  const existingDecRes = await client.query(
+    `SELECT id, decision
+     FROM content_review_decisions
+     WHERE workspace_id = $1 AND artifact_id = $2 AND revision_number = $3 AND decision IN ('accept', 'reject')
+     FOR UPDATE`,
+    [workspaceId, artifactId, revisionNumber],
+  );
+  if (existingDecRes.rowCount !== 0 && existingDecRes.rows[0]) {
+    throw new ContentReviewDecisionConflictError(
+      `Revision ${revisionNumber} has already received terminal decision "${existingDecRes.rows[0].decision}" and cannot receive another terminal decision.`,
+    );
+  }
+
+  // 4. Fetch artifact with optimistic lock
   const artRes = await client.query(
     `SELECT id, product_id, work_order_id, work_item_id, assignment_id,
             author_role_key, artifact_type, lifecycle_status,
@@ -87,22 +103,30 @@ export async function rejectScriptRevisionTransaction(
   );
 
   if (artRes.rowCount === 0 || !artRes.rows[0]) {
-    throw new DatabaseError(`Artifact ${artifactId} not found in workspace`);
+    throw new ArtifactNotFoundError(artifactId);
   }
   const art = artRes.rows[0];
 
+  if (art.artifact_type !== 'script_package') {
+    throw new ArtifactRevisionConflictError(`Cannot reject artifact type ${art.artifact_type}`);
+  }
+  if (art.lifecycle_status === 'accepted' || art.lifecycle_status === 'rejected') {
+    throw new ArtifactRevisionConflictError(
+      `Precondition failed: artifact is already in terminal "${art.lifecycle_status}" lifecycle status`,
+    );
+  }
   if (Number(art.version) !== expectedVersion) {
-    throw new DatabaseError(
+    throw new ArtifactRevisionConflictError(
       `Precondition failed: artifact version mismatch (expected ${expectedVersion}, current ${art.version})`,
     );
   }
   if (Number(art.current_revision_number) !== revisionNumber) {
-    throw new DatabaseError(
+    throw new ArtifactRevisionConflictError(
       `Precondition failed: artifact revision mismatch (expected ${revisionNumber}, current ${art.current_revision_number})`,
     );
   }
 
-  // 4. Fetch revision and verify content hash
+  // 5. Fetch revision and verify content hash
   const revRes = await client.query(
     `SELECT content_hash
      FROM content_artifact_revisions
@@ -110,14 +134,14 @@ export async function rejectScriptRevisionTransaction(
     [workspaceId, artifactId, revisionNumber],
   );
   if (revRes.rowCount === 0 || !revRes.rows[0]) {
-    throw new DatabaseError(`Revision ${revisionNumber} not found`);
+    throw new ArtifactRevisionConflictError(`Revision ${revisionNumber} not found`);
   }
   const actualHashHex = Buffer.from(revRes.rows[0].content_hash).toString('hex');
   if (actualHashHex.toLowerCase() !== contentHashHex.toLowerCase()) {
-    throw new DatabaseError('Precondition failed: content hash mismatch');
+    throw new ArtifactRevisionConflictError('Precondition failed: content hash mismatch');
   }
 
-  // 5. Look up current evaluation if available
+  // 6. Look up current evaluation if available
   const evalRes = await client.query(
     `SELECT id
      FROM compliance_evaluations
@@ -126,7 +150,7 @@ export async function rejectScriptRevisionTransaction(
   );
   const evaluationId = evalRes.rows[0]?.id ?? null;
 
-  // 6. Insert human decision record into content_review_decisions
+  // 7. Insert human decision record into content_review_decisions
   const decisionId = generateUuidV7();
   await client.query(
     `INSERT INTO content_review_decisions (
@@ -148,15 +172,20 @@ export async function rejectScriptRevisionTransaction(
     ],
   );
 
-  // 7. Update artifact lifecycle to 'rejected'
-  await client.query(
+  // 8. Update artifact lifecycle to 'rejected' with optimistic precondition checks
+  const updateArtRes = await client.query(
     `UPDATE content_artifacts
      SET lifecycle_status = 'rejected', version = version + 1, updated_at = NOW()
-     WHERE workspace_id = $1 AND id = $2`,
-    [workspaceId, artifactId],
+     WHERE workspace_id = $1 AND id = $2 AND version = $3 AND current_revision_number = $4 AND lifecycle_status = 'review_required'`,
+    [workspaceId, artifactId, art.version, revisionNumber],
   );
+  if (updateArtRes.rowCount !== 1) {
+    throw new ArtifactRevisionConflictError(
+      'Precondition failed: artifact state conflict during rejection',
+    );
+  }
 
-  // 8. Write audit event
+  // 9. Write audit event
   await client.query(
     `INSERT INTO audit_events (
        id, workspace_id, actor_type, actor_user_id, action, resource_type,
@@ -174,7 +203,7 @@ export async function rejectScriptRevisionTransaction(
     ],
   );
 
-  // 9. Build return DTOs
+  // 10. Build return DTOs
   const updatedDetail = await getArtifactRevisionByNumberQuery(
     client,
     workspaceId,
@@ -201,7 +230,7 @@ export async function rejectScriptRevisionTransaction(
     decision: decisionDTO,
   };
 
-  // 10. Persist idempotency cache
+  // 11. Persist idempotency cache
   await client.query(
     `INSERT INTO idempotency_keys (
        id, workspace_id, principal_id, route_key, key_hash, request_hash,

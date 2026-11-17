@@ -91,6 +91,9 @@ export interface ComplianceAdvisoryOutput {
   readonly findings: readonly ComplianceAdvisoryFinding[];
 }
 
+export type ExecuteComplianceAdvisoryResult = AIAnalysisGatewayResult<ComplianceAdvisoryOutput>;
+export type AIScriptComplianceInput = AIComplianceAdvisoryInput;
+
 export interface AIAnalysisGatewayResult<T> {
   readonly success: boolean;
   readonly content?: T | undefined;

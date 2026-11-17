@@ -60,3 +60,97 @@ export class WorkforceStaleContextError extends ApplicationError {
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }
+
+export class ArtifactNotFoundError extends ApplicationError {
+  public override readonly name = 'ArtifactNotFoundError';
+  public readonly code = 'RESOURCE_NOT_FOUND' as const;
+
+  constructor(artifactId: string) {
+    super(`Artifact not found in workspace: ${artifactId}`);
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export class ComplianceEvaluationNotFoundError extends ApplicationError {
+  public override readonly name = 'ComplianceEvaluationNotFoundError';
+  public readonly code = 'COMPLIANCE_EVALUATION_NOT_FOUND' as const;
+
+  constructor(detail: string) {
+    super(detail);
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export class ComplianceBlockingFindingsError extends ApplicationError {
+  public override readonly name = 'ComplianceBlockingFindingsError';
+  public readonly code = 'COMPLIANCE_BLOCKING_FINDINGS' as const;
+  public readonly blockingCount: number;
+
+  constructor(blockingCount: number, message?: string) {
+    super(
+      message ?? `Precondition failed: content has ${blockingCount} blocking compliance finding(s)`,
+    );
+    this.blockingCount = blockingCount;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export class ComplianceEvaluationNotApprovableError extends ApplicationError {
+  public override readonly name = 'ComplianceEvaluationNotApprovableError';
+  public readonly code = 'COMPLIANCE_EVALUATION_NOT_APPROVABLE' as const;
+
+  constructor(reason: string) {
+    super(`Precondition failed: compliance evaluation is not approvable: ${reason}`);
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export class ComplianceEvaluationStaleError extends ApplicationError {
+  public override readonly name = 'ComplianceEvaluationStaleError';
+  public readonly code = 'COMPLIANCE_EVALUATION_STALE' as const;
+
+  constructor(detail: string) {
+    super(`Precondition failed: compliance evaluation is stale: ${detail}`);
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export class ContentReviewDecisionConflictError extends ApplicationError {
+  public override readonly name = 'ContentReviewDecisionConflictError';
+  public readonly code = 'CONTENT_REVIEW_DECISION_CONFLICT' as const;
+
+  constructor(detail: string) {
+    super(detail);
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export class ArtifactRevisionConflictError extends ApplicationError {
+  public override readonly name = 'ArtifactRevisionConflictError';
+  public readonly code = 'VERSION_OR_REVISION_CONFLICT' as const;
+
+  constructor(detail: string) {
+    super(detail);
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export class WorkOrderStateConflictError extends ApplicationError {
+  public override readonly name = 'WorkOrderStateConflictError';
+  public readonly code = 'WORK_ORDER_STATE_CONFLICT' as const;
+
+  constructor(detail: string) {
+    super(detail);
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export class ChiefOfStaffAssignmentConflictError extends ApplicationError {
+  public override readonly name = 'ChiefOfStaffAssignmentConflictError';
+  public readonly code = 'CHIEF_OF_STAFF_ASSIGNMENT_CONFLICT' as const;
+
+  constructor(detail: string) {
+    super(detail);
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}

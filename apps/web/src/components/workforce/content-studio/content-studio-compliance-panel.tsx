@@ -169,6 +169,15 @@ export function ContentStudioCompliancePanel({
         </div>
       )}
 
+      {(evaluation.status === 'failed' ||
+        evaluation.result === 'failed' ||
+        evaluation.aiAdvisoryStatus === 'failed') && (
+        <div className="alert alert-danger py-2 px-3 text-sm mb-3" role="alert">
+          <strong>Lỗi đánh giá:</strong> Quá trình đánh giá tuân thủ gặp lỗi (do nhà cung cấp mô
+          hình hoặc ngân sách). Kịch bản không thể được chấp thuận ở trạng thái này.
+        </div>
+      )}
+
       {findings.length === 0 ? (
         <p className="text-muted text-sm mb-0">
           Tuyệt vời! Không phát hiện vi phạm quy tắc tuân thủ nào trên phiên bản này.

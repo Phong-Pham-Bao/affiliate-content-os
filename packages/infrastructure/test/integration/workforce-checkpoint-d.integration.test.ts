@@ -1,7 +1,11 @@
 import crypto from 'node:crypto';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { AIGatewayPort, ContentArtifactDetailDTO } from '@affiliate-content-os/application';
+import type {
+  AIGatewayPort,
+  ContentArtifactDetailDTO,
+  ExecuteComplianceAdvisoryResult,
+} from '@affiliate-content-os/application';
 import { setupIsolatedTestDatabase, type TestDatabaseContext } from './helpers/setup.js';
 import {
   seedWorkforceBaseData,
@@ -16,14 +20,34 @@ import {
 import { PostgresWorkforceAdapter } from '../../src/workforce/postgres-workforce-adapter.js';
 import { PostgresJobAdapter } from '../../src/jobs/postgres-job-adapter.js';
 import { settleScriptUnitAtomic } from '../../src/workforce/workforce-script-settlement.js';
-import { settleComplianceReviewJobAtomic } from '../../src/workforce/workforce-compliance-settlement.js';
+import {
+  prepareComplianceReviewExecution,
+  settleComplianceBudgetExhaustedAtomic,
+  settleComplianceDriftAtomic,
+  settleComplianceReviewExecutionAtomic,
+  settleComplianceReviewJobAtomic,
+} from '../../src/workforce/workforce-compliance-settlement.js';
 import { createManualRevisionTransaction } from '../../src/workforce/workforce-manual-revision.js';
+import { ComplianceEvaluationNotApprovableError } from '@affiliate-content-os/application';
 import {
   CURRENT_COMPLIANCE_POLICY_VERSION,
+  evaluateDeterministicCompliance,
   parseUserId,
   parseWorkspaceId,
   type ScriptPackage,
 } from '@affiliate-content-os/domain';
+
+interface TestJobPayload {
+  readonly workspaceId: string;
+  readonly productId: string;
+  readonly workOrderId: string;
+  readonly artifactId: string;
+  readonly revisionNumber: number;
+  readonly operationId: string;
+  readonly aiRunId: string;
+  readonly policyVersion: string;
+  readonly reservedMicrounits: number;
+}
 
 describe('workforce-checkpoint-d.integration (Compliance Evaluation, Immutability & Human Decisions)', () => {
   let context: TestDatabaseContext;
@@ -291,6 +315,48 @@ describe('workforce-checkpoint-d.integration (Compliance Evaluation, Immutabilit
     }
   });
 
+  it('fails accept with precondition conflict when version, revision, or content hash mismatch', async () => {
+    const rawKey = '019318b2-5f33-722e-a5df-036f007b89b1';
+    const keyHash = new Uint8Array(crypto.createHash('sha256').update(rawKey, 'utf8').digest());
+    const requestHash = new Uint8Array(32);
+
+    // Stale version
+    await expect(
+      adapter.acceptScriptRevision({
+        workspaceId: typedWsId,
+        artifactId,
+        actorUserId: typedUserId,
+        expectedVersion: 99,
+        revisionNumber: 1,
+        contentHashHex: initialRev1HashHex,
+        idempotency: {
+          rawKey,
+          keyHash,
+          requestHash,
+          routeKey: `POST /api/v1/workspaces/${wsId}/artifacts/${artifactId}/accept`,
+        },
+      }),
+    ).rejects.toThrow('version mismatch');
+
+    // Mismatched content hash
+    await expect(
+      adapter.acceptScriptRevision({
+        workspaceId: typedWsId,
+        artifactId,
+        actorUserId: typedUserId,
+        expectedVersion: 1,
+        revisionNumber: 1,
+        contentHashHex: 'f'.repeat(64),
+        idempotency: {
+          rawKey: '019318b2-5f33-722e-a5df-036f007b89b2',
+          keyHash,
+          requestHash,
+          routeKey: `POST /api/v1/workspaces/${wsId}/artifacts/${artifactId}/accept`,
+        },
+      }),
+    ).rejects.toThrow(/content hash mismatch/i);
+  });
+
   it('human accept: atomically records decision, approval snapshot, and completes handoff', async () => {
     const rawIdempotencyKey = '019318b2-5f33-722e-a5df-036f007b89a1';
     const keyHash = new Uint8Array(
@@ -374,48 +440,6 @@ describe('workforce-checkpoint-d.integration (Compliance Evaluation, Immutabilit
         },
       }),
     ).rejects.toThrow(/different.*payload/i);
-  });
-
-  it('fails accept with precondition conflict when version, revision, or content hash mismatch', async () => {
-    const rawKey = '019318b2-5f33-722e-a5df-036f007b89b1';
-    const keyHash = new Uint8Array(crypto.createHash('sha256').update(rawKey, 'utf8').digest());
-    const requestHash = new Uint8Array(32);
-
-    // Stale version
-    await expect(
-      adapter.acceptScriptRevision({
-        workspaceId: typedWsId,
-        artifactId,
-        actorUserId: typedUserId,
-        expectedVersion: 99,
-        revisionNumber: 1,
-        contentHashHex: initialRev1HashHex,
-        idempotency: {
-          rawKey,
-          keyHash,
-          requestHash,
-          routeKey: `POST /api/v1/workspaces/${wsId}/artifacts/${artifactId}/accept`,
-        },
-      }),
-    ).rejects.toThrow('version mismatch');
-
-    // Mismatched content hash
-    await expect(
-      adapter.acceptScriptRevision({
-        workspaceId: typedWsId,
-        artifactId,
-        actorUserId: typedUserId,
-        expectedVersion: 2,
-        revisionNumber: 1,
-        contentHashHex: 'f'.repeat(64),
-        idempotency: {
-          rawKey: '019318b2-5f33-722e-a5df-036f007b89b2',
-          keyHash,
-          requestHash,
-          routeKey: `POST /api/v1/workspaces/${wsId}/artifacts/${artifactId}/accept`,
-        },
-      }),
-    ).rejects.toThrow(/content hash mismatch/i);
   });
 
   it('creating manual revision (revision 2) returns lifecycle to review_required and auto-enqueues new compliance evaluation', async () => {
@@ -611,28 +635,1135 @@ describe('workforce-checkpoint-d.integration (Compliance Evaluation, Immutabilit
     expect(latestDec?.revisionNumber).toBe(2);
   });
 
-  it('enforces database immutability triggers on compliance_findings, content_review_decisions, and content_approval_snapshots', async () => {
-    // 1. UPDATE compliance_findings must fail
-    await expect(
-      pool.query(`UPDATE compliance_findings SET message = 'altered' WHERE workspace_id = $1`, [
-        wsId,
-      ]),
-    ).rejects.toThrow();
+  it('enforces database immutability triggers on evaluations, findings, decisions, and snapshots', async () => {
+    // 1. UPDATE and DELETE on terminal compliance_evaluations must fail with 55000
+    const evalRow = await pool.query(
+      `SELECT id FROM compliance_evaluations WHERE workspace_id = $1 AND status IN ('completed', 'failed') LIMIT 1`,
+      [wsId],
+    );
+    expect(evalRow.rowCount).toBe(1);
+    const evalId = evalRow.rows[0].id;
 
-    // 2. UPDATE content_review_decisions must fail
     await expect(
-      pool.query(`UPDATE content_review_decisions SET reason = 'altered' WHERE workspace_id = $1`, [
-        wsId,
-      ]),
-    ).rejects.toThrow();
+      pool.query(`UPDATE compliance_evaluations SET result = 'passed' WHERE id = $1`, [evalId]),
+    ).rejects.toMatchObject({ code: '55000' });
+    await expect(
+      pool.query(`DELETE FROM compliance_evaluations WHERE id = $1`, [evalId]),
+    ).rejects.toMatchObject({ code: '55000' });
 
-    // 3. UPDATE content_approval_snapshots must fail
+    // 2. UPDATE and DELETE on compliance_findings must fail with 55000
+    const findRow = await pool.query(
+      `SELECT id FROM compliance_findings WHERE workspace_id = $1 LIMIT 1`,
+      [wsId],
+    );
+    expect(findRow.rowCount).toBe(1);
+    const findId = findRow.rows[0].id;
+
     await expect(
-      pool.query(
-        `UPDATE content_approval_snapshots SET affiliate_disclosure_text = 'altered' WHERE workspace_id = $1`,
-        [wsId],
-      ),
-    ).rejects.toThrow();
+      pool.query(`UPDATE compliance_findings SET message = 'altered' WHERE id = $1`, [findId]),
+    ).rejects.toMatchObject({ code: '55000' });
+    await expect(
+      pool.query(`DELETE FROM compliance_findings WHERE id = $1`, [findId]),
+    ).rejects.toMatchObject({ code: '55000' });
+
+    // 3. UPDATE and DELETE on content_review_decisions must fail with 55000
+    const decRow = await pool.query(
+      `SELECT id FROM content_review_decisions WHERE workspace_id = $1 LIMIT 1`,
+      [wsId],
+    );
+    expect(decRow.rowCount).toBe(1);
+    const decId = decRow.rows[0].id;
+
+    await expect(
+      pool.query(`UPDATE content_review_decisions SET reason = 'altered' WHERE id = $1`, [decId]),
+    ).rejects.toMatchObject({ code: '55000' });
+    await expect(
+      pool.query(`DELETE FROM content_review_decisions WHERE id = $1`, [decId]),
+    ).rejects.toMatchObject({ code: '55000' });
+
+    // 4. UPDATE and DELETE on content_approval_snapshots must fail with 55000 (real column)
+    const snapRow = await pool.query(
+      `SELECT id FROM content_approval_snapshots WHERE workspace_id = $1 LIMIT 1`,
+      [wsId],
+    );
+    expect(snapRow.rowCount).toBe(1);
+    const snapId = snapRow.rows[0].id;
+
+    await expect(
+      pool.query(`UPDATE content_approval_snapshots SET policy_version = 'altered' WHERE id = $1`, [
+        snapId,
+      ]),
+    ).rejects.toMatchObject({ code: '55000' });
+    await expect(
+      pool.query(`DELETE FROM content_approval_snapshots WHERE id = $1`, [snapId]),
+    ).rejects.toMatchObject({ code: '55000' });
+  });
+
+  it('competing decisions: concurrent accept/accept race allows exactly one winner and rejects the loser', async () => {
+    // 1. Create clean revision 3
+    const rev1Row = await pool.query(
+      `SELECT content_json FROM content_artifact_revisions WHERE artifact_id = $1 AND revision_number = 1`,
+      [artifactId],
+    );
+    const cleanPkg = rev1Row.rows[0].content_json as ScriptPackage;
+
+    const rawKey = '019318b2-5f33-722e-a5df-036f007b89d2';
+    const keyHash = new Uint8Array(crypto.createHash('sha256').update(rawKey, 'utf8').digest());
+    const requestHash = new Uint8Array(32);
+
+    const rev2Res = await pool.query(
+      `SELECT content_hash FROM content_artifact_revisions WHERE artifact_id = $1 AND revision_number = 2`,
+      [artifactId],
+    );
+    const rev2HashHex = Buffer.from(rev2Res.rows[0].content_hash).toString('hex');
+
+    const cl = await pool.connect();
+    let rev3Artifact: ContentArtifactDetailDTO;
+    try {
+      await cl.query('BEGIN');
+      rev3Artifact = await createManualRevisionTransaction(cl, {
+        workspaceId: typedWsId,
+        artifactId,
+        actorUserId: typedUserId,
+        expectedVersion: 4,
+        baseRevisionNumber: 2,
+        baseContentHashHex: rev2HashHex,
+        content: cleanPkg,
+        note: 'Create revision 3 for race testing',
+        idempotency: {
+          rawKey,
+          keyHash,
+          requestHash,
+          routeKey: `POST /api/v1/workspaces/${wsId}/artifacts/${artifactId}/revisions`,
+        },
+      });
+      await cl.query('COMMIT');
+    } finally {
+      cl.release();
+    }
+
+    expect(rev3Artifact.artifact.currentRevisionNumber).toBe(3);
+    expect(rev3Artifact.artifact.version).toBe(5);
+
+    const rev3Res = await pool.query(
+      `SELECT content_hash FROM content_artifact_revisions WHERE artifact_id = $1 AND revision_number = 3`,
+      [artifactId],
+    );
+    const rev3HashHex = Buffer.from(rev3Res.rows[0].content_hash).toString('hex');
+
+    // Settle compliance for rev 3
+    const claimed = await jobAdapter.claimNextJob({
+      workerId: 'worker-rev3-compliance',
+      leaseDurationSeconds: 30,
+    });
+    expect(claimed).not.toBeNull();
+    const p = claimed!.payloadJson as unknown as TestJobPayload;
+
+    const evalRow = await pool.query(
+      `SELECT id FROM compliance_evaluations WHERE artifact_id = $1 AND revision_number = 3`,
+      [artifactId],
+    );
+    const evaluationId = evalRow.rows[0].id;
+
+    const clSettle = await pool.connect();
+    try {
+      await clSettle.query('BEGIN');
+      await settleComplianceReviewJobAtomic(clSettle, fakeComplianceGateway, {
+        workspaceId: p.workspaceId,
+        jobId: claimed!.id,
+        jobVersion: claimed!.version,
+        workerId: 'worker-rev3-compliance',
+        operationId: p.operationId,
+        aiRunId: p.aiRunId,
+        evaluationId,
+        productId: p.productId,
+        workOrderId: p.workOrderId,
+        artifactId: p.artifactId,
+        revisionNumber: 3,
+        policyVersion: p.policyVersion,
+      });
+      await clSettle.query('COMMIT');
+    } finally {
+      clSettle.release();
+    }
+
+    // Launch concurrent accept/accept race
+    const rawKeyA = '019318b2-5f33-722e-a5df-036f007b89d3';
+    const rawKeyB = '019318b2-5f33-722e-a5df-036f007b89d4';
+
+    const [resA, resB] = await Promise.allSettled([
+      adapter.acceptScriptRevision({
+        workspaceId: typedWsId,
+        artifactId,
+        actorUserId: typedUserId,
+        expectedVersion: 5,
+        revisionNumber: 3,
+        contentHashHex: rev3HashHex,
+        note: 'Concurrent accept A',
+        idempotency: {
+          rawKey: rawKeyA,
+          keyHash: new Uint8Array(crypto.createHash('sha256').update(rawKeyA).digest()),
+          requestHash: new Uint8Array(32),
+          routeKey: `POST /api/v1/workspaces/${wsId}/artifacts/${artifactId}/accept`,
+        },
+      }),
+      adapter.acceptScriptRevision({
+        workspaceId: typedWsId,
+        artifactId,
+        actorUserId: typedUserId,
+        expectedVersion: 5,
+        revisionNumber: 3,
+        contentHashHex: rev3HashHex,
+        note: 'Concurrent accept B',
+        idempotency: {
+          rawKey: rawKeyB,
+          keyHash: new Uint8Array(crypto.createHash('sha256').update(rawKeyB).digest()),
+          requestHash: new Uint8Array(32),
+          routeKey: `POST /api/v1/workspaces/${wsId}/artifacts/${artifactId}/accept`,
+        },
+      }),
+    ]);
+
+    const fulfilled = [resA, resB].filter((r) => r.status === 'fulfilled');
+    const rejected = [resA, resB].filter((r) => r.status === 'rejected');
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+
+    // Verify DB state: exactly 1 accept decision, 1 approval snapshot
+    const decs = await pool.query(
+      `SELECT * FROM content_review_decisions WHERE artifact_id = $1 AND revision_number = 3`,
+      [artifactId],
+    );
+    expect(decs.rowCount).toBe(1);
+    expect(decs.rows[0].decision).toBe('accept');
+
+    const snaps = await pool.query(
+      `SELECT * FROM content_approval_snapshots WHERE artifact_id = $1 AND revision_number = 3`,
+      [artifactId],
+    );
+    expect(snaps.rowCount).toBe(1);
+
+    // Verify idempotent replay of the winner returns identical snapshot
+    const winningKey = resA.status === 'fulfilled' ? rawKeyA : rawKeyB;
+    const replay = await adapter.acceptScriptRevision({
+      workspaceId: typedWsId,
+      artifactId,
+      actorUserId: typedUserId,
+      expectedVersion: 5,
+      revisionNumber: 3,
+      contentHashHex: rev3HashHex,
+      note: 'Replay winning accept',
+      idempotency: {
+        rawKey: winningKey,
+        keyHash: new Uint8Array(crypto.createHash('sha256').update(winningKey).digest()),
+        requestHash: new Uint8Array(32),
+        routeKey: `POST /api/v1/workspaces/${wsId}/artifacts/${artifactId}/accept`,
+      },
+    });
+    expect(replay.approvalSnapshot.id).toBe(snaps.rows[0].id);
+  });
+
+  it('competing decisions: concurrent accept/reject race allows exactly one terminal decision', async () => {
+    // Create revision 4
+    const rev1Row = await pool.query(
+      `SELECT content_json FROM content_artifact_revisions WHERE artifact_id = $1 AND revision_number = 1`,
+      [artifactId],
+    );
+    const cleanPkg = rev1Row.rows[0].content_json as ScriptPackage;
+
+    const rawKey = '019318b2-5f33-722e-a5df-036f007b89e2';
+    const keyHash = new Uint8Array(crypto.createHash('sha256').update(rawKey, 'utf8').digest());
+    const requestHash = new Uint8Array(32);
+
+    const rev3Res = await pool.query(
+      `SELECT content_hash FROM content_artifact_revisions WHERE artifact_id = $1 AND revision_number = 3`,
+      [artifactId],
+    );
+    const rev3HashHex = Buffer.from(rev3Res.rows[0].content_hash).toString('hex');
+
+    const cl = await pool.connect();
+    let rev4Artifact: ContentArtifactDetailDTO;
+    try {
+      await cl.query('BEGIN');
+      rev4Artifact = await createManualRevisionTransaction(cl, {
+        workspaceId: typedWsId,
+        artifactId,
+        actorUserId: typedUserId,
+        expectedVersion: 6,
+        baseRevisionNumber: 3,
+        baseContentHashHex: rev3HashHex,
+        content: cleanPkg,
+        note: 'Create revision 4 for accept/reject race',
+        idempotency: {
+          rawKey,
+          keyHash,
+          requestHash,
+          routeKey: `POST /api/v1/workspaces/${wsId}/artifacts/${artifactId}/revisions`,
+        },
+      });
+      await cl.query('COMMIT');
+    } finally {
+      cl.release();
+    }
+
+    expect(rev4Artifact.artifact.currentRevisionNumber).toBe(4);
+    expect(rev4Artifact.artifact.version).toBe(7);
+
+    const rev4Res = await pool.query(
+      `SELECT content_hash FROM content_artifact_revisions WHERE artifact_id = $1 AND revision_number = 4`,
+      [artifactId],
+    );
+    const rev4HashHex = Buffer.from(rev4Res.rows[0].content_hash).toString('hex');
+
+    // Settle compliance for rev 4
+    const claimed = await jobAdapter.claimNextJob({
+      workerId: 'worker-rev4-compliance',
+      leaseDurationSeconds: 30,
+    });
+    expect(claimed).not.toBeNull();
+    const p = claimed!.payloadJson as unknown as TestJobPayload;
+
+    const evalRow = await pool.query(
+      `SELECT id FROM compliance_evaluations WHERE artifact_id = $1 AND revision_number = 4`,
+      [artifactId],
+    );
+    const evaluationId = evalRow.rows[0].id;
+
+    const clSettle = await pool.connect();
+    try {
+      await clSettle.query('BEGIN');
+      await settleComplianceReviewJobAtomic(clSettle, fakeComplianceGateway, {
+        workspaceId: p.workspaceId,
+        jobId: claimed!.id,
+        jobVersion: claimed!.version,
+        workerId: 'worker-rev4-compliance',
+        operationId: p.operationId,
+        aiRunId: p.aiRunId,
+        evaluationId,
+        productId: p.productId,
+        workOrderId: p.workOrderId,
+        artifactId: p.artifactId,
+        revisionNumber: 4,
+        policyVersion: p.policyVersion,
+      });
+      await clSettle.query('COMMIT');
+    } finally {
+      clSettle.release();
+    }
+
+    // Launch concurrent accept vs reject race
+    const rawKeyAcc = '019318b2-5f33-722e-a5df-036f007b89e3';
+    const rawKeyRej = '019318b2-5f33-722e-a5df-036f007b89e4';
+
+    const [resAccept, resReject] = await Promise.allSettled([
+      adapter.acceptScriptRevision({
+        workspaceId: typedWsId,
+        artifactId,
+        actorUserId: typedUserId,
+        expectedVersion: 7,
+        revisionNumber: 4,
+        contentHashHex: rev4HashHex,
+        note: 'Race accept',
+        idempotency: {
+          rawKey: rawKeyAcc,
+          keyHash: new Uint8Array(crypto.createHash('sha256').update(rawKeyAcc).digest()),
+          requestHash: new Uint8Array(32),
+          routeKey: `POST /api/v1/workspaces/${wsId}/artifacts/${artifactId}/accept`,
+        },
+      }),
+      adapter.rejectScriptRevision({
+        workspaceId: typedWsId,
+        artifactId,
+        actorUserId: typedUserId,
+        expectedVersion: 7,
+        revisionNumber: 4,
+        contentHashHex: rev4HashHex,
+        reason: 'Race reject',
+        idempotency: {
+          rawKey: rawKeyRej,
+          keyHash: new Uint8Array(crypto.createHash('sha256').update(rawKeyRej).digest()),
+          requestHash: new Uint8Array(32),
+          routeKey: `POST /api/v1/workspaces/${wsId}/artifacts/${artifactId}/reject`,
+        },
+      }),
+    ]);
+
+    const fulfilled = [resAccept, resReject].filter((r) => r.status === 'fulfilled');
+    const rejected = [resAccept, resReject].filter((r) => r.status === 'rejected');
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+
+    // Exactly 1 decision in DB
+    const decs = await pool.query(
+      `SELECT decision FROM content_review_decisions WHERE artifact_id = $1 AND revision_number = 4`,
+      [artifactId],
+    );
+    expect(decs.rowCount).toBe(1);
+    expect(['accept', 'reject']).toContain(decs.rows[0].decision);
+  });
+
+  it('competing decisions: concurrent reject/accept race allows exactly one terminal decision', async () => {
+    // Create revision 5
+    const rev1Row = await pool.query(
+      `SELECT content_json FROM content_artifact_revisions WHERE artifact_id = $1 AND revision_number = 1`,
+      [artifactId],
+    );
+    const cleanPkg = rev1Row.rows[0].content_json as ScriptPackage;
+
+    const rawKey = '019318b2-5f33-722e-a5df-036f007b89f2';
+    const keyHash = new Uint8Array(crypto.createHash('sha256').update(rawKey, 'utf8').digest());
+    const requestHash = new Uint8Array(32);
+
+    const rev4Res = await pool.query(
+      `SELECT content_hash FROM content_artifact_revisions WHERE artifact_id = $1 AND revision_number = 4`,
+      [artifactId],
+    );
+    const rev4HashHex = Buffer.from(rev4Res.rows[0].content_hash).toString('hex');
+
+    const cl = await pool.connect();
+    let rev5Artifact: ContentArtifactDetailDTO;
+    try {
+      await cl.query('BEGIN');
+      rev5Artifact = await createManualRevisionTransaction(cl, {
+        workspaceId: typedWsId,
+        artifactId,
+        actorUserId: typedUserId,
+        expectedVersion: 8,
+        baseRevisionNumber: 4,
+        baseContentHashHex: rev4HashHex,
+        content: cleanPkg,
+        note: 'Create revision 5 for reject/accept race',
+        idempotency: {
+          rawKey,
+          keyHash,
+          requestHash,
+          routeKey: `POST /api/v1/workspaces/${wsId}/artifacts/${artifactId}/revisions`,
+        },
+      });
+      await cl.query('COMMIT');
+    } finally {
+      cl.release();
+    }
+
+    expect(rev5Artifact.artifact.currentRevisionNumber).toBe(5);
+    expect(rev5Artifact.artifact.version).toBe(9);
+
+    const rev5Res = await pool.query(
+      `SELECT content_hash FROM content_artifact_revisions WHERE artifact_id = $1 AND revision_number = 5`,
+      [artifactId],
+    );
+    const rev5HashHex = Buffer.from(rev5Res.rows[0].content_hash).toString('hex');
+
+    // Settle compliance for rev 5
+    const claimed = await jobAdapter.claimNextJob({
+      workerId: 'worker-rev5-compliance',
+      leaseDurationSeconds: 30,
+    });
+    expect(claimed).not.toBeNull();
+    const p = claimed!.payloadJson as unknown as TestJobPayload;
+
+    const evalRow = await pool.query(
+      `SELECT id FROM compliance_evaluations WHERE artifact_id = $1 AND revision_number = 5`,
+      [artifactId],
+    );
+    const evaluationId = evalRow.rows[0].id;
+
+    const clSettle = await pool.connect();
+    try {
+      await clSettle.query('BEGIN');
+      await settleComplianceReviewJobAtomic(clSettle, fakeComplianceGateway, {
+        workspaceId: p.workspaceId,
+        jobId: claimed!.id,
+        jobVersion: claimed!.version,
+        workerId: 'worker-rev5-compliance',
+        operationId: p.operationId,
+        aiRunId: p.aiRunId,
+        evaluationId,
+        productId: p.productId,
+        workOrderId: p.workOrderId,
+        artifactId: p.artifactId,
+        revisionNumber: 5,
+        policyVersion: p.policyVersion,
+      });
+      await clSettle.query('COMMIT');
+    } finally {
+      clSettle.release();
+    }
+
+    // Launch concurrent reject vs accept race
+    const rawKeyRej = '019318b2-5f33-722e-a5df-036f007b89f3';
+    const rawKeyAcc = '019318b2-5f33-722e-a5df-036f007b89f4';
+
+    const [resReject, resAccept] = await Promise.allSettled([
+      adapter.rejectScriptRevision({
+        workspaceId: typedWsId,
+        artifactId,
+        actorUserId: typedUserId,
+        expectedVersion: 9,
+        revisionNumber: 5,
+        contentHashHex: rev5HashHex,
+        reason: 'Race reject',
+        idempotency: {
+          rawKey: rawKeyRej,
+          keyHash: new Uint8Array(crypto.createHash('sha256').update(rawKeyRej).digest()),
+          requestHash: new Uint8Array(32),
+          routeKey: `POST /api/v1/workspaces/${wsId}/artifacts/${artifactId}/reject`,
+        },
+      }),
+      adapter.acceptScriptRevision({
+        workspaceId: typedWsId,
+        artifactId,
+        actorUserId: typedUserId,
+        expectedVersion: 9,
+        revisionNumber: 5,
+        contentHashHex: rev5HashHex,
+        note: 'Race accept',
+        idempotency: {
+          rawKey: rawKeyAcc,
+          keyHash: new Uint8Array(crypto.createHash('sha256').update(rawKeyAcc).digest()),
+          requestHash: new Uint8Array(32),
+          routeKey: `POST /api/v1/workspaces/${wsId}/artifacts/${artifactId}/accept`,
+        },
+      }),
+    ]);
+
+    const fulfilled = [resReject, resAccept].filter((r) => r.status === 'fulfilled');
+    const rejected = [resReject, resAccept].filter((r) => r.status === 'rejected');
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+
+    // Exactly 1 decision in DB
+    const decs = await pool.query(
+      `SELECT decision FROM content_review_decisions WHERE artifact_id = $1 AND revision_number = 5`,
+      [artifactId],
+    );
+    expect(decs.rowCount).toBe(1);
+    expect(['accept', 'reject']).toContain(decs.rows[0].decision);
+  });
+
+  it('pre-provider drift fencing makes zero provider calls and evaluation is non-approvable', async () => {
+    // Create revision 6
+    const rev1Row = await pool.query(
+      `SELECT content_json FROM content_artifact_revisions WHERE artifact_id = $1 AND revision_number = 1`,
+      [artifactId],
+    );
+    const cleanPkg = rev1Row.rows[0].content_json as ScriptPackage;
+
+    const rawKey = '019318b2-5f33-722e-a5df-036f007b8901';
+    const keyHash = new Uint8Array(crypto.createHash('sha256').update(rawKey, 'utf8').digest());
+    const requestHash = new Uint8Array(32);
+
+    const rev5Res = await pool.query(
+      `SELECT content_hash FROM content_artifact_revisions WHERE artifact_id = $1 AND revision_number = 5`,
+      [artifactId],
+    );
+    const rev5HashHex = Buffer.from(rev5Res.rows[0].content_hash).toString('hex');
+
+    const cl = await pool.connect();
+    try {
+      await cl.query('BEGIN');
+      await createManualRevisionTransaction(cl, {
+        workspaceId: typedWsId,
+        artifactId,
+        actorUserId: typedUserId,
+        expectedVersion: 10,
+        baseRevisionNumber: 5,
+        baseContentHashHex: rev5HashHex,
+        content: cleanPkg,
+        note: 'Create revision 6 for drift testing',
+        idempotency: {
+          rawKey,
+          keyHash,
+          requestHash,
+          routeKey: `POST /api/v1/workspaces/${wsId}/artifacts/${artifactId}/revisions`,
+        },
+      });
+      await cl.query('COMMIT');
+    } finally {
+      cl.release();
+    }
+
+    const claimed = await jobAdapter.claimNextJob({
+      workerId: 'worker-rev6-drift',
+      leaseDurationSeconds: 30,
+    });
+    expect(claimed).not.toBeNull();
+    const p = claimed!.payloadJson as unknown as TestJobPayload;
+
+    const evalRow = await pool.query(
+      `SELECT id FROM compliance_evaluations WHERE artifact_id = $1 AND revision_number = 6`,
+      [artifactId],
+    );
+    const evaluationId = evalRow.rows[0].id;
+
+    // Simulate pre-provider content hash drift
+    const prepCl = await pool.connect();
+    let prep;
+    try {
+      prep = await prepareComplianceReviewExecution(prepCl, {
+        workspaceId: p.workspaceId,
+        jobId: claimed!.id,
+        jobVersion: claimed!.version,
+        workerId: 'worker-rev6-drift',
+        operationId: p.operationId,
+        aiRunId: p.aiRunId,
+        evaluationId,
+        productId: p.productId,
+        workOrderId: p.workOrderId,
+        artifactId: p.artifactId,
+        revisionNumber: 6,
+        policyVersion: p.policyVersion,
+        expectedContentHashHex: '0'.repeat(64), // deliberately drifted hash
+      });
+    } finally {
+      prepCl.release();
+    }
+
+    expect(prep.kind).toBe('drift_detected');
+    if (prep.kind !== 'drift_detected') throw new Error('Expected drift_detected');
+
+    // Settle drift atomically (zero provider calls!)
+    const settleCl = await pool.connect();
+    try {
+      await settleCl.query('BEGIN');
+      await settleComplianceDriftAtomic(settleCl, {
+        workspaceId: p.workspaceId,
+        jobId: claimed!.id,
+        jobVersion: claimed!.version,
+        workerId: 'worker-rev6-drift',
+        operationId: p.operationId,
+        aiRunId: p.aiRunId,
+        evaluationId,
+        workOrderId: p.workOrderId,
+        reason: prep.reason,
+        reservedSpend: prep.reservedSpend,
+      });
+      await settleCl.query('COMMIT');
+    } finally {
+      settleCl.release();
+    }
+
+    // Evaluation is failed / non-approvable
+    const evalRes = await pool.query(
+      `SELECT status, result FROM compliance_evaluations WHERE id = $1`,
+      [evaluationId],
+    );
+    expect(evalRes.rows[0].status).toBe('failed');
+    expect(evalRes.rows[0].result).toBe('failed');
+
+    // Attempting to accept revision 6 must fail with ComplianceEvaluationNotApprovableError
+    const rev6Res = await pool.query(
+      `SELECT content_hash FROM content_artifact_revisions WHERE artifact_id = $1 AND revision_number = 6`,
+      [artifactId],
+    );
+    const rev6HashHex = Buffer.from(rev6Res.rows[0].content_hash).toString('hex');
+
+    await expect(
+      adapter.acceptScriptRevision({
+        workspaceId: typedWsId,
+        artifactId,
+        actorUserId: typedUserId,
+        expectedVersion: 11,
+        revisionNumber: 6,
+        contentHashHex: rev6HashHex,
+        idempotency: {
+          rawKey: '019318b2-5f33-722e-a5df-036f007b8902',
+          keyHash: new Uint8Array(32),
+          requestHash: new Uint8Array(32),
+          routeKey: `POST /api/v1/workspaces/${wsId}/artifacts/${artifactId}/accept`,
+        },
+      }),
+    ).rejects.toThrow(ComplianceEvaluationNotApprovableError);
+  });
+
+  it('budget exhausted makes zero provider calls and evaluation is non-approvable', async () => {
+    // Max out monthly budget spend temporarily
+    await pool.query(
+      `UPDATE workspace_ai_policies SET current_spend_microunits = monthly_budget_microunits WHERE workspace_id = $1`,
+      [wsId],
+    );
+
+    // Create revision 7 (enqueue will reserve 0 because budget is exhausted)
+    const rev1Row = await pool.query(
+      `SELECT content_json FROM content_artifact_revisions WHERE artifact_id = $1 AND revision_number = 1`,
+      [artifactId],
+    );
+    const cleanPkg = rev1Row.rows[0].content_json as ScriptPackage;
+
+    const rawKey = '019318b2-5f33-722e-a5df-036f007b8903';
+    const keyHash = new Uint8Array(crypto.createHash('sha256').update(rawKey, 'utf8').digest());
+    const requestHash = new Uint8Array(32);
+
+    const rev6Res = await pool.query(
+      `SELECT content_hash FROM content_artifact_revisions WHERE artifact_id = $1 AND revision_number = 6`,
+      [artifactId],
+    );
+    const rev6HashHex = Buffer.from(rev6Res.rows[0].content_hash).toString('hex');
+
+    const cl = await pool.connect();
+    try {
+      await cl.query('BEGIN');
+      await createManualRevisionTransaction(cl, {
+        workspaceId: typedWsId,
+        artifactId,
+        actorUserId: typedUserId,
+        expectedVersion: 11,
+        baseRevisionNumber: 6,
+        baseContentHashHex: rev6HashHex,
+        content: cleanPkg,
+        note: 'Create revision 7 for budget exhaustion testing',
+        idempotency: {
+          rawKey,
+          keyHash,
+          requestHash,
+          routeKey: `POST /api/v1/workspaces/${wsId}/artifacts/${artifactId}/revisions`,
+        },
+      });
+      await cl.query('COMMIT');
+    } finally {
+      cl.release();
+    }
+
+    const claimed = await jobAdapter.claimNextJob({
+      workerId: 'worker-rev7-budget',
+      leaseDurationSeconds: 30,
+    });
+    expect(claimed).not.toBeNull();
+    const p = claimed!.payloadJson as unknown as TestJobPayload;
+
+    const evalRow = await pool.query(
+      `SELECT id FROM compliance_evaluations WHERE artifact_id = $1 AND revision_number = 7`,
+      [artifactId],
+    );
+    const evaluationId = evalRow.rows[0].id;
+
+    // Prepare execution -> returns budget_exhausted
+    const prepCl = await pool.connect();
+    let prep;
+    try {
+      prep = await prepareComplianceReviewExecution(prepCl, {
+        workspaceId: p.workspaceId,
+        jobId: claimed!.id,
+        jobVersion: claimed!.version,
+        workerId: 'worker-rev7-budget',
+        operationId: p.operationId,
+        aiRunId: p.aiRunId,
+        evaluationId,
+        productId: p.productId,
+        workOrderId: p.workOrderId,
+        artifactId: p.artifactId,
+        revisionNumber: 7,
+        policyVersion: p.policyVersion,
+      });
+    } finally {
+      prepCl.release();
+    }
+
+    expect(prep.kind).toBe('budget_exhausted');
+    if (prep.kind !== 'budget_exhausted') throw new Error('Expected budget_exhausted');
+
+    // Settle budget exhausted atomically (zero provider calls!)
+    const settleCl = await pool.connect();
+    try {
+      await settleCl.query('BEGIN');
+      await settleComplianceBudgetExhaustedAtomic(settleCl, {
+        workspaceId: p.workspaceId,
+        jobId: claimed!.id,
+        jobVersion: claimed!.version,
+        workerId: 'worker-rev7-budget',
+        operationId: p.operationId,
+        aiRunId: p.aiRunId,
+        evaluationId,
+        productId: p.productId,
+        workOrderId: p.workOrderId,
+        artifactId: p.artifactId,
+        revisionNumber: 7,
+        deterministicResult: prep.deterministicResult,
+      });
+      await settleCl.query('COMMIT');
+    } finally {
+      settleCl.release();
+    }
+
+    // Reset budget spend
+    await pool.query(
+      `UPDATE workspace_ai_policies SET current_spend_microunits = 0 WHERE workspace_id = $1`,
+      [wsId],
+    );
+
+    // Evaluation is failed / non-approvable
+    const evalRes = await pool.query(
+      `SELECT status, result, ai_advisory_status FROM compliance_evaluations WHERE id = $1`,
+      [evaluationId],
+    );
+    expect(evalRes.rows[0].status).toBe('failed');
+    expect(evalRes.rows[0].result).toBe('failed');
+    expect(evalRes.rows[0].ai_advisory_status).toBe('failed');
+
+    // Attempting to accept revision 7 fails with ComplianceEvaluationNotApprovableError
+    const rev7Res = await pool.query(
+      `SELECT content_hash FROM content_artifact_revisions WHERE artifact_id = $1 AND revision_number = 7`,
+      [artifactId],
+    );
+    const rev7HashHex = Buffer.from(rev7Res.rows[0].content_hash).toString('hex');
+
+    await expect(
+      adapter.acceptScriptRevision({
+        workspaceId: typedWsId,
+        artifactId,
+        actorUserId: typedUserId,
+        expectedVersion: 12,
+        revisionNumber: 7,
+        contentHashHex: rev7HashHex,
+        idempotency: {
+          rawKey: '019318b2-5f33-722e-a5df-036f007b8904',
+          keyHash: new Uint8Array(32),
+          requestHash: new Uint8Array(32),
+          routeKey: `POST /api/v1/workspaces/${wsId}/artifacts/${artifactId}/accept`,
+        },
+      }),
+    ).rejects.toThrow(ComplianceEvaluationNotApprovableError);
+  });
+
+  it('post-provider drift fencing detects state changes during execution, releases reservation, and fails closed', async () => {
+    // Create revision 8
+    const rev1Row = await pool.query(
+      `SELECT content_json FROM content_artifact_revisions WHERE artifact_id = $1 AND revision_number = 1`,
+      [artifactId],
+    );
+    const cleanPkg = rev1Row.rows[0].content_json as ScriptPackage;
+
+    const rawKey = '019318b2-5f33-722e-a5df-036f007b8905';
+    const keyHash = new Uint8Array(crypto.createHash('sha256').update(rawKey, 'utf8').digest());
+    const requestHash = new Uint8Array(32);
+
+    const rev7Res = await pool.query(
+      `SELECT content_hash FROM content_artifact_revisions WHERE artifact_id = $1 AND revision_number = 7`,
+      [artifactId],
+    );
+    const rev7HashHex = Buffer.from(rev7Res.rows[0].content_hash).toString('hex');
+
+    const cl = await pool.connect();
+    try {
+      await cl.query('BEGIN');
+      await createManualRevisionTransaction(cl, {
+        workspaceId: typedWsId,
+        artifactId,
+        actorUserId: typedUserId,
+        expectedVersion: 12,
+        baseRevisionNumber: 7,
+        baseContentHashHex: rev7HashHex,
+        content: cleanPkg,
+        note: 'Create revision 8 for post-provider drift testing',
+        idempotency: {
+          rawKey,
+          keyHash,
+          requestHash,
+          routeKey: `POST /api/v1/workspaces/${wsId}/artifacts/${artifactId}/revisions`,
+        },
+      });
+      await cl.query('COMMIT');
+    } finally {
+      cl.release();
+    }
+
+    const claimed = await jobAdapter.claimNextJob({
+      workerId: 'worker-rev8-drift',
+      leaseDurationSeconds: 30,
+    });
+    expect(claimed).not.toBeNull();
+    const p = claimed!.payloadJson as unknown as TestJobPayload;
+
+    const evalRow = await pool.query(
+      `SELECT id FROM compliance_evaluations WHERE artifact_id = $1 AND revision_number = 8`,
+      [artifactId],
+    );
+    const evaluationId = evalRow.rows[0].id;
+
+    // Prepare execution succeeds
+    const prepCl = await pool.connect();
+    let prep;
+    try {
+      prep = await prepareComplianceReviewExecution(prepCl, {
+        workspaceId: p.workspaceId,
+        jobId: claimed!.id,
+        jobVersion: claimed!.version,
+        workerId: 'worker-rev8-drift',
+        operationId: p.operationId,
+        aiRunId: p.aiRunId,
+        evaluationId,
+        productId: p.productId,
+        workOrderId: p.workOrderId,
+        artifactId: p.artifactId,
+        revisionNumber: 8,
+        policyVersion: p.policyVersion,
+      });
+    } finally {
+      prepCl.release();
+    }
+
+    expect(prep.kind).toBe('execute_advisory');
+    if (prep.kind !== 'execute_advisory') throw new Error('Expected execute_advisory');
+
+    // Execute advisory call
+    const advisoryRes = await fakeComplianceGateway.executeComplianceAdvisory!(prep.providerInput);
+
+    // Simulate post-provider drift: another revision or external process bumps current_revision_number
+    await pool.query(`UPDATE content_artifacts SET current_revision_number = 999 WHERE id = $1`, [
+      artifactId,
+    ]);
+
+    // Settle execution -> post-provider fencing detects drift!
+    const settleCl = await pool.connect();
+    let settleOutcome;
+    try {
+      await settleCl.query('BEGIN');
+      settleOutcome = await settleComplianceReviewExecutionAtomic(settleCl, {
+        workspaceId: p.workspaceId,
+        jobId: claimed!.id,
+        jobVersion: claimed!.version,
+        workerId: 'worker-rev8-drift',
+        operationId: p.operationId,
+        aiRunId: p.aiRunId,
+        evaluationId,
+        productId: p.productId,
+        workOrderId: p.workOrderId,
+        artifactId: p.artifactId,
+        revisionNumber: 8,
+        contentHashHex: prep.contentHashHex,
+        deterministicResult: prep.deterministicResult,
+        reservedSpend: prep.reservedSpend,
+        policyVersion: prep.policyVersion,
+        policyHashHex: prep.policyHashHex,
+        providerResult: advisoryRes,
+      });
+      await settleCl.query('COMMIT');
+    } finally {
+      settleCl.release();
+    }
+
+    expect(settleOutcome.status).toBe('drift_canceled');
+
+    // Evaluation is failed / non-approvable
+    const evalRes = await pool.query(
+      `SELECT status, result FROM compliance_evaluations WHERE id = $1`,
+      [evaluationId],
+    );
+    expect(evalRes.rows[0].status).toBe('failed');
+    expect(evalRes.rows[0].result).toBe('failed');
+
+    // Restore artifact current_revision_number
+    await pool.query(`UPDATE content_artifacts SET current_revision_number = 8 WHERE id = $1`, [
+      artifactId,
+    ]);
+  });
+
+  it('provider failure results in non-approvable failed evaluation and releases reservation', async () => {
+    // Create revision 9
+    const rev1Row = await pool.query(
+      `SELECT content_json FROM content_artifact_revisions WHERE artifact_id = $1 AND revision_number = 1`,
+      [artifactId],
+    );
+    const cleanPkg = rev1Row.rows[0].content_json as ScriptPackage;
+
+    const rawKey = '019318b2-5f33-722e-a5df-036f007b8906';
+    const keyHash = new Uint8Array(crypto.createHash('sha256').update(rawKey, 'utf8').digest());
+    const requestHash = new Uint8Array(32);
+
+    const rev8Res = await pool.query(
+      `SELECT content_hash FROM content_artifact_revisions WHERE artifact_id = $1 AND revision_number = 8`,
+      [artifactId],
+    );
+    const rev8HashHex = Buffer.from(rev8Res.rows[0].content_hash).toString('hex');
+
+    const cl = await pool.connect();
+    try {
+      await cl.query('BEGIN');
+      await createManualRevisionTransaction(cl, {
+        workspaceId: typedWsId,
+        artifactId,
+        actorUserId: typedUserId,
+        expectedVersion: 13,
+        baseRevisionNumber: 8,
+        baseContentHashHex: rev8HashHex,
+        content: cleanPkg,
+        note: 'Create revision 9 for provider failure testing',
+        idempotency: {
+          rawKey,
+          keyHash,
+          requestHash,
+          routeKey: `POST /api/v1/workspaces/${wsId}/artifacts/${artifactId}/revisions`,
+        },
+      });
+      await cl.query('COMMIT');
+    } finally {
+      cl.release();
+    }
+
+    const claimed = await jobAdapter.claimNextJob({
+      workerId: 'worker-rev9-fail',
+      leaseDurationSeconds: 30,
+    });
+    expect(claimed).not.toBeNull();
+    const p = claimed!.payloadJson as unknown as TestJobPayload;
+
+    const evalRow = await pool.query(
+      `SELECT id FROM compliance_evaluations WHERE artifact_id = $1 AND revision_number = 9`,
+      [artifactId],
+    );
+    const evaluationId = evalRow.rows[0].id;
+
+    // Prepare execution
+    const prepCl = await pool.connect();
+    let prep;
+    try {
+      prep = await prepareComplianceReviewExecution(prepCl, {
+        workspaceId: p.workspaceId,
+        jobId: claimed!.id,
+        jobVersion: claimed!.version,
+        workerId: 'worker-rev9-fail',
+        operationId: p.operationId,
+        aiRunId: p.aiRunId,
+        evaluationId,
+        productId: p.productId,
+        workOrderId: p.workOrderId,
+        artifactId: p.artifactId,
+        revisionNumber: 9,
+        policyVersion: p.policyVersion,
+      });
+    } finally {
+      prepCl.release();
+    }
+
+    expect(prep.kind).toBe('execute_advisory');
+    if (prep.kind !== 'execute_advisory') throw new Error('Expected execute_advisory');
+
+    // Simulate provider failure
+    const failedProviderResult: ExecuteComplianceAdvisoryResult = {
+      success: false,
+      errorCategory: 'provider_timeout',
+      errorMessage: 'Provider upstream timeout during compliance advisory',
+      usage: {
+        tokenInput: 0,
+        tokenOutput: 0,
+        costMicrounits: 0,
+        latencyMs: 0,
+        costCurrency: 'USD',
+      },
+      provenance: {
+        provider: 'google',
+        model: 'gemini-3.8-flash',
+        promptTemplate: 'compliance_advisory_v1',
+        promptVersion: '1.0.0',
+        inputSchemaVersion: 1,
+        outputSchemaVersion: 1,
+      },
+    };
+
+    // Settle execution with provider failure
+    const settleCl = await pool.connect();
+    let settleOutcome;
+    try {
+      await settleCl.query('BEGIN');
+      settleOutcome = await settleComplianceReviewExecutionAtomic(settleCl, {
+        workspaceId: p.workspaceId,
+        jobId: claimed!.id,
+        jobVersion: claimed!.version,
+        workerId: 'worker-rev9-fail',
+        operationId: p.operationId,
+        aiRunId: p.aiRunId,
+        evaluationId,
+        productId: p.productId,
+        workOrderId: p.workOrderId,
+        artifactId: p.artifactId,
+        revisionNumber: 9,
+        contentHashHex: prep.contentHashHex,
+        deterministicResult: prep.deterministicResult,
+        reservedSpend: prep.reservedSpend,
+        policyVersion: prep.policyVersion,
+        policyHashHex: prep.policyHashHex,
+        providerResult: failedProviderResult,
+      });
+      await settleCl.query('COMMIT');
+    } finally {
+      settleCl.release();
+    }
+
+    expect(settleOutcome.status).toBe('failed');
+
+    // Evaluation is failed / non-approvable
+    const evalRes = await pool.query(
+      `SELECT status, result, ai_advisory_status FROM compliance_evaluations WHERE id = $1`,
+      [evaluationId],
+    );
+    expect(evalRes.rows[0].status).toBe('failed');
+    expect(evalRes.rows[0].result).toBe('failed');
+    expect(evalRes.rows[0].ai_advisory_status).toBe('failed');
+
+    // Attempting to accept revision 9 fails with ComplianceEvaluationNotApprovableError
+    const rev9Res = await pool.query(
+      `SELECT content_hash FROM content_artifact_revisions WHERE artifact_id = $1 AND revision_number = 9`,
+      [artifactId],
+    );
+    const rev9HashHex = Buffer.from(rev9Res.rows[0].content_hash).toString('hex');
+
+    await expect(
+      adapter.acceptScriptRevision({
+        workspaceId: typedWsId,
+        artifactId,
+        actorUserId: typedUserId,
+        expectedVersion: 14,
+        revisionNumber: 9,
+        contentHashHex: rev9HashHex,
+        idempotency: {
+          rawKey: '019318b2-5f33-722e-a5df-036f007b8907',
+          keyHash: new Uint8Array(32),
+          requestHash: new Uint8Array(32),
+          routeKey: `POST /api/v1/workspaces/${wsId}/artifacts/${artifactId}/accept`,
+        },
+      }),
+    ).rejects.toThrow(ComplianceEvaluationNotApprovableError);
+  });
+
+  it('fail-closed evidence validation: empty allowed facts/analyses set rejects references as unsupported', async () => {
+    const rev1Row = await pool.query(
+      `SELECT content_json FROM content_artifact_revisions WHERE artifact_id = $1 AND revision_number = 1`,
+      [artifactId],
+    );
+    const pkg = rev1Row.rows[0].content_json as ScriptPackage;
+
+    // Run deterministic compliance with empty allowed sets
+    const result = evaluateDeterministicCompliance({
+      scriptPackage: pkg,
+      allowedFactIds: new Set(), // EMPTY!
+      allowedAnalysisIds: new Set(), // EMPTY!
+      revokedEvidenceIds: new Set(),
+    });
+
+    expect(result.passed).toBe(false);
+    expect(result.blockingCount).toBeGreaterThan(0);
+    const unsupportedFindings = result.findings.filter((f) => f.code === 'CLAIM_UNSUPPORTED');
+    expect(unsupportedFindings.length).toBeGreaterThan(0);
+    expect(unsupportedFindings[0]?.severity).toBe('blocking');
+
+    // Also verify invalid source kinds fail closed
+    const invalidSourcePkg: ScriptPackage = {
+      ...pkg,
+      evidenceReferences: [
+        {
+          sourceKind: 'external_unverified_url' as unknown as 'product_fact',
+          sourceId: 'http://example.com',
+        },
+      ],
+    };
+    const invalidResult = evaluateDeterministicCompliance({
+      scriptPackage: invalidSourcePkg,
+      allowedFactIds: new Set(),
+      allowedAnalysisIds: new Set(),
+      revokedEvidenceIds: new Set(),
+    });
+    expect(invalidResult.passed).toBe(false);
+    expect(invalidResult.findings.some((f) => f.code === 'EVIDENCE_SOURCE_INVALID')).toBe(true);
   });
 
   it('enforces tenant isolation and cross-workspace constraints', async () => {

@@ -279,4 +279,67 @@ describe('Compliance Policy & Deterministic Validator', () => {
     const finding = result.findings.find((f) => f.code === 'BRIEF_HASH_DRIFT');
     expect(finding?.severity).toBe('warning');
   });
+
+  it('fails closed when allowedFactIds is empty and an evidence fact is referenced', () => {
+    const pkg = createValidPackage('fact-1', 'analysis-1');
+    const result = evaluateDeterministicCompliance({
+      scriptPackage: pkg,
+      allowedFactIds: [], // Empty allowed facts set!
+      allowedAnalysisIds: ['analysis-1'],
+    });
+
+    expect(result.passed).toBe(false);
+    expect(result.result).toBe('blocked');
+    const finding = result.findings.find((f) => f.code === 'CLAIM_UNSUPPORTED');
+    expect(finding).toBeDefined();
+    expect(finding?.message).toContain('Referenced product fact fact-1');
+  });
+
+  it('fails closed when allowedAnalysisIds is empty and an analysis is referenced', () => {
+    const pkg = createValidPackage('fact-1', 'analysis-1');
+    const result = evaluateDeterministicCompliance({
+      scriptPackage: pkg,
+      allowedFactIds: ['fact-1'],
+      allowedAnalysisIds: [], // Empty allowed analyses set!
+    });
+
+    expect(result.passed).toBe(false);
+    expect(result.result).toBe('blocked');
+    const finding = result.findings.find((f) => f.code === 'CLAIM_UNSUPPORTED');
+    expect(finding).toBeDefined();
+    expect(finding?.message).toContain('Referenced analysis analysis-1');
+  });
+
+  it('fails closed when an unknown evidence source kind is referenced', () => {
+    const pkg = createValidPackage('fact-1', 'analysis-1');
+    // @ts-expect-error test unknown source kind
+    pkg.evidenceReferences.push({ sourceKind: 'unsupported_kind', sourceId: 'unknown-1' });
+
+    const result = evaluateDeterministicCompliance({
+      scriptPackage: pkg,
+      allowedFactIds: ['fact-1'],
+      allowedAnalysisIds: ['analysis-1'],
+    });
+
+    expect(result.passed).toBe(false);
+    expect(result.result).toBe('blocked');
+    const finding = result.findings.find((f) => f.code === 'EVIDENCE_SOURCE_INVALID');
+    expect(finding).toBeDefined();
+  });
+
+  it('fails closed when expected and actual content hashes differ', () => {
+    const pkg = createValidPackage('fact-1', 'analysis-1');
+    const result = evaluateDeterministicCompliance({
+      scriptPackage: pkg,
+      expectedContentHashHex: '11'.repeat(32),
+      actualContentHashHex: '22'.repeat(32),
+      allowedFactIds: ['fact-1'],
+      allowedAnalysisIds: ['analysis-1'],
+    });
+
+    expect(result.passed).toBe(false);
+    expect(result.result).toBe('blocked');
+    const finding = result.findings.find((f) => f.code === 'HASH_MISMATCH');
+    expect(finding).toBeDefined();
+  });
 });

@@ -37,6 +37,8 @@ export interface ComplianceEvaluationDTO {
   readonly policyVersion: string;
   readonly policyHashHex: string;
   readonly status: ComplianceEvaluationStatus;
+  readonly result?: 'pending' | 'passed' | 'warning' | 'blocked' | 'failed' | undefined;
+  readonly aiAdvisoryStatus?: 'skipped' | 'pending' | 'completed' | 'failed' | undefined;
   readonly blockingCount: number;
   readonly warningCount: number;
   readonly infoCount: number;

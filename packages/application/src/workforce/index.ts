@@ -17,11 +17,20 @@ export {
 } from './dependency-readiness.js';
 
 export {
+  ArtifactNotFoundError,
+  ArtifactRevisionConflictError,
+  ChiefOfStaffAssignmentConflictError,
+  ComplianceBlockingFindingsError,
+  ComplianceEvaluationNotApprovableError,
+  ComplianceEvaluationNotFoundError,
+  ComplianceEvaluationStaleError,
+  ContentReviewDecisionConflictError,
   WorkforceAnalysisNotAcceptedError,
   WorkforceFactSetNotConfirmedError,
   WorkforceGraphValidationError,
   WorkforceStaleContextError,
   WorkOrderNotFoundError,
+  WorkOrderStateConflictError,
 } from './errors.js';
 
 export { getWorkOrder } from './get-work-order.js';

@@ -5,12 +5,137 @@ import {
   getComplianceEvaluation,
   listReviewDecisions,
   rejectScriptRevision,
+  ArtifactNotFoundError,
+  ArtifactRevisionConflictError,
+  ChiefOfStaffAssignmentConflictError,
+  ComplianceBlockingFindingsError,
+  ComplianceEvaluationNotApprovableError,
+  ComplianceEvaluationNotFoundError,
+  ComplianceEvaluationStaleError,
+  ContentReviewDecisionConflictError,
+  IdempotencyKeyReusedError,
+  WorkOrderStateConflictError,
 } from '@affiliate-content-os/application';
 import { parseUserId, parseWorkspaceId } from '@affiliate-content-os/domain';
 import { requireAuthenticatedSession } from '../auth/session-auth.js';
 import { extractIdempotencyKey, validateMutationOrigin } from '../catalog/helpers.js';
 import type { CatalogRouteDependencies } from '../catalog/types.js';
 import type { WorkforceRouteDependencies } from './types.js';
+
+function handleComplianceMutationError(err: unknown, reply: FastifyReply): FastifyReply {
+  if (err instanceof ComplianceBlockingFindingsError) {
+    return reply.status(422).send({
+      type: 'https://affiliate-content-os.example/problems/compliance-blocked',
+      title: 'Unprocessable Entity',
+      status: 422,
+      code: 'COMPLIANCE_BLOCKING_FINDINGS',
+      detail: err.message,
+    });
+  }
+  if (err instanceof ComplianceEvaluationNotApprovableError) {
+    return reply.status(422).send({
+      type: 'https://affiliate-content-os.example/problems/compliance-not-approvable',
+      title: 'Unprocessable Entity',
+      status: 422,
+      code: 'COMPLIANCE_EVALUATION_NOT_APPROVABLE',
+      detail: err.message,
+    });
+  }
+  if (err instanceof ContentReviewDecisionConflictError) {
+    return reply.status(409).send({
+      type: 'https://affiliate-content-os.example/problems/decision-conflict',
+      title: 'Conflict',
+      status: 409,
+      code: 'CONTENT_REVIEW_DECISION_CONFLICT',
+      detail: err.message,
+    });
+  }
+  if (err instanceof ComplianceEvaluationStaleError) {
+    return reply.status(409).send({
+      type: 'https://affiliate-content-os.example/problems/policy-stale',
+      title: 'Conflict',
+      status: 409,
+      code: 'COMPLIANCE_EVALUATION_STALE',
+      detail: err.message,
+    });
+  }
+  if (
+    err instanceof ArtifactRevisionConflictError ||
+    err instanceof WorkOrderStateConflictError ||
+    err instanceof ChiefOfStaffAssignmentConflictError
+  ) {
+    return reply.status(409).send({
+      type: 'https://affiliate-content-os.example/problems/conflict',
+      title: 'Conflict',
+      status: 409,
+      code: 'VERSION_OR_REVISION_CONFLICT',
+      detail: err.message,
+    });
+  }
+  if (err instanceof IdempotencyKeyReusedError) {
+    return reply.status(409).send({
+      type: 'https://affiliate-content-os.example/problems/conflict',
+      title: 'Conflict',
+      status: 409,
+      code: 'IDEMPOTENCY_CONFLICT',
+      detail: err.message,
+    });
+  }
+  if (err instanceof ArtifactNotFoundError || err instanceof ComplianceEvaluationNotFoundError) {
+    return reply.status(404).send({
+      type: 'https://affiliate-content-os.example/problems/not-found',
+      title: 'Not Found',
+      status: 404,
+      code: 'RESOURCE_NOT_FOUND',
+      detail: err.message,
+    });
+  }
+
+  // Fallbacks for any legacy string errors
+  if (err instanceof Error) {
+    if (err.message.includes('blocking findings')) {
+      return reply.status(422).send({
+        type: 'https://affiliate-content-os.example/problems/compliance-blocked',
+        title: 'Unprocessable Entity',
+        status: 422,
+        code: 'COMPLIANCE_BLOCKING_FINDINGS',
+        detail: err.message,
+      });
+    }
+    if (
+      err.message.includes('Precondition failed') ||
+      err.message.includes('already received terminal decision')
+    ) {
+      return reply.status(409).send({
+        type: 'https://affiliate-content-os.example/problems/conflict',
+        title: 'Conflict',
+        status: 409,
+        code: 'VERSION_OR_REVISION_CONFLICT',
+        detail: err.message,
+      });
+    }
+    if (err.message.includes('different payload')) {
+      return reply.status(409).send({
+        type: 'https://affiliate-content-os.example/problems/conflict',
+        title: 'Conflict',
+        status: 409,
+        code: 'IDEMPOTENCY_CONFLICT',
+        detail: err.message,
+      });
+    }
+    if (err.message.includes('not found')) {
+      return reply.status(404).send({
+        type: 'https://affiliate-content-os.example/problems/not-found',
+        title: 'Not Found',
+        status: 404,
+        code: 'RESOURCE_NOT_FOUND',
+        detail: err.message,
+      });
+    }
+  }
+
+  throw err;
+}
 
 export async function handleGetArtifactCompliance(
   request: FastifyRequest,
@@ -115,43 +240,7 @@ export async function handleAcceptArtifactRevision(
     });
     return reply.status(200).send(result);
   } catch (err) {
-    if (err instanceof Error && err.message.includes('blocking findings')) {
-      return reply.status(422).send({
-        type: 'https://affiliate-content-os.example/problems/compliance-blocked',
-        title: 'Unprocessable Entity',
-        status: 422,
-        code: 'COMPLIANCE_BLOCKING_FINDINGS',
-        detail: err.message,
-      });
-    }
-    if (err instanceof Error && err.message.includes('Precondition failed')) {
-      return reply.status(409).send({
-        type: 'https://affiliate-content-os.example/problems/conflict',
-        title: 'Conflict',
-        status: 409,
-        code: 'VERSION_OR_REVISION_CONFLICT',
-        detail: err.message,
-      });
-    }
-    if (err instanceof Error && err.message.includes('different payload')) {
-      return reply.status(409).send({
-        type: 'https://affiliate-content-os.example/problems/conflict',
-        title: 'Conflict',
-        status: 409,
-        code: 'IDEMPOTENCY_CONFLICT',
-        detail: err.message,
-      });
-    }
-    if (err instanceof Error && err.message.includes('not found')) {
-      return reply.status(404).send({
-        type: 'https://affiliate-content-os.example/problems/not-found',
-        title: 'Not Found',
-        status: 404,
-        code: 'RESOURCE_NOT_FOUND',
-        detail: err.message,
-      });
-    }
-    throw err;
+    return handleComplianceMutationError(err, reply);
   }
 }
 
@@ -195,33 +284,6 @@ export async function handleRejectArtifactRevision(
     });
     return reply.status(200).send(result);
   } catch (err) {
-    if (err instanceof Error && err.message.includes('Precondition failed')) {
-      return reply.status(409).send({
-        type: 'https://affiliate-content-os.example/problems/conflict',
-        title: 'Conflict',
-        status: 409,
-        code: 'VERSION_OR_REVISION_CONFLICT',
-        detail: err.message,
-      });
-    }
-    if (err instanceof Error && err.message.includes('different payload')) {
-      return reply.status(409).send({
-        type: 'https://affiliate-content-os.example/problems/conflict',
-        title: 'Conflict',
-        status: 409,
-        code: 'IDEMPOTENCY_CONFLICT',
-        detail: err.message,
-      });
-    }
-    if (err instanceof Error && err.message.includes('not found')) {
-      return reply.status(404).send({
-        type: 'https://affiliate-content-os.example/problems/not-found',
-        title: 'Not Found',
-        status: 404,
-        code: 'RESOURCE_NOT_FOUND',
-        detail: err.message,
-      });
-    }
-    throw err;
+    return handleComplianceMutationError(err, reply);
   }
 }

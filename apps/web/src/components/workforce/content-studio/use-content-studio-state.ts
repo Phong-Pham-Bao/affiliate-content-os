@@ -502,8 +502,12 @@ export function useContentStudioState(
     canManage &&
     isCurrentRevision &&
     complianceEvaluation?.status === 'completed' &&
-    !hasBlockingFindings &&
-    !isAccepted;
+    complianceEvaluation.result !== 'blocked' &&
+    complianceEvaluation.result !== 'failed' &&
+    complianceEvaluation.blockingCount === 0 &&
+    complianceEvaluation.aiAdvisoryStatus !== 'failed' &&
+    !isAccepted &&
+    !isRejected;
 
   const canReject = canManage && isCurrentRevision && !isAccepted && !isRejected;
 
@@ -511,15 +515,19 @@ export function useContentStudioState(
     ? 'Chỉ người quản lý workspace mới có quyền phê duyệt kịch bản'
     : !isCurrentRevision
       ? 'Chỉ có thể phê duyệt phiên bản kịch bản hiện tại'
-      : isEvaluating
-        ? 'Đang trong quá trình đánh giá tuân thủ...'
-        : complianceEvaluation?.status === 'failed'
-          ? 'Đánh giá tuân thủ gặp lỗi'
-          : hasBlockingFindings
-            ? `Có ${complianceEvaluation?.blockingCount} vi phạm ngăn chặn xuất bản`
-            : isAccepted
-              ? 'Phiên bản này đã được chấp thuận'
-              : undefined;
+      : isAccepted
+        ? 'Phiên bản này đã được chấp thuận'
+        : isRejected
+          ? 'Phiên bản này đã bị từ chối'
+          : isEvaluating
+            ? 'Đang trong quá trình đánh giá tuân thủ...'
+            : complianceEvaluation?.status === 'failed'
+              ? 'Đánh giá tuân thủ gặp lỗi'
+              : complianceEvaluation?.aiAdvisoryStatus === 'failed'
+                ? 'Đánh giá tư vấn AI gặp lỗi từ phía nhà cung cấp'
+                : hasBlockingFindings
+                  ? `Có ${complianceEvaluation?.blockingCount} vi phạm ngăn chặn xuất bản`
+                  : undefined;
 
   const rejectDisabledReason = !canManage
     ? 'Chỉ người quản lý workspace mới có quyền từ chối kịch bản'

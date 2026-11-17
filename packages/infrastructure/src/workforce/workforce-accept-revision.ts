@@ -7,9 +7,21 @@ import {
   type AcceptScriptRevisionResult,
   type ContentApprovalSnapshotDTO,
   type ContentReviewDecisionDTO,
+  ArtifactNotFoundError,
+  ArtifactRevisionConflictError,
+  ChiefOfStaffAssignmentConflictError,
+  ComplianceBlockingFindingsError,
+  ComplianceEvaluationNotApprovableError,
+  ComplianceEvaluationNotFoundError,
+  ComplianceEvaluationStaleError,
+  ContentReviewDecisionConflictError,
+  WorkOrderStateConflictError,
 } from '@affiliate-content-os/application';
-import { CURRENT_COMPLIANCE_POLICY_VERSION, parseIsoTimestamp } from '@affiliate-content-os/domain';
-import { DatabaseError } from '../database/errors.js';
+import {
+  CURRENT_COMPLIANCE_POLICY_VERSION,
+  computeCompliancePolicyHash,
+  parseIsoTimestamp,
+} from '@affiliate-content-os/domain';
 import { computeIdempotencyAdvisoryLockKey } from '../tenancy/postgres-idempotency-adapter.js';
 import {
   validateAndMapIdempotencyRow,
@@ -76,7 +88,21 @@ export async function acceptScriptRevisionTransaction(
     }
   }
 
-  // 3. Fetch artifact with optimistic lock
+  // 3. Prevent conflicting terminal human decisions for the same exact revision
+  const existingDecRes = await client.query(
+    `SELECT id, decision
+     FROM content_review_decisions
+     WHERE workspace_id = $1 AND artifact_id = $2 AND revision_number = $3 AND decision IN ('accept', 'reject')
+     FOR UPDATE`,
+    [workspaceId, artifactId, revisionNumber],
+  );
+  if (existingDecRes.rowCount !== 0 && existingDecRes.rows[0]) {
+    throw new ContentReviewDecisionConflictError(
+      `Revision ${revisionNumber} has already received terminal decision "${existingDecRes.rows[0].decision}" and cannot receive another terminal decision.`,
+    );
+  }
+
+  // 4. Fetch artifact with optimistic lock
   const artRes = await client.query(
     `SELECT id, product_id, work_order_id, work_item_id, assignment_id,
             author_role_key, artifact_type, lifecycle_status,
@@ -88,22 +114,30 @@ export async function acceptScriptRevisionTransaction(
   );
 
   if (artRes.rowCount === 0 || !artRes.rows[0]) {
-    throw new DatabaseError(`Artifact ${artifactId} not found in workspace`);
+    throw new ArtifactNotFoundError(artifactId);
   }
   const art = artRes.rows[0];
 
+  if (art.artifact_type !== 'script_package') {
+    throw new ArtifactRevisionConflictError(`Cannot accept artifact type ${art.artifact_type}`);
+  }
+  if (art.lifecycle_status !== 'review_required') {
+    throw new ArtifactRevisionConflictError(
+      `Precondition failed: artifact is in "${art.lifecycle_status}" lifecycle status, expected "review_required"`,
+    );
+  }
   if (Number(art.version) !== expectedVersion) {
-    throw new DatabaseError(
+    throw new ArtifactRevisionConflictError(
       `Precondition failed: artifact version mismatch (expected ${expectedVersion}, current ${art.version})`,
     );
   }
   if (Number(art.current_revision_number) !== revisionNumber) {
-    throw new DatabaseError(
+    throw new ArtifactRevisionConflictError(
       `Precondition failed: artifact revision mismatch (expected ${revisionNumber}, current ${art.current_revision_number})`,
     );
   }
 
-  // 4. Fetch revision and verify content hash
+  // 5. Fetch revision and verify content hash
   const revRes = await client.query(
     `SELECT content_json, content_hash, schema_version
      FROM content_artifact_revisions
@@ -111,44 +145,76 @@ export async function acceptScriptRevisionTransaction(
     [workspaceId, artifactId, revisionNumber],
   );
   if (revRes.rowCount === 0 || !revRes.rows[0]) {
-    throw new DatabaseError(`Revision ${revisionNumber} not found`);
+    throw new ArtifactRevisionConflictError(`Revision ${revisionNumber} not found`);
   }
   const actualHashHex = Buffer.from(revRes.rows[0].content_hash).toString('hex');
   if (actualHashHex.toLowerCase() !== contentHashHex.toLowerCase()) {
-    throw new DatabaseError('Precondition failed: content hash mismatch');
+    throw new ArtifactRevisionConflictError('Precondition failed: content hash mismatch');
   }
 
-  // 5. Fetch completed compliance evaluation for this revision and policy
+  // 6. Fetch completed compliance evaluation matching current policy version and policy hash
+  const currentPolicyVersion = CURRENT_COMPLIANCE_POLICY_VERSION;
+  const currentPolicyHashHex = computeCompliancePolicyHash(currentPolicyVersion);
+  const currentPolicyHash = Buffer.from(currentPolicyHashHex, 'hex');
+
   const evalRes = await client.query(
-    `SELECT id, status, result, blocking_count, warning_count, policy_version, policy_hash
+    `SELECT id, status, result, blocking_count, warning_count, ai_advisory_status,
+            policy_version, policy_hash, evaluation_report_artifact_id
      FROM compliance_evaluations
-     WHERE workspace_id = $1 AND artifact_id = $2 AND revision_number = $3 AND policy_version = $4
+     WHERE workspace_id = $1 AND artifact_id = $2 AND revision_number = $3
+       AND policy_version = $4 AND policy_hash = $5
      FOR UPDATE`,
-    [workspaceId, artifactId, revisionNumber, CURRENT_COMPLIANCE_POLICY_VERSION],
+    [workspaceId, artifactId, revisionNumber, currentPolicyVersion, currentPolicyHash],
   );
 
   if (evalRes.rowCount === 0 || !evalRes.rows[0]) {
-    throw new DatabaseError(
-      `Precondition failed: no compliance evaluation found for revision ${revisionNumber} under policy ${CURRENT_COMPLIANCE_POLICY_VERSION}`,
+    throw new ComplianceEvaluationNotFoundError(
+      `Precondition failed: no compliance evaluation found for revision ${revisionNumber} under current policy ${currentPolicyVersion}`,
     );
   }
   const evalRow = evalRes.rows[0];
 
   if (evalRow.status !== 'completed') {
-    throw new DatabaseError(
-      `Precondition failed: compliance evaluation is still ${evalRow.status}`,
-    );
-  }
-  if (evalRow.result === 'blocked' || Number(evalRow.blocking_count) > 0) {
-    throw new DatabaseError(
-      `Precondition failed: content has ${evalRow.blocking_count} blocking compliance finding(s)`,
-    );
+    throw new ComplianceEvaluationNotApprovableError(`evaluation is currently ${evalRow.status}`);
   }
   if (evalRow.result === 'failed') {
-    throw new DatabaseError('Precondition failed: compliance evaluation resulted in failure');
+    throw new ComplianceEvaluationNotApprovableError('compliance evaluation resulted in failure');
+  }
+  if (evalRow.result === 'blocked' || Number(evalRow.blocking_count) > 0) {
+    throw new ComplianceBlockingFindingsError(Number(evalRow.blocking_count));
+  }
+  if (evalRow.ai_advisory_status === 'failed') {
+    throw new ComplianceEvaluationNotApprovableError('AI advisory review failed');
+  }
+  if (!evalRow.evaluation_report_artifact_id) {
+    throw new ComplianceEvaluationNotApprovableError('compliance report artifact link missing');
   }
 
-  // 6. Fetch evidence references for snapshot
+  // Verify compliance report artifact exists
+  const reportCheck = await client.query(
+    `SELECT id, current_revision_number
+     FROM content_artifacts
+     WHERE workspace_id = $1 AND id = $2 AND artifact_type = 'compliance_report'`,
+    [workspaceId, evalRow.evaluation_report_artifact_id],
+  );
+  if (reportCheck.rowCount === 0 || !reportCheck.rows[0]) {
+    throw new ComplianceEvaluationNotApprovableError(
+      'immutable compliance report artifact not found',
+    );
+  }
+
+  // Double-check policy drift
+  const evalHashHex = Buffer.from(evalRow.policy_hash).toString('hex');
+  if (
+    evalRow.policy_version !== currentPolicyVersion ||
+    evalHashHex.toLowerCase() !== currentPolicyHashHex.toLowerCase()
+  ) {
+    throw new ComplianceEvaluationStaleError(
+      'Evaluation policy version or hash does not match current code policy',
+    );
+  }
+
+  // 7. Fetch evidence references for snapshot
   const evidenceRes = await client.query(
     `SELECT source_kind, source_id
      FROM artifact_evidence_refs
@@ -167,7 +233,7 @@ export async function acceptScriptRevisionTransaction(
     })),
   };
 
-  // 7. Insert human decision record into content_review_decisions
+  // 8. Insert human decision record into content_review_decisions
   const decisionId = generateUuidV7();
   await client.query(
     `INSERT INTO content_review_decisions (
@@ -193,7 +259,7 @@ export async function acceptScriptRevisionTransaction(
     ],
   );
 
-  // 8. Create immutable approval snapshot in content_approval_snapshots
+  // 9. Create immutable approval snapshot in content_approval_snapshots
   const snapshotId = generateUuidV7();
   const snapshotJson = {
     artifactId,
@@ -243,23 +309,33 @@ export async function acceptScriptRevisionTransaction(
     ],
   );
 
-  // 9. Update artifact lifecycle to 'accepted'
-  await client.query(
+  // 10. Update artifact lifecycle to 'accepted' with precondition checks
+  const updateArtRes = await client.query(
     `UPDATE content_artifacts
      SET lifecycle_status = 'accepted', version = version + 1, updated_at = NOW()
-     WHERE workspace_id = $1 AND id = $2`,
-    [workspaceId, artifactId],
+     WHERE workspace_id = $1 AND id = $2 AND version = $3 AND current_revision_number = $4 AND lifecycle_status = 'review_required'`,
+    [workspaceId, artifactId, art.version, revisionNumber],
   );
+  if (updateArtRes.rowCount !== 1) {
+    throw new ArtifactRevisionConflictError(
+      'Precondition failed: artifact state conflict during acceptance',
+    );
+  }
 
-  // 10. Complete work order handoff state
-  await client.query(
+  // 11. Complete work order handoff state with precondition checks
+  const updateWoRes = await client.query(
     `UPDATE work_orders
-     SET status = 'completed', completed_at = NOW(), updated_at = NOW(), version = version + 1
+     SET status = 'completed', completed_at = COALESCE(completed_at, NOW()), updated_at = NOW(), version = version + 1
      WHERE workspace_id = $1 AND id = $2`,
     [workspaceId, art.work_order_id],
   );
+  if (updateWoRes.rowCount !== 1) {
+    throw new WorkOrderStateConflictError(
+      'Precondition failed: work order state conflict during acceptance',
+    );
+  }
 
-  await client.query(
+  const updateCosRes = await client.query(
     `UPDATE agent_assignments a
      SET office_state = 'completed', updated_at = NOW(), version = a.version + 1
      FROM agent_role_definitions r
@@ -269,8 +345,13 @@ export async function acceptScriptRevisionTransaction(
        AND r.role_key = 'chief_of_staff'`,
     [workspaceId, art.work_order_id],
   );
+  if (updateCosRes.rowCount !== 1) {
+    throw new ChiefOfStaffAssignmentConflictError(
+      'Precondition failed: chief of staff assignment state conflict during acceptance',
+    );
+  }
 
-  // 11. Write audit event
+  // 12. Write audit event
   await client.query(
     `INSERT INTO audit_events (
        id, workspace_id, actor_type, actor_user_id, action, resource_type,
@@ -294,7 +375,7 @@ export async function acceptScriptRevisionTransaction(
     ],
   );
 
-  // 12. Build return DTOs
+  // 13. Build return DTOs
   const updatedDetail = await getArtifactRevisionByNumberQuery(
     client,
     workspaceId,
@@ -319,7 +400,7 @@ export async function acceptScriptRevisionTransaction(
     createdAt: parseIsoTimestamp(new Date().toISOString()),
   };
 
-  const approvalSnapshotDTO: ContentApprovalSnapshotDTO = {
+  const snapshotDTO: ContentApprovalSnapshotDTO = {
     id: snapshotId,
     workspaceId,
     artifactId,
@@ -340,10 +421,10 @@ export async function acceptScriptRevisionTransaction(
   const responseResult: AcceptScriptRevisionResult = {
     artifact: updatedDetail!,
     decision: decisionDTO,
-    approvalSnapshot: approvalSnapshotDTO,
+    approvalSnapshot: snapshotDTO,
   };
 
-  // 13. Persist idempotency cache
+  // 14. Persist idempotency cache
   await client.query(
     `INSERT INTO idempotency_keys (
        id, workspace_id, principal_id, route_key, key_hash, request_hash,

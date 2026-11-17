@@ -226,7 +226,16 @@ export function evaluateDeterministicCompliance(
     const key = `${ev.sourceKind}:${ev.sourceId}`;
     packageEvidenceMap.set(key, ev);
 
-    if (revokedIds.has(ev.sourceId)) {
+    if (ev.sourceKind !== 'product_fact' && ev.sourceKind !== 'analysis') {
+      addFinding(
+        'EVIDENCE_SOURCE_INVALID',
+        'blocking',
+        null,
+        'evidenceReferences',
+        `Unsupported evidence source kind: ${ev.sourceKind}`,
+        [ev.sourceId],
+      );
+    } else if (revokedIds.has(ev.sourceId)) {
       addFinding(
         'EVIDENCE_SUPERSEDED',
         'blocking',
@@ -235,11 +244,7 @@ export function evaluateDeterministicCompliance(
         `Evidence ${ev.sourceId} has been revoked or superseded`,
         [ev.sourceId],
       );
-    } else if (
-      ev.sourceKind === 'product_fact' &&
-      allowedFacts.size > 0 &&
-      !allowedFacts.has(ev.sourceId)
-    ) {
+    } else if (ev.sourceKind === 'product_fact' && !allowedFacts.has(ev.sourceId)) {
       addFinding(
         'CLAIM_UNSUPPORTED',
         'blocking',
@@ -248,11 +253,7 @@ export function evaluateDeterministicCompliance(
         `Referenced product fact ${ev.sourceId} is not confirmed or not allowed in authoritative context`,
         [ev.sourceId],
       );
-    } else if (
-      ev.sourceKind === 'analysis' &&
-      allowedAnalyses.size > 0 &&
-      !allowedAnalyses.has(ev.sourceId)
-    ) {
+    } else if (ev.sourceKind === 'analysis' && !allowedAnalyses.has(ev.sourceId)) {
       addFinding(
         'CLAIM_UNSUPPORTED',
         'blocking',

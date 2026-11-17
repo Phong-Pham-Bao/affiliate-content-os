@@ -62,7 +62,8 @@ CREATE TABLE compliance_evaluations (
   updated_at TIMESTAMPTZ NOT NULL,
   version BIGINT NOT NULL DEFAULT 1,
   CONSTRAINT compliance_evaluations_workspace_id_id_unique UNIQUE (workspace_id, id),
-  CONSTRAINT compliance_evaluations_ws_art_rev_policy_unique UNIQUE (workspace_id, artifact_id, revision_number, policy_version),
+  CONSTRAINT compliance_evaluations_ws_art_rev_policy_unique UNIQUE (workspace_id, artifact_id, revision_number, policy_version, policy_hash),
+  CONSTRAINT compliance_evaluations_ws_report_fk FOREIGN KEY (workspace_id, evaluation_report_artifact_id) REFERENCES content_artifacts(workspace_id, id) ON DELETE RESTRICT,
   CONSTRAINT compliance_evaluations_workspace_product_fk FOREIGN KEY (workspace_id, product_id) REFERENCES products(workspace_id, id) ON DELETE RESTRICT,
   CONSTRAINT compliance_evaluations_workspace_work_order_fk FOREIGN KEY (workspace_id, work_order_id) REFERENCES work_orders(workspace_id, id) ON DELETE RESTRICT,
   CONSTRAINT compliance_evaluations_workspace_artifact_fk FOREIGN KEY (workspace_id, artifact_id) REFERENCES content_artifacts(workspace_id, id) ON DELETE RESTRICT,
@@ -82,6 +83,31 @@ CREATE TABLE compliance_evaluations (
 CREATE INDEX idx_compliance_evals_artifact_rev ON compliance_evaluations (workspace_id, artifact_id, revision_number DESC);
 CREATE INDEX idx_compliance_evals_status ON compliance_evaluations (workspace_id, status);
 CREATE INDEX idx_compliance_evals_order ON compliance_evaluations (workspace_id, work_order_id);
+
+CREATE OR REPLACE FUNCTION enforce_compliance_evaluations_immutability() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    IF OLD.status IN ('completed', 'failed') THEN
+      RAISE EXCEPTION 'terminal compliance_evaluations rows cannot be deleted' USING ERRCODE = '55000';
+    END IF;
+    RETURN OLD;
+  END IF;
+
+  IF TG_OP = 'UPDATE' THEN
+    IF OLD.status IN ('completed', 'failed') THEN
+      RAISE EXCEPTION 'terminal compliance_evaluations rows are immutable' USING ERRCODE = '55000';
+    END IF;
+    RETURN NEW;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER compliance_evaluations_enforce_immutability
+BEFORE UPDATE OR DELETE ON compliance_evaluations
+FOR EACH ROW EXECUTE FUNCTION enforce_compliance_evaluations_immutability();
 
 -- 3. Compliance findings table (immutable)
 CREATE TABLE compliance_findings (
@@ -149,6 +175,7 @@ CREATE TABLE content_review_decisions (
 
 CREATE INDEX idx_content_review_decisions_art ON content_review_decisions (workspace_id, artifact_id, created_at DESC);
 CREATE INDEX idx_content_review_decisions_rev ON content_review_decisions (workspace_id, artifact_id, revision_number);
+CREATE UNIQUE INDEX idx_content_review_decisions_terminal ON content_review_decisions (workspace_id, artifact_id, revision_number) WHERE decision IN ('accept', 'reject');
 
 CREATE OR REPLACE FUNCTION enforce_content_review_decisions_immutability() RETURNS trigger
 LANGUAGE plpgsql AS $$

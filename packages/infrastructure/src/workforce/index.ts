@@ -31,8 +31,18 @@ export {
   COMPLIANCE_RESERVED_SPEND_MICROUNITS,
 } from './workforce-compliance-enqueue.js';
 export {
+  prepareComplianceReviewExecution,
+  settleComplianceReviewExecutionAtomic,
+  settleCompliancePreflightBlockerAtomic,
+  settleComplianceBudgetExhaustedAtomic,
+  settleComplianceDriftAtomic,
   settleComplianceReviewJobAtomic,
-  type SettleComplianceReviewParams,
+  type PrepareComplianceReviewParams,
+  type PrepareComplianceResult,
+  type SettleComplianceReviewExecutionParams,
+  type SettleCompliancePreflightBlockerParams,
+  type SettleComplianceBudgetExhaustedParams,
+  type SettleComplianceDriftParams,
 } from './workforce-compliance-settlement.js';
 export {
   queryComplianceEvaluation,

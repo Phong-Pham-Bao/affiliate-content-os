@@ -13,6 +13,7 @@ export interface ValidatedCompliancePayload {
   readonly workItemId?: string | null | undefined;
   readonly assignmentId?: string | null | undefined;
   readonly reservedMicrounits?: number | undefined;
+  readonly contentHashHex?: string | undefined;
 }
 
 export function parseAndValidateCompliancePayload(
@@ -65,6 +66,7 @@ export function parseAndValidateCompliancePayload(
     workItemId: typeof p.workItemId === 'string' ? p.workItemId : null,
     assignmentId: typeof p.assignmentId === 'string' ? p.assignmentId : null,
     reservedMicrounits: typeof p.reservedMicrounits === 'number' ? p.reservedMicrounits : undefined,
+    contentHashHex: typeof p.contentHashHex === 'string' ? p.contentHashHex : undefined,
   };
 }
 
