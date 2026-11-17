@@ -13,7 +13,10 @@ import {
   fetchWorkOrderArtifactsApi,
   fetchWorkOrdersApi,
 } from '../../lib/workforce-api-client.js';
-import { pollWorkOrderUntilTerminal } from '../../lib/workforce-operation-polling.js';
+import {
+  isWorkOrderTerminal,
+  pollWorkOrderUntilTerminal,
+} from '../../lib/workforce-operation-polling.js';
 
 export function useWorkforceOrders(workspaceId: string, productId: string) {
   const [workOrders, setWorkOrders] = useState<readonly WorkOrderSummaryDTO[]>([]);
@@ -138,10 +141,7 @@ export function useWorkforceOrders(workspaceId: string, productId: string) {
           })
             .then((terminalDetail) => {
               if (activeOrderIdRef.current === workOrderId && !ctrl.signal.aborted) {
-                const terminal =
-                  terminalDetail.workOrder.status === 'completed' ||
-                  terminalDetail.workOrder.status === 'failed' ||
-                  terminalDetail.workOrder.status === 'cancelled';
+                const terminal = isWorkOrderTerminal(terminalDetail.workOrder.status);
                 if (!terminal) {
                   setIsStale(true);
                 }

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, type ReactElement } from 'react';
 import type { EmployeeVM } from '../../lib/workforce-view-model-types.js';
 import { useEscapeKey } from '../../lib/use-escape-key.js';
+import { isolateModalBackground } from '../../lib/modal-background-isolation.js';
 
 interface EmployeeInspectorProps {
   readonly isOpen: boolean;
@@ -19,6 +20,7 @@ export function EmployeeInspector({
   onClose,
   onSelectArtifact,
 }: EmployeeInspectorProps): ReactElement | null {
+  const backdropRef = useRef<HTMLDivElement | null>(null);
   const dialogRef = useRef<HTMLElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const invokingElementRef = useRef<HTMLElement | null>(null);
@@ -26,6 +28,15 @@ export function EmployeeInspector({
   const wasOpenRef = useRef(false);
 
   const safeRestoreFocus = useCallback(() => {
+    if (
+      typeof document !== 'undefined' &&
+      (document.querySelector('.workforce-artifact-modal') ||
+        document.querySelector('.content-studio-modal-wrapper') ||
+        document.querySelector('.modal-backdrop'))
+    ) {
+      invokingElementRef.current = null;
+      return;
+    }
     const invoking = invokingElementRef.current;
     if (invoking && document.contains(invoking)) {
       invoking.focus();
@@ -51,21 +62,34 @@ export function EmployeeInspector({
   }, []);
 
   useEffect(() => {
-    if (isOpen) {
+    if (isOpen && employee) {
       wasOpenRef.current = true;
       invokingElementRef.current = document.activeElement as HTMLElement | null;
-      invokingRoleKeyRef.current = employee?.roleKey ?? null;
+      invokingRoleKeyRef.current = employee.roleKey;
+
+      const modalRoot = backdropRef.current ?? dialogRef.current;
+      const isolation = isolateModalBackground(modalRoot);
+
       const timer = setTimeout(() => {
         closeButtonRef.current?.focus();
       }, 0);
-      return () => clearTimeout(timer);
+
+      return () => {
+        clearTimeout(timer);
+        isolation.restore();
+        if (wasOpenRef.current) {
+          wasOpenRef.current = false;
+          safeRestoreFocus();
+        }
+      };
     }
+
     if (wasOpenRef.current) {
       wasOpenRef.current = false;
       safeRestoreFocus();
     }
     return undefined;
-  }, [isOpen, safeRestoreFocus, employee?.roleKey]);
+  }, [isOpen, employee?.roleKey, safeRestoreFocus]);
 
   useEscapeKey(onClose, false, isOpen);
 
@@ -99,6 +123,7 @@ export function EmployeeInspector({
 
   return (
     <div
+      ref={backdropRef}
       className="inspector-backdrop"
       role="presentation"
       onClick={(e) => {

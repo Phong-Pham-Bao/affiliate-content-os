@@ -56,7 +56,7 @@ The unified workforce observation, polling, activity projection, and retry mecha
 - **Unified Office/Board Projection**: The frontend projects single authoritative server payloads (`WorkOrderDetailDTO`, `ContentArtifactSummaryDTO[]`, and `WorkOrderActivityDTO[]`) into both Office and Board presentations via `mapWorkforceViewModel`. Office and Board share identical employee states, badges, blockers, reports, and artifact references.
 - **Full-Lifecycle Polling & Caching (`useWorkforceOrders`)**:
   - Automatically polls running or terminal-pending work orders through all 5 stages (`planning` → `script_generation` → `compliance` → `review_required` → `accepted_handoff`).
-  - Exponential backoff (1s base up to 5s maximum) with a 2-minute observation deadline.
+  - Exponential backoff with production defaults (2s initial, max 10s, 1.25 multiplier, max duration 60 minutes, max 120 attempts).
   - When deadline or fetch error occurs, active data is strictly preserved; error is surfaced as an observation warning (`observationWarning`) or stale banner without clearing loaded state.
   - User can trigger immediate manual refresh (`↻ Manual Refresh`) at any time.
 - **Activity & Artifact Exposure**:

@@ -1,6 +1,6 @@
 # Sprint 3 Proposed Plan — AI Creative Office
 
-Status: Complete — Checkpoints A, B, C, D, and E implemented and verified
+Status: Implementation and quality gates complete; final Checkpoint E and Sprint 3 approval pending Codex review (awaiting STATUS: APPROVED per AGENTS.md)
 
 Last updated: 2026-11-18
 
@@ -377,19 +377,19 @@ Exit evidence:
 
 ## 16. Delivered Checkpoint Decisions & Definitive State Semantics
 
-All previous architectural recommendations have been approved, delivered, and verified through Checkpoints A–E and the Sprint 3 Checkpoint E Remediation package (`tasks/TASK-015-REMEDIATION-01.md`):
+All architectural recommendations have been implemented and verified through engineer quality gates across Checkpoints A–E and the Sprint 3 Checkpoint E Remediation packages (`tasks/TASK-015-REMEDIATION-01.md`, `tasks/TASK-015-REMEDIATION-02.md`). Final Sprint 3 completion remains pending Codex review and formal issuance of `STATUS: APPROVED`:
 
 1. **Roster**: Six visible canonical roles delivered: Chief of Staff, Product Strategist, Audience Strategist, Creative Director, Scriptwriter, and Compliance Reviewer.
 2. **Dual View Parity**: Office and Board views share 100% data parity through pure projection (`WorkforceViewModel`), with persistent view-mode toggle, roving tabindex keyboard navigation, and docked/modal inspection.
 3. **Execution Sequencing**: Checkpoint B planning delivered early, followed by Checkpoint C Content Studio, Checkpoint D compliance, and Checkpoint E Virtual Office Command Center.
 4. **Sprint 4 Scope Boundary**: Strictly bounded to planning, scripts, shot lists, revisions, compliance, and approval. Publishing, social OAuth, and media generation remain deferred to Sprint 4.
-5. **Full-Lifecycle Observation**: Bounded exponential backoff polling (1s–5s, 2-minute deadline) with active state caching, observation warning preservation, and manual refresh controls.
+5. **Full-Lifecycle Observation**: Bounded exponential backoff polling with production defaults (initial interval 2s, max interval 10s, backoff multiplier 1.25, max duration 60 minutes, max 120 attempts) with active state caching, observation warning preservation, and manual refresh controls.
 6. **Concurrency & Quotas**: 3 concurrent provider calls per workspace, budget reservation, rate limits, and idempotent kickoff.
 
 ### Definitive Workforce State Semantics
 
-- **Work Order Statuses**: `in_progress`, `completed`, `failed`, `canceled`.
-- **Work Item Statuses**: `pending`, `running`, `completed`, `failed`, `waiting_dependency`, `canceled`.
-- **Assignment Office States**: `idle`, `preparing`, `running`, `waiting_dependency`, `review_required`, `completed`, `failed`, `blocked`. Legacy aliases (`working` → `running`, `waiting` → `waiting_dependency`, unknown → `blocked`) are safely normalized at the projection boundary.
-- **Artifact Lifecycle Statuses**: `draft`, `review_required`, `accepted`, `rejected`. AI compliance evaluation findings are strictly advisory; only human bosses possess approval authority.
+- **Work Order Statuses**: Domain canonical (`WORK_ORDER_STATUSES`): `preparing`, `in_progress`, `waiting_review`, `completed`, `blocked`, `failed`, `canceled`. Legacy alias `cancelled` is normalized to `canceled` at validation boundaries. Terminal statuses are `completed`, `failed`, and `canceled`.
+- **Work Item Statuses**: Domain canonical (`WORK_ITEM_STATUSES`): `ready`, `waiting_dependency`, `queued`, `running`, `review_required`, `completed`, `blocked`, `failed`, `canceled`. Legacy alias `cancelled` is normalized to `canceled` at validation boundaries.
+- **Assignment Office States**: Domain canonical (`ASSIGNMENT_OFFICE_STATES`): `preparing`, `queued`, `running`, `waiting_dependency`, `review_required`, `completed`, `blocked`, `failed`, `canceled`. The UI projection also represents unassigned stations as `idle`. Legacy aliases (`working` → `running`, `waiting` → `waiting_dependency`, `cancelled` → `canceled`, unknown → `blocked`) are safely normalized at the projection boundary.
+- **Artifact Lifecycle Statuses**: Domain canonical (`CONTENT_ARTIFACT_LIFECYCLE_STATUSES`): `draft`, `review_required`, `accepted`, `rejected`, `superseded`. AI compliance evaluation findings are strictly advisory; only authenticated human bosses possess approval authority.
 - **Retry Eligibility**: Strictly restricted to recoverable failed planning tasks (`product_strategy`, `audience_strategy`, `creative_direction`) and script generation units when work order is `in_progress` or `failed`. Completed, canceled, and review-required states are never retry-eligible.

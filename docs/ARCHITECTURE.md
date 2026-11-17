@@ -504,7 +504,7 @@ Sprint 3 Checkpoint E delivers the Virtual Office Command Center and Board exper
 - **Screen Reader Announcements**: Live region (`aria-live="polite" aria-atomic="true"`) announces authoritative status summaries for all lifecycle states.
 
 ### 3. Full-Lifecycle Observability & Caching
-- **Bounded Polling**: `useWorkforceOrders` polls active missions with exponential backoff (1s–5s) and a 2-minute safety deadline.
+- **Bounded Polling**: `useWorkforceOrders` polls active missions with exponential backoff using production defaults (2s initial, max 10s, 1.25 multiplier, max duration 60 minutes, max 120 attempts).
 - **Data Preservation**: Network disruptions and activity fetch errors preserve all previously loaded artifacts and assignments, surfacing actionable observation warnings (`observationWarning`) rather than clearing UI state.
 - **Manual Refresh**: Operators can trigger immediate authoritative sync (`↻ Manual Refresh`).
 

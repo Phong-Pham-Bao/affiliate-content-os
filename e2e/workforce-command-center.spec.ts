@@ -201,6 +201,15 @@ test.describe('Sprint 3 Checkpoint E — Virtual Office & Board Experience', () 
     await expect(boardScriptwriter).toBeVisible();
     await expect(boardScriptwriter).toContainText('Scriptwriter');
 
+    // Verify background controls and containers are NOT inert prior to modal open
+    expect(await page.locator('.workforce-header').evaluate((el) => el.inert)).toBe(false);
+    expect(
+      await page.locator('#view-toggle-office').evaluate((el) => Boolean(el.closest('[inert]'))),
+    ).toBe(false);
+    expect(
+      await page.locator('#board-chief_of_staff').evaluate((el) => Boolean(el.closest('[inert]'))),
+    ).toBe(false);
+
     // Inspect Scriptwriter from Board view
     await boardScriptwriter.click({ force: true });
 
@@ -211,9 +220,44 @@ test.describe('Sprint 3 Checkpoint E — Virtual Office & Board Experience', () 
     await expect(inspector).toContainText('Role Mandate');
     await expect(inspector).toContainText('Prerequisite Dependencies');
 
+    // Behavioral DOM modal isolation assertions (TASK-015-REMEDIATION-02 Requirement 3):
+    // Background containers receive inert=true, making descendant controls non-interactable
+    expect(await page.locator('.workforce-header').evaluate((el) => el.inert)).toBe(true);
+    expect(await page.locator('.operational-status-container').evaluate((el) => el.inert)).toBe(
+      true,
+    );
+    expect(
+      await page.locator('#view-toggle-office').evaluate((el) => Boolean(el.closest('[inert]'))),
+    ).toBe(true);
+    expect(
+      await page.locator('#board-chief_of_staff').evaluate((el) => Boolean(el.closest('[inert]'))),
+    ).toBe(true);
+
+    // Inspector dialog and close button remain interactive (not inert)
+    expect(await inspector.evaluate((el) => el.inert)).toBe(false);
+    expect(await inspector.evaluate((el) => Boolean(el.closest('[inert]')))).toBe(false);
+    const closeBtn = page.locator('button[aria-label="Close Scriptwriter inspector"]');
+    expect(await closeBtn.evaluate((el) => el.inert)).toBe(false);
+    expect(await closeBtn.evaluate((el) => Boolean(el.closest('[inert]')))).toBe(false);
+
     // Close inspector via close button
-    await page.click('button[aria-label="Close Scriptwriter inspector"]', { force: true });
+    await closeBtn.click({ force: true });
     await expect(inspector).not.toBeVisible();
+
+    // Verify background containers and controls are restored to fully interactable (inert=false)
+    expect(await page.locator('.workforce-header').evaluate((el) => el.inert)).toBe(false);
+    expect(await page.locator('.operational-status-container').evaluate((el) => el.inert)).toBe(
+      false,
+    );
+    expect(
+      await page.locator('#view-toggle-office').evaluate((el) => Boolean(el.closest('[inert]'))),
+    ).toBe(false);
+    expect(
+      await page.locator('#board-chief_of_staff').evaluate((el) => Boolean(el.closest('[inert]'))),
+    ).toBe(false);
+
+    // Focus restored to the invoking station
+    await expect(boardScriptwriter).toBeFocused();
 
     // Advance server stage: Stage 1 (script_generation)
     stageIndex = 1;
@@ -293,8 +337,31 @@ test.describe('Sprint 3 Checkpoint E — Virtual Office & Board Experience', () 
     await expect(psStation).toHaveAttribute('tabindex', '0');
     await page.keyboard.press('Enter');
     await expect(page.locator('.employee-inspector-panel')).toBeVisible();
+
+    // Verify background isolation active during keyboard-opened modal
+    expect(await page.locator('.workforce-header').evaluate((el) => el.inert)).toBe(true);
+    expect(
+      await page
+        .locator('#station-chief_of_staff')
+        .evaluate((el) => Boolean(el.closest('[inert]'))),
+    ).toBe(true);
+    expect(
+      await page
+        .locator('.employee-inspector-panel')
+        .evaluate((el) => Boolean(el.closest('[inert]'))),
+    ).toBe(false);
+
     await page.keyboard.press('Escape');
     await expect(page.locator('.employee-inspector-panel')).not.toBeVisible();
+
+    // Verify background isolation restored on Escape dismiss
+    expect(await page.locator('.workforce-header').evaluate((el) => el.inert)).toBe(false);
+    expect(
+      await page
+        .locator('#station-chief_of_staff')
+        .evaluate((el) => Boolean(el.closest('[inert]'))),
+    ).toBe(false);
+    await expect(psStation).toBeFocused();
 
     // Verify mobile viewport renders without horizontal scroll overflow
     const hasHorizontalOverflow = await page.evaluate(

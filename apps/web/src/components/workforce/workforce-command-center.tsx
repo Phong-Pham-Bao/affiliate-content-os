@@ -209,7 +209,10 @@ export function WorkforceCommandCenter(props: WorkforceCommandCenterProps): Reac
         onCloseAssign={() => setIsAssignOpen(false)}
         onSubmitAssign={handleKickoffSubmit}
         onCloseInspector={() => setInspectedRoleKey(null)}
-        onSelectArtifactFromInspector={(id) => setViewingArtifactId(id)}
+        onSelectArtifactFromInspector={(id) => {
+          setInspectedRoleKey(null);
+          setViewingArtifactId(id);
+        }}
         onCloseViewer={() => setViewingArtifactId(null)}
       />
     </section>

@@ -18,6 +18,7 @@ import {
   deriveStatusLabelAndBadge,
   resolveDependencies,
 } from './workforce-view-model-roles.js';
+import { isWorkOrderTerminal } from './workforce-operation-polling.js';
 
 export * from './workforce-view-model-types.js';
 export * from './workforce-view-model-roles.js';
@@ -30,25 +31,10 @@ export function isActivityForRole(
 ): boolean {
   // Never associate by act.resourceType === roleKey because role names are not resource types!
 
-  // 1. Content artifact activity
-  if (act.resourceType === 'content_artifact' || act.action.startsWith('artifact.')) {
-    const artId =
-      act.resourceType === 'content_artifact'
-        ? act.resourceId
-        : (act.changesJson?.artifactId as string | undefined);
-    if (artId) {
-      const art = artifacts.find((a) => a.id === artId);
-      if (art && art.authorRoleKey === roleKey) return true;
-    }
-    const wiId = act.changesJson?.workItemId as string | undefined;
-    if (wiId && detail?.workItems.some((w) => w.id === wiId && w.roleKey === roleKey)) {
-      return true;
-    }
-    if (act.changesJson?.roleKey === roleKey) return true;
-    return false;
-  }
-
-  // 2. Work item activity
+  // 1. Work item activity (authoritative resourceType = 'work_item')
+  // Real planning failure events from workforce-planning-failure-handlers.ts persist as:
+  // action = 'artifact.failed', resource_type = 'work_item', resource_id = <work item id>,
+  // changes_json = { workOrderId, errorCategory, errorMessage } (without workItemId in changes_json).
   if (act.resourceType === 'work_item') {
     if (detail?.workItems.some((w) => w.id === act.resourceId && w.roleKey === roleKey)) {
       return true;
@@ -57,22 +43,43 @@ export function isActivityForRole(
     if (wiId && detail?.workItems.some((w) => w.id === wiId && w.roleKey === roleKey)) {
       return true;
     }
-    if (act.changesJson?.roleKey === roleKey) return true;
+    if (act.changesJson?.roleKey === roleKey || act.changesJson?.agentRoleKey === roleKey) {
+      return true;
+    }
     return false;
   }
 
-  // 3. Agent assignment activity
+  // 2. Content artifact activity (authoritative resourceType = 'content_artifact')
+  if (act.resourceType === 'content_artifact') {
+    const art = artifacts.find((a) => a.id === act.resourceId);
+    if (art && art.authorRoleKey === roleKey) return true;
+
+    const wiId = act.changesJson?.workItemId as string | undefined;
+    if (wiId && detail?.workItems.some((w) => w.id === wiId && w.roleKey === roleKey)) {
+      return true;
+    }
+    if (act.changesJson?.roleKey === roleKey || act.changesJson?.agentRoleKey === roleKey) {
+      return true;
+    }
+    return false;
+  }
+
+  // 3. Agent assignment activity (authoritative resourceType = 'agent_assignment')
   if (act.resourceType === 'agent_assignment') {
     if (detail?.assignments.some((a) => a.id === act.resourceId && a.roleKey === roleKey)) {
       return true;
     }
-    if (act.changesJson?.roleKey === roleKey) return true;
+    if (act.changesJson?.roleKey === roleKey || act.changesJson?.agentRoleKey === roleKey) {
+      return true;
+    }
     return false;
   }
 
   // 4. Operation activity with explicit safe role association
   if (act.resourceType === 'operation') {
-    if (act.changesJson?.roleKey === roleKey) return true;
+    if (act.changesJson?.roleKey === roleKey || act.changesJson?.agentRoleKey === roleKey) {
+      return true;
+    }
     const wiId = act.changesJson?.workItemId as string | undefined;
     if (wiId && detail?.workItems.some((w) => w.id === wiId && w.roleKey === roleKey)) {
       return true;
@@ -82,12 +89,31 @@ export function isActivityForRole(
 
   // 5. Work order activity with explicit safe role association
   if (act.resourceType === 'work_order') {
-    if (act.changesJson?.roleKey === roleKey) return true;
+    if (act.changesJson?.roleKey === roleKey || act.changesJson?.agentRoleKey === roleKey) {
+      return true;
+    }
     const wiId = act.changesJson?.workItemId as string | undefined;
     if (wiId && detail?.workItems.some((w) => w.id === wiId && w.roleKey === roleKey)) {
       return true;
     }
     // Work-order-wide events with no safe role association remain OUT of employee trails
+    return false;
+  }
+
+  // 6. Action-based fallback for artifact actions without resourceType = 'content_artifact' or 'work_item'
+  if (act.action.startsWith('artifact.')) {
+    const artId = act.changesJson?.artifactId as string | undefined;
+    if (artId) {
+      const art = artifacts.find((a) => a.id === artId);
+      if (art && art.authorRoleKey === roleKey) return true;
+    }
+    const wiId = act.changesJson?.workItemId as string | undefined;
+    if (wiId && detail?.workItems.some((w) => w.id === wiId && w.roleKey === roleKey)) {
+      return true;
+    }
+    if (act.changesJson?.roleKey === roleKey || act.changesJson?.agentRoleKey === roleKey) {
+      return true;
+    }
     return false;
   }
 
@@ -196,12 +222,7 @@ export function mapWorkforceViewModel(input: {
     deliverablesCount: artifacts.length,
   };
 
-  const isTerminal = detail
-    ? detail.workOrder.status === 'completed' ||
-      detail.workOrder.status === 'failed' ||
-      detail.workOrder.status === 'canceled' ||
-      detail.workOrder.status === 'cancelled'
-    : false;
+  const isTerminal = detail ? isWorkOrderTerminal(detail.workOrder.status) : false;
 
   const humanActionRequired =
     counts.reviewRequired > 0 || artifacts.some((a) => a.lifecycleStatus === 'review_required');

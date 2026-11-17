@@ -1,10 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { WorkOrderDetailDTO } from '../src/types/workforce.js';
-import { pollWorkOrderUntilTerminal } from '../src/lib/workforce-operation-polling.js';
+import {
+  isWorkOrderTerminal,
+  pollWorkOrderUntilTerminal,
+} from '../src/lib/workforce-operation-polling.js';
 import * as client from '../src/lib/workforce-api-client.js';
 
 function makeDetail(
-  status: 'pending' | 'in_progress' | 'completed' | 'failed' | 'cancelled',
+  status: 'pending' | 'in_progress' | 'completed' | 'failed' | 'canceled' | 'cancelled',
   planningCompleted = false,
 ): WorkOrderDetailDTO {
   return {
@@ -166,5 +169,79 @@ describe('full-lifecycle workforce polling', () => {
     });
 
     expect(result.workOrder.status).toBe('in_progress');
+  });
+
+  describe('canonical canceled and terminal status handling (TASK-015-REMEDIATION-02 Requirement 2)', () => {
+    it('isWorkOrderTerminal accurately identifies canonical and legacy terminal statuses', () => {
+      // Canonical terminal statuses
+      expect(isWorkOrderTerminal('completed')).toBe(true);
+      expect(isWorkOrderTerminal('failed')).toBe(true);
+      expect(isWorkOrderTerminal('canceled')).toBe(true);
+
+      // Legacy alias
+      expect(isWorkOrderTerminal('cancelled')).toBe(true);
+
+      // Non-terminal statuses
+      expect(isWorkOrderTerminal('in_progress')).toBe(false);
+      expect(isWorkOrderTerminal('preparing')).toBe(false);
+      expect(isWorkOrderTerminal('waiting_review')).toBe(false);
+      expect(isWorkOrderTerminal('blocked')).toBe(false);
+      expect(isWorkOrderTerminal('pending')).toBe(false);
+      expect(isWorkOrderTerminal(undefined)).toBe(false);
+      expect(isWorkOrderTerminal(null)).toBe(false);
+      expect(isWorkOrderTerminal('')).toBe(false);
+    });
+
+    it('returns immediately on canonical canceled status on attempt 1 without false stale polling (regression for commit d4f4559)', async () => {
+      let callCount = 0;
+      vi.spyOn(client, 'fetchWorkOrderApi').mockImplementation(async () => {
+        callCount++;
+        return makeDetail('canceled', false);
+      });
+
+      const ctrl = new AbortController();
+      const updates: WorkOrderDetailDTO[] = [];
+
+      const result = await pollWorkOrderUntilTerminal(
+        'ws-1',
+        'wo-1',
+        ctrl.signal,
+        (detail) => updates.push(detail),
+        { initialIntervalMs: 5, maxIntervalMs: 10, maxAttempts: 10 },
+      );
+
+      // On commit d4f4559, pollWorkOrderUntilTerminal only checked 'cancelled',
+      // so canonical 'canceled' polled until maxAttempts was reached (callCount = 10).
+      // Here it must return immediately on attempt 1!
+      expect(callCount).toBe(1);
+      expect(result.workOrder.status).toBe('canceled');
+      expect(updates).toHaveLength(1);
+
+      // Prove that the caller terminal predicate treats this as terminal (not stale)
+      expect(isWorkOrderTerminal(result.workOrder.status)).toBe(true);
+    });
+
+    it('returns immediately on legacy cancelled status on attempt 1', async () => {
+      let callCount = 0;
+      vi.spyOn(client, 'fetchWorkOrderApi').mockImplementation(async () => {
+        callCount++;
+        return makeDetail('cancelled', false);
+      });
+
+      const ctrl = new AbortController();
+      const updates: WorkOrderDetailDTO[] = [];
+
+      const result = await pollWorkOrderUntilTerminal(
+        'ws-1',
+        'wo-1',
+        ctrl.signal,
+        (detail) => updates.push(detail),
+        { initialIntervalMs: 5, maxIntervalMs: 10, maxAttempts: 10 },
+      );
+
+      expect(callCount).toBe(1);
+      expect(result.workOrder.status).toBe('cancelled');
+      expect(isWorkOrderTerminal(result.workOrder.status)).toBe(true);
+    });
   });
 });

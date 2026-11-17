@@ -731,6 +731,46 @@ describe('workforce-view-model pure mapping layer', () => {
         expect(emp.relevantActivities).toHaveLength(0);
       }
     });
+
+    it('associates real planning failure audit event (artifact.failed on work_item) with owning role only (regression test for commit d4f4559)', () => {
+      // Exact persisted shape from workforce-planning-failure-handlers.ts:
+      // action = 'artifact.failed', resource_type = 'work_item', resource_id = <work item id>,
+      // changes_json contains workOrderId, errorCategory, errorMessage (no workItemId in changes_json).
+      const activities: WorkOrderActivityDTO[] = [
+        {
+          id: 'act-real-planning-failure',
+          action: 'artifact.failed',
+          resourceType: 'work_item',
+          resourceId: 'wi-ps-1', // belongs to product_strategist in detail fixture
+          result: 'failed',
+          occurredAt: '2026-11-18T00:03:00Z',
+          changesJson: {
+            workOrderId: 'wo-act-test',
+            errorCategory: 'planning_failed',
+            errorMessage: 'Gemini provider schema validation failed',
+          },
+        },
+      ];
+
+      const vm = mapWorkforceViewModel({ detail, artifacts, activities });
+      const ps = vm.employees.find((e) => e.roleKey === 'product_strategist')!;
+      const cos = vm.employees.find((e) => e.roleKey === 'chief_of_staff')!;
+      const as = vm.employees.find((e) => e.roleKey === 'audience_strategist')!;
+      const cd = vm.employees.find((e) => e.roleKey === 'creative_director')!;
+      const sw = vm.employees.find((e) => e.roleKey === 'scriptwriter')!;
+      const cr = vm.employees.find((e) => e.roleKey === 'compliance_reviewer')!;
+
+      // Proves it maps to the owning role product_strategist
+      expect(ps.relevantActivities).toHaveLength(1);
+      expect(ps.relevantActivities[0]!.id).toBe('act-real-planning-failure');
+
+      // Proves it appears ONLY for the owning role and not any other role
+      expect(cos.relevantActivities).toHaveLength(0);
+      expect(as.relevantActivities).toHaveLength(0);
+      expect(cd.relevantActivities).toHaveLength(0);
+      expect(sw.relevantActivities).toHaveLength(0);
+      expect(cr.relevantActivities).toHaveLength(0);
+    });
   });
 
   describe('Lifecycle summaries and handoff semantics (TASK-015-REMEDIATION Requirement 4)', () => {

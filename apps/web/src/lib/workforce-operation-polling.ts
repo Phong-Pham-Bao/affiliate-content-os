@@ -122,6 +122,12 @@ export async function pollChangeRequestUntilTerminal(
   }
 }
 
+export function isWorkOrderTerminal(status: string | null | undefined): boolean {
+  return (
+    status === 'completed' || status === 'failed' || status === 'canceled' || status === 'cancelled'
+  );
+}
+
 export async function pollWorkOrderUntilTerminal(
   workspaceId: string,
   workOrderId: string,
@@ -148,12 +154,7 @@ export async function pollWorkOrderUntilTerminal(
     attempts++;
     onUpdate(detail);
 
-    const isTerminal =
-      detail.workOrder.status === 'completed' ||
-      detail.workOrder.status === 'failed' ||
-      detail.workOrder.status === 'cancelled';
-
-    if (isTerminal) {
+    if (isWorkOrderTerminal(detail.workOrder.status)) {
       return detail;
     }
 
