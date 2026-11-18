@@ -41,6 +41,10 @@ test.describe('Sprint 3 Checkpoint E — Virtual Office & Board Experience', () 
       await route.fulfill({ status: 200, json: MOCK_USER });
     });
 
+    await page.route('**/api/v1/workspaces/*/social-accounts', async (route) => {
+      await route.fulfill({ status: 200, json: { items: [] } });
+    });
+
     await page.route(`**/api/v1/workspaces/${MOCK_WORKSPACE.id}/ai-policy*`, async (route) => {
       await route.fulfill({ status: 200, json: MOCK_POLICY });
     });

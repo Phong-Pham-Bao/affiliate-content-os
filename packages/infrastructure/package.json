@@ -52,6 +52,12 @@
       "import": "./dist/workforce/index.js",
       "default": "./dist/workforce/index.js"
     },
+    "./social": {
+      "types": "./src/social/index.ts",
+      "development": "./src/social/index.ts",
+      "import": "./dist/social/index.js",
+      "default": "./dist/social/index.js"
+    },
     "./testing": {
       "types": "./src/testing/index.ts",
       "development": "./src/testing/index.ts",

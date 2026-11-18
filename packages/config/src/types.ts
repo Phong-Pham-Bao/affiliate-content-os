@@ -148,4 +148,29 @@ export interface RedactedAIMetadata {
   readonly estimatedCostMicrounits: number;
 }
 
+export const DEFAULT_SOCIAL_TRANSACTION_TTL_SECONDS = 600;
+export const DEFAULT_SOCIAL_CALLBACK_RESULT_TTL_SECONDS = 300;
+export const ALLOWED_SOCIAL_KEY_PROVIDERS = ['local', 'kms'] as const;
+export type SocialKeyProvider = (typeof ALLOWED_SOCIAL_KEY_PROVIDERS)[number];
+
+export interface SocialConfig {
+  readonly enabled: boolean;
+  readonly fakeAdapterEnabled: boolean;
+  readonly keyProvider: SocialKeyProvider;
+  readonly credentialEncryptionKeyBase64Url: string | null;
+  readonly credentialKeyVersion: string | null;
+  readonly transactionTtlSeconds: number;
+  readonly callbackResultTtlSeconds: number;
+}
+
+export interface RedactedSocialConfigMetadata {
+  readonly enabled: boolean;
+  readonly fakeAdapterEnabled: boolean;
+  readonly keyProvider: SocialKeyProvider;
+  readonly hasCredentialEncryptionKey: boolean;
+  readonly credentialKeyVersion: string | null;
+  readonly transactionTtlSeconds: number;
+  readonly callbackResultTtlSeconds: number;
+}
+
 export type RawEnvironment = Record<string, string | undefined>;

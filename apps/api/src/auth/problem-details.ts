@@ -24,6 +24,7 @@ import { DomainValidationError } from '@affiliate-content-os/domain';
 import { AuthOriginInvalidError } from './origin.js';
 import { PreconditionRequiredError, MalformedIdempotencyKeyError } from '../catalog/errors.js';
 import { resolveAnalysisProblemSpec } from '../analysis/problem-details-specs.js';
+import { resolveSocialProblemSpec } from '../social/problem-details-specs.js';
 import { type ProblemDetails, type ProblemSpec, PROBLEM_SPECS } from './problem-details-specs.js';
 import { hasProxyInPrototype } from './proxy-detector.js';
 
@@ -107,6 +108,10 @@ export function resolveProblemSpec(error: unknown, request?: FastifyRequest): Pr
     if (analysisSpec) {
       return analysisSpec;
     }
+    const socialSpec = resolveSocialProblemSpec(error);
+    if (socialSpec) {
+      return socialSpec;
+    }
     if (error instanceof DuplicateFactKeyError) {
       return PROBLEM_SPECS['DUPLICATE_FACT_KEY']!;
     }
@@ -172,8 +177,9 @@ export function resolveProblemSpec(error: unknown, request?: FastifyRequest): Pr
     const validationErrors = getOwnDataProperty(error, 'validation');
     const validationContext = getOwnDataProperty(error, 'validationContext');
     const requestUrl = request?.raw?.url ?? request?.url ?? '';
-    const isCatalogRequest = /^\/api\/v1\/workspaces\/[^/]+\/products(?:\/|\?|$)/.test(requestUrl);
-    if (isCatalogRequest && validationContext === 'headers' && Array.isArray(validationErrors)) {
+    const isWorkspaceMutation =
+      /^\/api\/v1\/workspaces\/[^/]+\/(?:products|social-connections)(?:\/|\?|$)/.test(requestUrl);
+    if (isWorkspaceMutation && validationContext === 'headers' && Array.isArray(validationErrors)) {
       for (const vErr of validationErrors) {
         if (typeof vErr !== 'object' || vErr === null) {
           continue;
@@ -184,10 +190,18 @@ export function resolveProblemSpec(error: unknown, request?: FastifyRequest): Pr
         if (instancePath === '/if-match' || missingProp === 'if-match') {
           return PROBLEM_SPECS['PRECONDITION_REQUIRED']!;
         }
-        if (instancePath === '/idempotency-key' || missingProp === 'idempotency-key') {
+        if (
+          instancePath === '/idempotency-key' ||
+          missingProp === 'idempotency-key' ||
+          instancePath === '/headers/idempotency-key'
+        ) {
           return PROBLEM_SPECS['MALFORMED_IDEMPOTENCY_KEY']!;
         }
-        if (instancePath === '/origin' || missingProp === 'origin') {
+        if (
+          instancePath === '/origin' ||
+          missingProp === 'origin' ||
+          instancePath === '/headers/origin'
+        ) {
           return PROBLEM_SPECS['AUTH_ORIGIN_INVALID']!;
         }
       }
@@ -195,6 +209,9 @@ export function resolveProblemSpec(error: unknown, request?: FastifyRequest): Pr
 
     if (maybeStatus === 400 || maybeCode === 'FST_ERR_VALIDATION') {
       const url = request?.raw?.url ?? request?.url ?? '';
+      if (/^\/api\/v1\/social-connections\/[^/]+\/callback(?:\/|\?|$)/.test(url)) {
+        return PROBLEM_SPECS['OAUTH_CALLBACK_INVALID']!;
+      }
       const isAuth =
         url === '' || url.startsWith('/auth/') || url === '/api/v1/logout' || url === '/api/v1/me';
       return isAuth ? PROBLEM_SPECS['AUTH_REQUEST_INVALID']! : PROBLEM_SPECS['VALIDATION_ERROR']!;

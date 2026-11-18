@@ -33,6 +33,7 @@ import { WorkspaceCard } from './workspace-card.js';
 import { CreateWorkspaceDialog } from './create-workspace-dialog.js';
 import { CatalogWorkspaceView } from './catalog/catalog-workspace-view.js';
 import { AIPolicyPanel } from './ai-policy-panel.js';
+import { ConnectionsPanel } from './connections/index.js';
 
 export function AppShell(): ReactElement {
   const [state, setState] = useState<AppShellState>(createInitialAppShellState);
@@ -171,6 +172,10 @@ export function AppShell(): ReactElement {
             {state.activeWorkspace.role === 'owner' && (
               <AIPolicyPanel workspaceId={state.activeWorkspace.id} />
             )}
+            <ConnectionsPanel
+              workspaceId={state.activeWorkspace.id}
+              userRole={state.activeWorkspace.role}
+            />
             <CatalogWorkspaceView
               workspaceId={state.activeWorkspace.id}
               userRole={state.activeWorkspace.role}

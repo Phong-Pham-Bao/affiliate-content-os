@@ -39,6 +39,13 @@ export const PROBLEM_SPECS: Record<string, ProblemSpec> = {
     title: 'Bad Request',
     detail: 'The identity provider callback is invalid, expired, or was denied.',
   },
+  OAUTH_CALLBACK_INVALID: {
+    status: 400,
+    code: 'OAUTH_CALLBACK_INVALID',
+    type: 'https://affiliate-content-os.example/problems/oauth-callback-invalid',
+    title: 'Bad Request',
+    detail: 'The OAuth callback parameters are invalid, ambiguous, or missing.',
+  },
   OIDC_PROVIDER_UNAVAILABLE: {
     status: 503,
     code: 'OIDC_PROVIDER_UNAVAILABLE',

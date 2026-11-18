@@ -4,12 +4,14 @@ export {
   getRedactedAuthConfigMetadata,
   getRedactedConfigMetadata,
   getRedactedDatabaseMetadata,
+  getRedactedSocialConfigMetadata,
 } from './redact.js';
 export {
   ALLOWED_DATABASE_SSL_MODES,
   ALLOWED_GEMINI_THINKING_LEVELS,
   ALLOWED_LOG_LEVELS,
   ALLOWED_NODE_ENVS,
+  ALLOWED_SOCIAL_KEY_PROVIDERS,
   DEFAULT_AI_ESTIMATED_RESERVATION_MICROUNITS,
   DEFAULT_API_HOST,
   DEFAULT_API_PORT,
@@ -29,6 +31,8 @@ export {
   DEFAULT_GEMINI_THINKING_LEVEL,
   DEFAULT_GEMINI_TIMEOUT_MS,
   DEFAULT_LOG_LEVEL,
+  DEFAULT_SOCIAL_CALLBACK_RESULT_TTL_SECONDS,
+  DEFAULT_SOCIAL_TRANSACTION_TTL_SECONDS,
   DEFAULT_WORKER_LEASE_DURATION_SECONDS,
   DEFAULT_WORKER_POLLING_INTERVAL_MS,
   TEST_DATABASE_DISPOSABLE_SENTINEL,
@@ -46,11 +50,15 @@ export {
   type RedactedAuthConfigMetadata,
   type RedactedConfigMetadata,
   type RedactedDatabaseMetadata,
+  type RedactedSocialConfigMetadata,
+  type SocialConfig,
+  type SocialKeyProvider,
   type TestAdminDatabaseConfig,
 } from './types.js';
 export { loadConfig } from './validate.js';
 export { loadAuthConfig } from './validate-auth.js';
 export { loadAIConfig } from './validate-ai.js';
+export { loadSocialConfig } from './validate-social.js';
 export {
   loadDatabaseConfig,
   loadMigrationConfig,

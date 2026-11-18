@@ -7,6 +7,8 @@ import type {
   RedactedAuthConfigMetadata,
   RedactedConfigMetadata,
   RedactedDatabaseMetadata,
+  RedactedSocialConfigMetadata,
+  SocialConfig,
 } from './types.js';
 
 /**
@@ -97,6 +99,26 @@ export function getRedactedAIMetadata(config: AIConfig): RedactedAIMetadata {
     workerPollingIntervalMs: config.workerPollingIntervalMs,
     workerLeaseDurationSeconds: config.workerLeaseDurationSeconds,
     estimatedCostMicrounits: config.estimatedCostMicrounits,
+  };
+
+  return Object.freeze(result);
+}
+
+/**
+ * Returns redacted social authentication configuration metadata for startup diagnostics.
+ * Never exposes encryption keys, tokens, or provider secrets.
+ */
+export function getRedactedSocialConfigMetadata(
+  config: SocialConfig,
+): RedactedSocialConfigMetadata {
+  const result: RedactedSocialConfigMetadata = {
+    enabled: config.enabled,
+    fakeAdapterEnabled: config.fakeAdapterEnabled,
+    keyProvider: config.keyProvider,
+    hasCredentialEncryptionKey: Boolean(config.credentialEncryptionKeyBase64Url),
+    credentialKeyVersion: config.credentialKeyVersion,
+    transactionTtlSeconds: config.transactionTtlSeconds,
+    callbackResultTtlSeconds: config.callbackResultTtlSeconds,
   };
 
   return Object.freeze(result);

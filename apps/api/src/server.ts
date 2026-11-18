@@ -7,6 +7,7 @@ import type { WorkspaceRouteDependencies } from './workspaces/index.js';
 import type { CatalogRouteDependencies } from './catalog/index.js';
 import type { AnalysisRouteDependencies } from './analysis/index.js';
 import type { WorkforceRouteDependencies } from './workforce/index.js';
+import type { SocialRouteDependencies } from './social/index.js';
 import {
   raceWithDeadline,
   type ClearTimerFn,
@@ -42,6 +43,10 @@ export interface StartServerOptions {
     | WorkforceRouteDependencies
     | ((signal: AbortSignal) => Promise<WorkforceRouteDependencies>)
     | undefined;
+  readonly social?:
+    | SocialRouteDependencies
+    | ((signal: AbortSignal) => Promise<SocialRouteDependencies>)
+    | undefined;
   readonly app?: FastifyInstance | undefined;
   readonly installSignalHandlers?: boolean | undefined;
   readonly shutdownTimeoutMs?: number | undefined;
@@ -69,7 +74,8 @@ export async function startApiServer(options: StartServerOptions): Promise<ApiSe
     typeof options.workspaces !== 'function' &&
     typeof options.catalog !== 'function' &&
     typeof options.analysis !== 'function' &&
-    typeof options.workforce !== 'function'
+    typeof options.workforce !== 'function' &&
+    typeof options.social !== 'function'
       ? createApp({
           config,
           auth: options.auth,
@@ -77,6 +83,7 @@ export async function startApiServer(options: StartServerOptions): Promise<ApiSe
           catalog: options.catalog,
           analysis: options.analysis,
           workforce: options.workforce,
+          social: options.social,
         })
       : undefined);
 
@@ -246,7 +253,8 @@ export async function startApiServer(options: StartServerOptions): Promise<ApiSe
       typeof options.workspaces === 'function' ||
       typeof options.catalog === 'function' ||
       typeof options.analysis === 'function' ||
-      typeof options.workforce === 'function'
+      typeof options.workforce === 'function' ||
+      typeof options.social === 'function'
     ) {
       if (startupAbortController.signal.aborted) {
         throw new Error('API server startup aborted before dependency resolution');
@@ -256,6 +264,7 @@ export async function startApiServer(options: StartServerOptions): Promise<ApiSe
       let catalogDeps = typeof options.catalog !== 'function' ? options.catalog : undefined;
       let analysisDeps = typeof options.analysis !== 'function' ? options.analysis : undefined;
       let workforceDeps = typeof options.workforce !== 'function' ? options.workforce : undefined;
+      let socialDeps = typeof options.social !== 'function' ? options.social : undefined;
 
       if (typeof options.auth === 'function') {
         const authPromise = options.auth(startupAbortController.signal);
@@ -277,6 +286,10 @@ export async function startApiServer(options: StartServerOptions): Promise<ApiSe
         const workforcePromise = options.workforce(startupAbortController.signal);
         workforceDeps = await Promise.race([workforcePromise, startupAbortPromise]);
       }
+      if (typeof options.social === 'function') {
+        const socialPromise = options.social(startupAbortController.signal);
+        socialDeps = await Promise.race([socialPromise, startupAbortPromise]);
+      }
       app = createApp({
         config,
         auth: authDeps,
@@ -284,6 +297,7 @@ export async function startApiServer(options: StartServerOptions): Promise<ApiSe
         catalog: catalogDeps,
         analysis: analysisDeps,
         workforce: workforceDeps,
+        social: socialDeps,
       });
     }
 

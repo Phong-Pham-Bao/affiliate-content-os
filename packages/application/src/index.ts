@@ -49,6 +49,7 @@ export * from './audit/index.js';
 export * from './catalog/index.js';
 export * from './analysis/index.js';
 export * from './workforce/index.js';
+export * from './social/index.js';
 export {
   resolveVerifiedIdentity,
   type ResolveVerifiedIdentityCommand,
