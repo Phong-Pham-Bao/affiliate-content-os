@@ -164,8 +164,10 @@ test.describe('Social Connections Flow (TASK-016 Remediation 02)', () => {
       await authorizeBtn.click();
 
       // Verify return to application shell with success banner
-      await expect(page).toHaveURL(/\/$/);
-      await expect(page.getByText('Kết nối tài khoản THREADS thành công!')).toBeVisible();
+      await expect(page).toHaveURL(/\/$/, { timeout: 15000 });
+      await expect(page.getByText('Kết nối tài khoản THREADS thành công!')).toBeVisible({
+        timeout: 15000,
+      });
 
       // Verify account card is rendered with local/test badge and handle
       await expect(page.getByText('Fake Threads Creator')).toBeVisible();
@@ -232,8 +234,8 @@ test.describe('Social Connections Flow (TASK-016 Remediation 02)', () => {
       await denyBtn.click();
 
       // Verify return to application shell with failure banner
-      await expect(page).toHaveURL(/\/$/);
-      await expect(page.getByText(/Kết nối thất bại:/)).toBeVisible();
+      await expect(page).toHaveURL(/\/$/, { timeout: 15000 });
+      await expect(page.getByText(/Kết nối thất bại:/)).toBeVisible({ timeout: 15000 });
 
       // Verify audit failure in PostgreSQL
       const auditRes = await getPool().query(

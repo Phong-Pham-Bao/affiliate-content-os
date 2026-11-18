@@ -10,6 +10,7 @@ import {
 } from '@affiliate-content-os/application';
 import { createDatabase, type Database } from '../../src/database/index.js';
 import {
+  computeSocialAccountUpsertAdvisoryLockKey,
   LocalSocialCredentialProtector,
   PostgresSocialPersistenceAdapter,
 } from '../../src/social/index.js';
@@ -650,7 +651,7 @@ describe('Social Connections PostgreSQL Integration', () => {
     expect(crossTenantConsume).toBeNull();
   });
 
-  it('converges concurrent callback completions for the same new provider identity via advisory locking into one active account with rotated credentials', async () => {
+  it('converges concurrent callback completions for the same new provider identity via controlled advisory lock barrier into one active account with rotated credentials', async () => {
     const rawState1 = crypto.randomBytes(32).toString('base64url');
     const stateHash1 = crypto.createHash('sha256').update(rawState1, 'utf8').digest();
     const txId1 = generateUuidV7();
@@ -708,9 +709,20 @@ describe('Social Connections PostgreSQL Integration', () => {
     const resultKeyHash1 = crypto.createHash('sha256').update('res-key-1').digest();
     const resultKeyHash2 = crypto.createHash('sha256').update('res-key-2').digest();
 
-    // 3. Complete concurrently for the same provider identity
-    const [res1, res2] = await Promise.all([
-      adapter.completeOAuthCallbackAtomic({
+    // 3. Controlled barrier: acquire the exact provider-identity advisory lock on a dedicated blocker connection
+    const accountLockKey = computeSocialAccountUpsertAdvisoryLockKey(
+      wsId1,
+      'threads',
+      sharedProviderAccountId,
+    );
+    const blockerClient = await pool.connect();
+    let lockReleased = false;
+
+    try {
+      await blockerClient.query('SELECT pg_advisory_lock($1::bigint)', [accountLockKey]);
+
+      // 4. Launch both completion transactions concurrently while blockerClient holds the lock
+      const completionPromise1 = adapter.completeOAuthCallbackAtomic({
         transactionId: txId1,
         stateHash: stateHash1,
         workspaceId: wsId1,
@@ -734,8 +746,9 @@ describe('Social Connections PostgreSQL Integration', () => {
         resultKeyHash: resultKeyHash1,
         resultExpiresAt: new Date(now.getTime() + 300000).toISOString(),
         now: now.toISOString(),
-      }),
-      adapter.completeOAuthCallbackAtomic({
+      });
+
+      const completionPromise2 = adapter.completeOAuthCallbackAtomic({
         transactionId: txId2,
         stateHash: stateHash2,
         workspaceId: wsId1,
@@ -759,68 +772,112 @@ describe('Social Connections PostgreSQL Integration', () => {
         resultKeyHash: resultKeyHash2,
         resultExpiresAt: new Date(now.getTime() + 300000).toISOString(),
         now: now.toISOString(),
-      }),
-    ]);
+      });
 
-    // Both operations must settle successfully without unique constraint failure
-    expect(res1.account.id).toBe(res2.account.id);
-    const authoritativeAccountId = res1.account.id;
+      // 5. Deterministic verification: poll pg_locks until BOTH completion transactions
+      // have reached and are waiting/contending on the exact advisory lock key.
+      // Bounded timeout ensures failure if production advisory lock is missing/removed.
+      const deadline = Date.now() + 5000;
+      let waitingCount = 0;
+      while (Date.now() < deadline) {
+        const lockCheck = await pool.query<{ count: string }>(
+          `SELECT count(*)::text AS count
+           FROM pg_locks
+           WHERE locktype = 'advisory'
+             AND objsubid = 1
+             AND ((classid::bigint << 32) | (objid::bigint & 4294967295))::bigint = $1::bigint
+             AND NOT granted`,
+          [accountLockKey],
+        );
+        waitingCount = Number(lockCheck.rows[0]?.count ?? 0);
+        if (waitingCount >= 2) {
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
 
-    // Exactly one active account exists in PostgreSQL
-    const accountCheck = await pool.query(
-      `SELECT id, status, provider_account_id, version FROM social_accounts WHERE workspace_id = $1 AND platform = 'threads' AND provider_account_id = $2`,
-      [wsId1, sharedProviderAccountId],
-    );
-    expect(accountCheck.rowCount).toBe(1);
-    expect(accountCheck.rows[0]?.id).toBe(authoritativeAccountId);
-    expect(accountCheck.rows[0]?.status).toBe('active');
-    expect(Number(accountCheck.rows[0]?.version)).toBe(2);
+      // Assert that BOTH transactions actually reached and contended on the exact production lock
+      expect(waitingCount).toBe(2);
 
-    // Stored credentials decrypt using the authoritative account ID and contain last-writer tokens
-    const credRows = await pool.query(
-      `SELECT social_account_id, access_token_ciphertext, access_token_iv, access_token_auth_tag,
-              refresh_token_ciphertext, refresh_token_iv, refresh_token_auth_tag,
-              encryption_key_version
-       FROM social_credentials
-       WHERE workspace_id = $1 AND social_account_id = $2`,
-      [wsId1, authoritativeAccountId],
-    );
-    expect(credRows.rowCount).toBe(1);
-    expect(credRows.rows[0]?.social_account_id).toBe(authoritativeAccountId);
+      // 6. Release the blocker lock so the two transactions proceed in serialized order
+      await blockerClient.query('SELECT pg_advisory_unlock($1::bigint)', [accountLockKey]);
+      lockReleased = true;
 
-    const decrypted = protector.decrypt({
-      workspaceId: wsId1,
-      socialAccountId: authoritativeAccountId,
-      platform: 'threads',
-      credentials: {
-        accessTokenCiphertext: new Uint8Array(credRows.rows[0].access_token_ciphertext),
-        accessTokenIv: new Uint8Array(credRows.rows[0].access_token_iv),
-        accessTokenAuthTag: new Uint8Array(credRows.rows[0].access_token_auth_tag),
-        refreshTokenCiphertext: null,
-        refreshTokenIv: null,
-        refreshTokenAuthTag: null,
-        keyVersion: credRows.rows[0].encryption_key_version,
-      },
-    });
-    expect(['token_attempt_1', 'token_attempt_2']).toContain(decrypted.accessToken);
+      // Await both completion results
+      const [res1, res2] = await Promise.all([completionPromise1, completionPromise2]);
 
-    // Assert zero orphan credentials exist in the workspace
-    const allCredRows = await pool.query(
-      `SELECT sc.social_account_id
-       FROM social_credentials sc
-       LEFT JOIN social_accounts sa ON sa.id = sc.social_account_id
-       WHERE sc.workspace_id = $1 AND sa.id IS NULL`,
-      [wsId1],
-    );
-    expect(allCredRows.rowCount).toBe(0);
+      // Both operations must settle successfully without unique constraint failure
+      expect(res1.account.id).toBe(res2.account.id);
+      const authoritativeAccountId = res1.account.id;
 
-    // Each transaction has at most one terminal callback result
-    const cbCheck = await pool.query(
-      `SELECT transaction_id, status FROM oauth_callback_results WHERE transaction_id IN ($1, $2)`,
-      [txId1, txId2],
-    );
-    expect(cbCheck.rowCount).toBe(2);
-    expect(cbCheck.rows.map((r) => r.status).sort()).toEqual(['success', 'success']);
+      // Terminal callback results must remain unique
+      expect(res1.callbackResult.id).not.toBe(res2.callbackResult.id);
+
+      // Exactly one active account exists in PostgreSQL
+      const accountCheck = await pool.query(
+        `SELECT id, status, provider_account_id, version FROM social_accounts WHERE workspace_id = $1 AND platform = 'threads' AND provider_account_id = $2`,
+        [wsId1, sharedProviderAccountId],
+      );
+      expect(accountCheck.rowCount).toBe(1);
+      expect(accountCheck.rows[0]?.id).toBe(authoritativeAccountId);
+      expect(accountCheck.rows[0]?.status).toBe('active');
+      expect(Number(accountCheck.rows[0]?.version)).toBe(2);
+
+      // Stored credentials decrypt using the authoritative account ID and contain last-writer tokens
+      const credRows = await pool.query(
+        `SELECT social_account_id, access_token_ciphertext, access_token_iv, access_token_auth_tag,
+                refresh_token_ciphertext, refresh_token_iv, refresh_token_auth_tag,
+                encryption_key_version
+         FROM social_credentials
+         WHERE workspace_id = $1 AND social_account_id = $2`,
+        [wsId1, authoritativeAccountId],
+      );
+      expect(credRows.rowCount).toBe(1);
+      expect(credRows.rows[0]?.social_account_id).toBe(authoritativeAccountId);
+
+      const decrypted = protector.decrypt({
+        workspaceId: wsId1,
+        socialAccountId: authoritativeAccountId,
+        platform: 'threads',
+        credentials: {
+          accessTokenCiphertext: new Uint8Array(credRows.rows[0].access_token_ciphertext),
+          accessTokenIv: new Uint8Array(credRows.rows[0].access_token_iv),
+          accessTokenAuthTag: new Uint8Array(credRows.rows[0].access_token_auth_tag),
+          refreshTokenCiphertext: null,
+          refreshTokenIv: null,
+          refreshTokenAuthTag: null,
+          keyVersion: credRows.rows[0].encryption_key_version,
+        },
+      });
+      expect(['token_attempt_1', 'token_attempt_2']).toContain(decrypted.accessToken);
+
+      // Assert zero orphan credentials exist in the workspace
+      const allCredRows = await pool.query(
+        `SELECT sc.social_account_id
+         FROM social_credentials sc
+         LEFT JOIN social_accounts sa ON sa.id = sc.social_account_id
+         WHERE sc.workspace_id = $1 AND sa.id IS NULL`,
+        [wsId1],
+      );
+      expect(allCredRows.rowCount).toBe(0);
+
+      // Each transaction has at most one terminal callback result
+      const cbCheck = await pool.query(
+        `SELECT transaction_id, status FROM oauth_callback_results WHERE transaction_id IN ($1, $2)`,
+        [txId1, txId2],
+      );
+      expect(cbCheck.rowCount).toBe(2);
+      expect(cbCheck.rows.map((r) => r.status).sort()).toEqual(['success', 'success']);
+    } finally {
+      if (!lockReleased) {
+        try {
+          await blockerClient.query('SELECT pg_advisory_unlock_all()');
+        } catch {
+          // Bounded cleanup
+        }
+      }
+      blockerClient.release();
+    }
   });
 
   it('records allowlisted social_connection.authorization_claimed audit event on successful claim and omits sensitive values', async () => {

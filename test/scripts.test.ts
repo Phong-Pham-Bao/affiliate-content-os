@@ -3,7 +3,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { setupLocalEnv } from '../scripts/setup-local-env.mjs';
-import { prepareEnvironment } from '../scripts/run-with-env.mjs';
+import {
+  applyPlaywrightEnvironment,
+  isPlaywrightCommand,
+  prepareEnvironment,
+} from '../scripts/run-with-env.mjs';
 import {
   extractPostgresReference,
   verifyInfrastructurePins,
@@ -524,6 +528,102 @@ describe('Scripts unit verification', () => {
       });
 
       expect(openApiContent).toBe(expectedContent);
+    });
+  });
+
+  describe('run-with-env environment scoping', () => {
+    it('does not mutate PW_DISABLE_TS_ESM or NODE_OPTIONS during general prepareEnvironment', () => {
+      const origPw = process.env.PW_DISABLE_TS_ESM;
+      const origNodeOpts = process.env.NODE_OPTIONS;
+      delete process.env.PW_DISABLE_TS_ESM;
+      delete process.env.NODE_OPTIONS;
+      try {
+        prepareEnvironment({ isCi: true });
+        expect(process.env.PW_DISABLE_TS_ESM).toBeUndefined();
+        expect(process.env.NODE_OPTIONS).toBeUndefined();
+      } finally {
+        if (origPw !== undefined) process.env.PW_DISABLE_TS_ESM = origPw;
+        else delete process.env.PW_DISABLE_TS_ESM;
+        if (origNodeOpts !== undefined) process.env.NODE_OPTIONS = origNodeOpts;
+        else delete process.env.NODE_OPTIONS;
+      }
+    });
+
+    it('identifies playwright commands accurately', () => {
+      expect(isPlaywrightCommand(['playwright', 'test'])).toBe(true);
+      expect(isPlaywrightCommand(['node_modules/.bin/playwright', 'test'])).toBe(true);
+      expect(isPlaywrightCommand(['tsx', 'packages/infrastructure/cli.ts'])).toBe(false);
+      expect(isPlaywrightCommand(['vitest', 'run'])).toBe(false);
+      expect(isPlaywrightCommand([])).toBe(false);
+    });
+
+    it('applies Playwright-only flags and safely preserves existing NODE_OPTIONS without duplicate imports', () => {
+      const env: Record<string, string> = {};
+      applyPlaywrightEnvironment(env);
+      expect(env.PW_DISABLE_TS_ESM).toBe('1');
+      expect(env.NODE_OPTIONS).toBe('--import tsx');
+
+      // Preserves existing options
+      const envWithInspect: Record<string, string> = { NODE_OPTIONS: '--inspect=9229' };
+      applyPlaywrightEnvironment(envWithInspect);
+      expect(envWithInspect.PW_DISABLE_TS_ESM).toBe('1');
+      expect(envWithInspect.NODE_OPTIONS).toBe('--inspect=9229 --import tsx');
+
+      // Does not duplicate if --import tsx is already present
+      const envWithTsx: Record<string, string> = { NODE_OPTIONS: '--import tsx' };
+      applyPlaywrightEnvironment(envWithTsx);
+      expect(envWithTsx.NODE_OPTIONS).toBe('--import tsx');
+
+      const envWithTsxQuoted: Record<string, string> = {
+        NODE_OPTIONS: '--max-old-space-size=4096 --import "tsx"',
+      };
+      applyPlaywrightEnvironment(envWithTsxQuoted);
+      expect(envWithTsxQuoted.NODE_OPTIONS).toBe('--max-old-space-size=4096 --import "tsx"');
+    });
+
+    it('applies Playwright environment when prepareEnvironment has isPlaywright option', () => {
+      const origPw = process.env.PW_DISABLE_TS_ESM;
+      const origNodeOpts = process.env.NODE_OPTIONS;
+      delete process.env.PW_DISABLE_TS_ESM;
+      delete process.env.NODE_OPTIONS;
+      try {
+        prepareEnvironment({ isCi: true, isPlaywright: true });
+        expect(process.env.PW_DISABLE_TS_ESM).toBe('1');
+        expect(process.env.NODE_OPTIONS).toContain('--import tsx');
+      } finally {
+        if (origPw !== undefined) process.env.PW_DISABLE_TS_ESM = origPw;
+        else delete process.env.PW_DISABLE_TS_ESM;
+        if (origNodeOpts !== undefined) process.env.NODE_OPTIONS = origNodeOpts;
+        else delete process.env.NODE_OPTIONS;
+      }
+    });
+
+    it('skips loading .env when skipEnvLoading option is true', () => {
+      const tempEnv = path.join(os.tmpdir(), `test-env-${Date.now()}.env`);
+      fs.writeFileSync(tempEnv, 'ACOS_TEST_VAR=loaded_from_file\n');
+      delete process.env.ACOS_TEST_VAR;
+      try {
+        prepareEnvironment({ envPath: tempEnv, skipEnvLoading: true, isCi: true });
+        expect(process.env.ACOS_TEST_VAR).toBeUndefined();
+      } finally {
+        if (fs.existsSync(tempEnv)) fs.unlinkSync(tempEnv);
+        delete process.env.ACOS_TEST_VAR;
+      }
+    });
+
+    it('skips loading .env when SKIP_ENV_LOADING env var is set', () => {
+      const tempEnv = path.join(os.tmpdir(), `test-env-${Date.now()}.env`);
+      fs.writeFileSync(tempEnv, 'ACOS_TEST_VAR=loaded_from_file\n');
+      delete process.env.ACOS_TEST_VAR;
+      process.env.SKIP_ENV_LOADING = 'true';
+      try {
+        prepareEnvironment({ envPath: tempEnv, isCi: true });
+        expect(process.env.ACOS_TEST_VAR).toBeUndefined();
+      } finally {
+        delete process.env.SKIP_ENV_LOADING;
+        if (fs.existsSync(tempEnv)) fs.unlinkSync(tempEnv);
+        delete process.env.ACOS_TEST_VAR;
+      }
     });
   });
 
