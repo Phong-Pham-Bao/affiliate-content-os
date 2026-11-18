@@ -1,6 +1,7 @@
 # Sprint 4 — Social Connections and Publishing Plan
 
-Status: Product Owner approved on 2026-11-18
+Status: In progress; Product Owner approved on 2026-11-18. Checkpoint A was
+completed and approved by Codex on 2026-11-18 (`STATUS: APPROVED`).
 
 ## 1. Outcome
 
@@ -30,6 +31,10 @@ attempts, reconciliation, and audit evidence.
 ## 3. Checkpoints
 
 ### Checkpoint A — Social connection foundation (`TASK-016`)
+
+Status: Complete and Codex-approved on 2026-11-18 after
+`TASK-016-REMEDIATION-01`, `TASK-016-REMEDIATION-02`, and
+`TASK-016-REMEDIATION-03`.
 
 - Domain/application adapter contracts and account/capability states.
 - Forward-only persistence for social accounts, isolated encrypted
