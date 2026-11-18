@@ -9,6 +9,7 @@ import {
   completeSocialCallback,
   getSocialCallbackResult,
   listSocialAccounts,
+  CallbackResultForbiddenError,
   CallbackResultGoneError,
   OAuthCallbackInvalidError,
   OAuthTransactionExpiredError,
@@ -74,11 +75,34 @@ describe('Social Application Use Cases', () => {
       redirectUri: params.redirectUri,
       returnTo: params.returnTo,
       requestedScopes: params.requestedScopes,
+      codeVerifierCiphertext: null,
+      codeVerifierIv: null,
+      codeVerifierAuthTag: null,
+      codeVerifierKeyVersion: null,
       status: 'pending' as const,
       createdAt: params.createdAt,
       expiresAt: params.expiresAt,
+      claimedAt: null,
+      claimedExpiresAt: null,
       consumedAt: null,
       version: 1,
+    })),
+    saveOAuthTransactionWithIdempotency: vi.fn(async (params) => ({
+      replayed: false,
+      response: params.responseData,
+    })),
+    claimOAuthTransaction: vi.fn(async () => ({
+      id: 'tx-123',
+      workspaceId: wsId,
+      platform: 'threads' as const,
+      initiatedByUserId: ownerUserId,
+      redirectUri: 'http://localhost:3001/api/v1/social-connections/threads/callback',
+      returnTo: '/connections',
+      requestedScopes: ['threads_basic'],
+      createdAt: mockNow.toISOString(),
+      expiresAt: new Date(mockNow.getTime() + 600000).toISOString(),
+      claimedAt: mockNow.toISOString(),
+      version: 2,
     })),
     findPendingTransactionByStateHash: vi.fn(),
     completeOAuthCallbackAtomic: vi.fn(),
@@ -125,6 +149,13 @@ describe('Social Application Use Cases', () => {
       accessToken: 'decrypted_access_token',
       refreshToken: 'decrypted_refresh_token',
     })),
+    encryptOAuthVerifier: vi.fn(() => ({
+      ciphertext: new Uint8Array([7, 8, 9]),
+      iv: new Uint8Array(12),
+      authTag: new Uint8Array(16),
+      keyVersion: 'v1',
+    })),
+    decryptOAuthVerifier: vi.fn(() => 'decrypted_pkce_verifier'),
   });
 
   describe('beginSocialAuthorization', () => {
@@ -161,6 +192,93 @@ describe('Social Application Use Cases', () => {
       expect(saved.stateHash).toHaveLength(32);
       expect(saved.workspaceId).toBe(wsId);
       expect(saved.returnTo).toBe('/settings/connections');
+      expect(saved.pkceVerifierCiphertext).toBeNull();
+    });
+
+    it('encrypts PKCE verifier before persistence when adapter generates one', async () => {
+      const persistence = createMockPersistence();
+      const authPort = createMockAuthPort();
+      const protector = createMockProtector();
+      const adapter: SocialAuthAdapter = {
+        platform: 'threads',
+        createAuthorizationUrl: vi.fn(async () => ({
+          authorizationUrl: 'https://threads.net/oauth/authorize?test=pkce',
+          codeVerifier: 'plain_code_verifier_12345',
+          scopes: ['threads_basic'],
+        })),
+        exchangeCode: vi.fn(),
+      };
+      const adapters = createMockAdapters(adapter);
+
+      const result = await beginSocialAuthorization(
+        {
+          workspaceId: wsId,
+          actorUserId: ownerUserId,
+          platform: 'threads',
+          redirectUri: 'http://localhost:3001/api/v1/social-connections/threads/callback',
+        },
+        {
+          persistence,
+          workspaceAuthorization: authPort,
+          adapters,
+          protector,
+          enabled: true,
+          transactionTtlSeconds: 600,
+          idGenerator: { generate: () => '018f3a2c-4e5b-7c8d-9e0f-9a0b1c2d3e4f' },
+          clock: { now: () => mockNow },
+        },
+      );
+
+      expect(result.authorizationUrl).toBe('https://threads.net/oauth/authorize?test=pkce');
+      expect(protector.encryptOAuthVerifier).toHaveBeenCalledWith({
+        codeVerifier: 'plain_code_verifier_12345',
+        platform: 'threads',
+        workspaceId: wsId,
+        transactionId: '018f3a2c-4e5b-7c8d-9e0f-9a0b1c2d3e4f',
+      });
+
+      const saved = vi.mocked(persistence.saveOAuthTransaction).mock.calls[0]![0];
+      expect(saved.pkceVerifierCiphertext).toEqual(new Uint8Array([7, 8, 9]));
+      expect(saved.encryptionKeyVersion).toBe('v1');
+    });
+
+    it('replays cached response when idempotency key is recognized', async () => {
+      const persistence = createMockPersistence();
+      vi.mocked(persistence.saveOAuthTransactionWithIdempotency).mockResolvedValue({
+        replayed: true,
+        response: {
+          authorizationUrl: 'https://threads.net/oauth/authorize?cached=1',
+          transactionId: 'cached-tx-123',
+          expiresAt: new Date(mockNow.getTime() + 600000).toISOString(),
+        },
+      });
+      const authPort = createMockAuthPort();
+      const adapters = createMockAdapters();
+
+      const result = await beginSocialAuthorization(
+        {
+          workspaceId: wsId,
+          actorUserId: ownerUserId,
+          platform: 'threads',
+          redirectUri: 'http://localhost:3001/api/v1/social-connections/threads/callback',
+          idempotencyKey: 'idem-key-1',
+          keyHash: new Uint8Array(32),
+          requestHash: new Uint8Array(32),
+        },
+        {
+          persistence,
+          workspaceAuthorization: authPort,
+          adapters,
+          enabled: true,
+          transactionTtlSeconds: 600,
+          idGenerator: { generate: () => 'new-tx' },
+          clock: { now: () => mockNow },
+        },
+      );
+
+      expect(result.authorizationUrl).toBe('https://threads.net/oauth/authorize?cached=1');
+      expect(result.transactionId).toBe('cached-tx-123');
+      expect(persistence.saveOAuthTransactionWithIdempotency).toHaveBeenCalledOnce();
     });
 
     it('denies viewer with WorkspaceAccessDeniedError', async () => {
@@ -249,22 +367,6 @@ describe('Social Application Use Cases', () => {
       const adapter = createMockAdapter();
       const adapters = createMockAdapters(adapter);
 
-      vi.mocked(persistence.findPendingTransactionByStateHash).mockResolvedValue({
-        id: 'tx-123',
-        workspaceId: wsId,
-        platform: 'threads',
-        initiatedByUserId: ownerUserId,
-        stateHash: new Uint8Array(32),
-        redirectUri: 'http://localhost:3001/api/v1/social-connections/threads/callback',
-        returnTo: '/connections',
-        requestedScopes: ['threads_basic'],
-        status: 'pending',
-        createdAt: mockNow.toISOString(),
-        expiresAt: new Date(mockNow.getTime() + 600000).toISOString(),
-        consumedAt: null,
-        version: 1,
-      });
-
       const result = await completeSocialCallback(
         {
           platform: 'threads',
@@ -283,8 +385,138 @@ describe('Social Application Use Cases', () => {
 
       expect(result.isSuccess).toBe(true);
       expect(result.redirectUrl).toContain('/connections?connection_result=');
+      expect(persistence.claimOAuthTransaction).toHaveBeenCalledOnce();
       expect(persistence.completeOAuthCallbackAtomic).toHaveBeenCalledOnce();
-      expect(protector.encrypt).toHaveBeenCalledOnce();
+      const completeAtomicArgs = vi.mocked(persistence.completeOAuthCallbackAtomic).mock
+        .calls[0]![0];
+      expect(typeof completeAtomicArgs.encryptCredentials).toBe('function');
+      const encrypted = completeAtomicArgs.encryptCredentials('target-acc-id-123');
+      expect(encrypted.keyVersion).toBe('v1');
+      expect(protector.encrypt).toHaveBeenCalledWith({
+        accessToken: 'test_access_token',
+        refreshToken: 'test_refresh_token',
+        workspaceId: wsId,
+        socialAccountId: 'target-acc-id-123',
+        platform: 'threads',
+      });
+    });
+
+    it('decrypts PKCE verifier and passes it to exchangeCode when present', async () => {
+      const persistence = createMockPersistence();
+      const protector = createMockProtector();
+      const adapter = createMockAdapter();
+      const adapters = createMockAdapters(adapter);
+
+      vi.mocked(persistence.claimOAuthTransaction).mockResolvedValue({
+        id: 'tx-pkce',
+        workspaceId: wsId,
+        platform: 'threads' as const,
+        initiatedByUserId: ownerUserId,
+        redirectUri: 'http://localhost:3001/api/v1/social-connections/threads/callback',
+        returnTo: '/connections',
+        requestedScopes: ['threads_basic'],
+        encryptedVerifier: {
+          ciphertext: new Uint8Array([7, 8, 9]),
+          iv: new Uint8Array(12),
+          authTag: new Uint8Array(16),
+          keyVersion: 'v1',
+        },
+        createdAt: mockNow.toISOString(),
+        expiresAt: new Date(mockNow.getTime() + 600000).toISOString(),
+        claimedAt: mockNow.toISOString(),
+        version: 2,
+      });
+
+      await completeSocialCallback(
+        {
+          platform: 'threads',
+          state: 'valid-base64url-state-string-12345678',
+          code: 'valid-code-pkce',
+        },
+        {
+          persistence,
+          protector,
+          adapters,
+          enabled: true,
+          callbackResultTtlSeconds: 300,
+          clock: { now: () => mockNow },
+        },
+      );
+
+      expect(protector.decryptOAuthVerifier).toHaveBeenCalledWith({
+        encryptedVerifier: {
+          ciphertext: new Uint8Array([7, 8, 9]),
+          iv: new Uint8Array(12),
+          authTag: new Uint8Array(16),
+          keyVersion: 'v1',
+        },
+        platform: 'threads',
+        workspaceId: wsId,
+        transactionId: 'tx-pkce',
+      });
+
+      expect(adapter.exchangeCode).toHaveBeenCalledWith({
+        code: 'valid-code-pkce',
+        platform: 'threads',
+        redirectUri: 'http://localhost:3001/api/v1/social-connections/threads/callback',
+        codeVerifier: 'decrypted_pkce_verifier',
+      });
+    });
+
+    it('enforces single provider exchange under concurrent callback attempts', async () => {
+      const persistence = createMockPersistence();
+      const protector = createMockProtector();
+      const adapter = createMockAdapter();
+      const adapters = createMockAdapters(adapter);
+
+      let claimCalls = 0;
+      vi.mocked(persistence.claimOAuthTransaction).mockImplementation(async () => {
+        claimCalls++;
+        if (claimCalls === 1) {
+          return {
+            id: 'tx-123',
+            workspaceId: wsId,
+            platform: 'threads' as const,
+            initiatedByUserId: ownerUserId,
+            redirectUri: 'http://localhost:3001/api/v1/social-connections/threads/callback',
+            returnTo: '/connections',
+            requestedScopes: ['threads_basic'],
+            createdAt: mockNow.toISOString(),
+            expiresAt: new Date(mockNow.getTime() + 600000).toISOString(),
+            claimedAt: mockNow.toISOString(),
+            version: 2,
+          };
+        }
+        throw new OAuthTransactionReplayedError(
+          'OAuth transaction has already been claimed or consumed.',
+        );
+      });
+
+      const params = {
+        platform: 'threads' as const,
+        state: 'valid-base64url-state-string-12345678',
+        code: 'valid-code-concurrent',
+      };
+      const context = {
+        persistence,
+        protector,
+        adapters,
+        enabled: true,
+        callbackResultTtlSeconds: 300,
+        clock: { now: () => mockNow },
+      };
+
+      const [res1, res2] = await Promise.allSettled([
+        completeSocialCallback(params, context),
+        completeSocialCallback(params, context),
+      ]);
+
+      expect(res1.status).toBe('fulfilled');
+      expect(res2.status).toBe('rejected');
+      if (res2.status === 'rejected') {
+        expect(res2.reason).toBeInstanceOf(OAuthTransactionReplayedError);
+      }
+      expect(adapter.exchangeCode).toHaveBeenCalledTimes(1);
     });
 
     it('rejects callback if query contains both code and error', async () => {
@@ -314,7 +546,9 @@ describe('Social Application Use Cases', () => {
 
     it('throws OAuthTransactionNotFoundError if state hash is not found', async () => {
       const persistence = createMockPersistence();
-      vi.mocked(persistence.findPendingTransactionByStateHash).mockResolvedValue(null);
+      vi.mocked(persistence.claimOAuthTransaction).mockRejectedValue(
+        new OAuthTransactionNotFoundError(),
+      );
 
       await expect(
         completeSocialCallback(
@@ -337,21 +571,9 @@ describe('Social Application Use Cases', () => {
 
     it('throws OAuthTransactionExpiredError if transaction is expired', async () => {
       const persistence = createMockPersistence();
-      vi.mocked(persistence.findPendingTransactionByStateHash).mockResolvedValue({
-        id: 'tx-123',
-        workspaceId: wsId,
-        platform: 'threads',
-        initiatedByUserId: ownerUserId,
-        stateHash: new Uint8Array(32),
-        redirectUri: 'http://localhost:3001/callback',
-        returnTo: '/',
-        requestedScopes: [],
-        status: 'pending',
-        createdAt: new Date('2026-11-18T08:00:00Z').toISOString(),
-        expiresAt: new Date('2026-11-18T08:10:00Z').toISOString(), // in the past relative to mockNow
-        consumedAt: null,
-        version: 1,
-      });
+      vi.mocked(persistence.claimOAuthTransaction).mockRejectedValue(
+        new OAuthTransactionExpiredError('OAuth transaction has expired.'),
+      );
 
       await expect(
         completeSocialCallback(
@@ -372,23 +594,13 @@ describe('Social Application Use Cases', () => {
       ).rejects.toThrow(OAuthTransactionExpiredError);
     });
 
-    it('throws OAuthTransactionReplayedError if transaction is already consumed', async () => {
+    it('throws OAuthTransactionReplayedError if transaction is already claimed or consumed', async () => {
       const persistence = createMockPersistence();
-      vi.mocked(persistence.findPendingTransactionByStateHash).mockResolvedValue({
-        id: 'tx-123',
-        workspaceId: wsId,
-        platform: 'threads',
-        initiatedByUserId: ownerUserId,
-        stateHash: new Uint8Array(32),
-        redirectUri: 'http://localhost:3001/callback',
-        returnTo: '/',
-        requestedScopes: [],
-        status: 'consumed',
-        createdAt: mockNow.toISOString(),
-        expiresAt: new Date(mockNow.getTime() + 600000).toISOString(),
-        consumedAt: mockNow.toISOString(),
-        version: 2,
-      });
+      vi.mocked(persistence.claimOAuthTransaction).mockRejectedValue(
+        new OAuthTransactionReplayedError(
+          'OAuth transaction has already been claimed or consumed.',
+        ),
+      );
 
       await expect(
         completeSocialCallback(
@@ -411,21 +623,6 @@ describe('Social Application Use Cases', () => {
 
     it('records failed callback result atomically when provider returns error', async () => {
       const persistence = createMockPersistence();
-      vi.mocked(persistence.findPendingTransactionByStateHash).mockResolvedValue({
-        id: 'tx-123',
-        workspaceId: wsId,
-        platform: 'threads',
-        initiatedByUserId: ownerUserId,
-        stateHash: new Uint8Array(32),
-        redirectUri: 'http://localhost:3001/callback',
-        returnTo: '/connections',
-        requestedScopes: [],
-        status: 'pending',
-        createdAt: mockNow.toISOString(),
-        expiresAt: new Date(mockNow.getTime() + 600000).toISOString(),
-        consumedAt: null,
-        version: 1,
-      });
 
       const result = await completeSocialCallback(
         {
@@ -446,12 +643,17 @@ describe('Social Application Use Cases', () => {
 
       expect(result.isSuccess).toBe(false);
       expect(result.redirectUrl).toContain('/connections?connection_result=');
+      expect(persistence.claimOAuthTransaction).toHaveBeenCalledOnce();
       expect(persistence.recordFailedOAuthCallbackAtomic).toHaveBeenCalledOnce();
+      const failedArgs = vi.mocked(persistence.recordFailedOAuthCallbackAtomic).mock.calls[0]![0];
+      expect(failedArgs.errorCode).toBe('access_denied');
+      expect(failedArgs.errorDescription).toBe('The authorization request was denied.');
+      expect(failedArgs.actorUserId).toBe(ownerUserId);
     });
   });
 
   describe('getSocialCallbackResult', () => {
-    it('consumes callback result atomically for workspace member', async () => {
+    it('consumes callback result atomically for the initiating user', async () => {
       const persistence = createMockPersistence();
       const authPort = createMockAuthPort();
 
@@ -469,12 +671,13 @@ describe('Social Application Use Cases', () => {
         expiresAt: new Date(mockNow.getTime() + 300000).toISOString(),
         consumedAt: mockNow.toISOString(),
         version: 2,
+        initiatedByUserId: ownerUserId,
       });
 
       const result = await getSocialCallbackResult(
         {
           workspaceId: wsId,
-          actorUserId: viewerUserId,
+          actorUserId: ownerUserId,
           resultKey: 'valid-result-key-12345678901234',
         },
         {
@@ -488,7 +691,37 @@ describe('Social Application Use Cases', () => {
       expect(result.status).toBe('success');
       expect(result.platform).toBe('threads');
       expect(result.socialAccountId).toBe('acc-123');
-      expect(persistence.consumeCallbackResult).toHaveBeenCalledOnce();
+      expect(persistence.consumeCallbackResult).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workspaceId: wsId,
+          actorUserId: ownerUserId,
+        }),
+      );
+    });
+
+    it('rejects cross-actor callback consumption with CallbackResultForbiddenError', async () => {
+      const persistence = createMockPersistence();
+      const authPort = createMockAuthPort();
+
+      vi.mocked(persistence.consumeCallbackResult).mockRejectedValue(
+        new CallbackResultForbiddenError(),
+      );
+
+      await expect(
+        getSocialCallbackResult(
+          {
+            workspaceId: wsId,
+            actorUserId: viewerUserId,
+            resultKey: 'valid-result-key-12345678901234',
+          },
+          {
+            persistence,
+            workspaceAuthorization: authPort,
+            enabled: true,
+            clock: { now: () => mockNow },
+          },
+        ),
+      ).rejects.toThrow(CallbackResultForbiddenError);
     });
 
     it('throws CallbackResultGoneError if already consumed or expired', async () => {
@@ -500,7 +733,7 @@ describe('Social Application Use Cases', () => {
         getSocialCallbackResult(
           {
             workspaceId: wsId,
-            actorUserId: viewerUserId,
+            actorUserId: ownerUserId,
             resultKey: 'valid-result-key-12345678901234',
           },
           {

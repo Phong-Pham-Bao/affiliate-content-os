@@ -68,6 +68,32 @@ describe('validate-social configuration', () => {
     ).toThrow(ConfigurationError);
   });
 
+  it('fails closed in production if KMS is configured (not implemented in Checkpoint A)', () => {
+    try {
+      loadSocialConfig(
+        {
+          SOCIAL_AUTH_ENABLED: 'true',
+          SOCIAL_KEY_PROVIDER: 'kms',
+        },
+        'production',
+      );
+      expect.unreachable('Should have thrown ConfigurationError');
+    } catch (err) {
+      expect(err).toBeInstanceOf(ConfigurationError);
+      const confErr = err as ConfigurationError;
+      expect(
+        confErr.issues.some((i) =>
+          i.message.includes('Managed KMS key provider is not implemented'),
+        ),
+      ).toBe(true);
+    }
+  });
+
+  it('permits production startup when social auth is disabled', () => {
+    const config = loadSocialConfig({ SOCIAL_AUTH_ENABLED: 'false' }, 'production');
+    expect(config.enabled).toBe(false);
+  });
+
   it('rejects invalid encryption key (wrong length or padded base64)', () => {
     expect(() =>
       loadSocialConfig({

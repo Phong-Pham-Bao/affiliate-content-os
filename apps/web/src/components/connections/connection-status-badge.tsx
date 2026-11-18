@@ -7,6 +7,7 @@ interface ConnectionStatusBadgeProps {
 
 export function ConnectionStatusBadge({ status }: ConnectionStatusBadgeProps): ReactElement {
   const configs: Record<SocialAccountStatus, { label: string; bg: string; color: string }> = {
+    connecting: { label: 'Đang kết nối (Connecting)', bg: '#f3f4f6', color: '#4b5563' },
     active: { label: 'Đang hoạt động (Active)', bg: '#dcfce7', color: '#15803d' },
     degraded: { label: 'Bị giới hạn (Degraded)', bg: '#fef3c7', color: '#b45309' },
     reauth_required: {

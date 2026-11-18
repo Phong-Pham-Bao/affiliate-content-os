@@ -11,7 +11,7 @@ export const socialAccountSchema = {
     handle: { type: ['string', 'null'] },
     status: {
       type: 'string',
-      enum: ['active', 'degraded', 'reauth_required', 'review_gated', 'disconnected'],
+      enum: ['connecting', 'active', 'degraded', 'reauth_required', 'review_gated', 'disconnected'],
     },
     grantedScopes: { type: 'array', items: { type: 'string' } },
     capabilities: {
@@ -23,7 +23,7 @@ export const socialAccountSchema = {
       },
       additionalProperties: false,
     },
-    capabilitiesCheckedAt: { type: 'string', format: 'date-time' },
+    capabilitiesCheckedAt: { type: ['string', 'null'], format: 'date-time' },
     tokenExpiresAt: { type: ['string', 'null'], format: 'date-time' },
     connectedByUserId: { type: 'string', format: 'uuid' },
     environment: { type: 'string' },

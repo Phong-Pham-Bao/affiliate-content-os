@@ -7,7 +7,10 @@ interface ConnectionCardProps {
 }
 
 export function ConnectionCard({ account }: ConnectionCardProps): ReactElement {
-  const isLocal = account.environment === 'local' || account.environment === 'sandbox';
+  const isLocal =
+    account.environment === 'local' ||
+    account.environment === 'sandbox' ||
+    account.environment === 'test';
 
   return (
     <div

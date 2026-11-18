@@ -1,12 +1,22 @@
 import {
   generateUuidV7,
+  CallbackResultForbiddenError,
+  CallbackResultGoneError,
+  CallbackResultNotFoundError,
+  IdempotencyKeyReusedError,
+  OAuthCallbackInvalidError,
   OAuthTransactionExpiredError,
+  OAuthTransactionNotFoundError,
   OAuthTransactionReplayedError,
+  type ClaimOAuthTransactionParams,
+  type ClaimedOAuthTransaction,
   type CompleteOAuthCallbackAtomicParams,
   type CompleteOAuthCallbackAtomicResult,
   type ConsumeCallbackResultParams,
   type RecordFailedOAuthCallbackParams,
   type SaveOAuthTransactionParams,
+  type SaveOAuthTransactionWithIdempotencyParams,
+  type SaveOAuthTransactionWithIdempotencyResult,
   type SocialPersistencePort,
 } from '@affiliate-content-os/application';
 import {
@@ -24,6 +34,17 @@ export class InMemorySocialPersistence implements SocialPersistencePort {
   public transactions = new Map<string, OAuthTransactionSnapshot>();
   public accounts = new Map<string, SocialAccountSnapshot>();
   public callbackResults = new Map<string, OAuthCallbackResultSnapshot>();
+  public idempotencyKeys = new Map<
+    string,
+    {
+      readonly principalId: string;
+      readonly routeKey: string;
+      readonly keyHash: Uint8Array;
+      readonly requestHash: Uint8Array;
+      readonly response: unknown;
+      readonly expiresAt: string;
+    }
+  >();
 
   public async saveOAuthTransaction(
     params: SaveOAuthTransactionParams,
@@ -38,6 +59,8 @@ export class InMemorySocialPersistence implements SocialPersistencePort {
       returnTo: params.returnTo,
       requestedScopes: Object.freeze([...params.requestedScopes]),
       status: 'pending',
+      claimedAt: null,
+      claimedExpiresAt: null,
       consumedAt: null,
       createdAt: params.createdAt,
       expiresAt: params.expiresAt,
@@ -45,6 +68,93 @@ export class InMemorySocialPersistence implements SocialPersistencePort {
     };
     this.transactions.set(tx.id, tx);
     return tx;
+  }
+
+  public async saveOAuthTransactionWithIdempotency(
+    params: SaveOAuthTransactionWithIdempotencyParams,
+  ): Promise<SaveOAuthTransactionWithIdempotencyResult> {
+    const idempKey = `${params.workspaceId}:${params.initiatedByUserId}:${params.routeKey}:${Buffer.from(params.keyHash).toString('hex')}`;
+    const existing = this.idempotencyKeys.get(idempKey);
+
+    if (existing) {
+      if (new Date(existing.expiresAt).getTime() <= new Date(params.createdAt).getTime()) {
+        this.idempotencyKeys.delete(idempKey);
+      } else {
+        if (!Buffer.from(existing.requestHash).equals(Buffer.from(params.requestHash))) {
+          throw new IdempotencyKeyReusedError();
+        }
+        return {
+          replayed: true,
+          response: existing.response as SaveOAuthTransactionWithIdempotencyResult['response'],
+        };
+      }
+    }
+
+    await this.saveOAuthTransaction(params);
+    this.idempotencyKeys.set(idempKey, {
+      principalId: params.initiatedByUserId,
+      routeKey: params.routeKey,
+      keyHash: params.keyHash,
+      requestHash: params.requestHash,
+      response: params.responseData,
+      expiresAt: params.expiresAt,
+    });
+
+    return {
+      replayed: false,
+      response: params.responseData,
+    };
+  }
+
+  public async claimOAuthTransaction(
+    params: ClaimOAuthTransactionParams,
+  ): Promise<ClaimedOAuthTransaction> {
+    const hashBuf = Buffer.from(params.stateHash);
+    let matchedTx: OAuthTransactionSnapshot | undefined;
+
+    for (const tx of this.transactions.values()) {
+      if (Buffer.from(tx.stateHash).equals(hashBuf)) {
+        matchedTx = tx;
+        break;
+      }
+    }
+
+    if (!matchedTx) {
+      throw new OAuthTransactionNotFoundError();
+    }
+    if (matchedTx.platform !== params.platform) {
+      throw new OAuthCallbackInvalidError('Platform mismatch for OAuth transaction.');
+    }
+    if (new Date(matchedTx.expiresAt).getTime() <= new Date(params.now).getTime()) {
+      throw new OAuthTransactionExpiredError('OAuth transaction has expired.');
+    }
+    if (matchedTx.status !== 'pending') {
+      throw new OAuthTransactionReplayedError(
+        'OAuth transaction state has already been claimed or consumed.',
+      );
+    }
+
+    const claimedTx: OAuthTransactionSnapshot = {
+      ...matchedTx,
+      status: 'claimed',
+      claimedAt: params.now,
+      version: matchedTx.version + 1,
+    };
+    this.transactions.set(claimedTx.id, claimedTx);
+
+    return {
+      id: claimedTx.id,
+      workspaceId: claimedTx.workspaceId,
+      platform: claimedTx.platform,
+      initiatedByUserId: claimedTx.initiatedByUserId,
+      redirectUri: claimedTx.redirectUri,
+      returnTo: claimedTx.returnTo,
+      requestedScopes: claimedTx.requestedScopes,
+      createdAt: claimedTx.createdAt,
+      expiresAt: claimedTx.expiresAt,
+      claimedAt: params.now,
+      version: claimedTx.version,
+    };
   }
 
   public async findPendingTransactionByStateHash(
@@ -69,8 +179,10 @@ export class InMemorySocialPersistence implements SocialPersistencePort {
     if (tx.status === 'consumed') {
       throw new OAuthTransactionReplayedError('Transaction already consumed');
     }
-    if (new Date(tx.expiresAt).getTime() <= new Date(params.now).getTime()) {
-      throw new OAuthTransactionExpiredError('Transaction expired');
+    if (tx.status !== 'claimed') {
+      throw new OAuthTransactionReplayedError(
+        `Transaction in status ${tx.status}; must be claimed`,
+      );
     }
 
     const updatedTx: OAuthTransactionSnapshot = {
@@ -96,6 +208,9 @@ export class InMemorySocialPersistence implements SocialPersistencePort {
     }
 
     const accountId = existingAccount ? existingAccount.id : parseSocialAccountId(generateUuidV7());
+    // Authoritatively encrypt credentials with resolved accountId
+    params.encryptCredentials(accountId);
+
     const account: SocialAccountSnapshot = {
       id: accountId,
       workspaceId: parseWorkspaceId(params.workspaceId),
@@ -121,6 +236,7 @@ export class InMemorySocialPersistence implements SocialPersistencePort {
       id: parseCallbackResultId(generateUuidV7()),
       workspaceId: parseWorkspaceId(params.workspaceId),
       transactionId: parseOAuthTransactionId(params.transactionId),
+      initiatedByUserId: parseUserId(params.actorUserId),
       resultKeyHash: Buffer.from(params.resultKeyHash),
       status: 'success',
       platform: params.platform,
@@ -141,19 +257,22 @@ export class InMemorySocialPersistence implements SocialPersistencePort {
     params: RecordFailedOAuthCallbackParams,
   ): Promise<OAuthCallbackResultSnapshot> {
     const tx = this.transactions.get(params.transactionId);
-    if (tx) {
-      this.transactions.set(tx.id, {
-        ...tx,
-        status: 'failed',
-        consumedAt: params.now,
-        version: tx.version + 1,
-      });
+    if (!tx || tx.status !== 'claimed') {
+      throw new OAuthTransactionReplayedError('Transaction not in claimed state');
     }
+
+    this.transactions.set(tx.id, {
+      ...tx,
+      status: 'failed',
+      consumedAt: params.now,
+      version: tx.version + 1,
+    });
 
     const callbackResult: OAuthCallbackResultSnapshot = {
       id: parseCallbackResultId(generateUuidV7()),
       workspaceId: parseWorkspaceId(params.workspaceId),
       transactionId: parseOAuthTransactionId(params.transactionId),
+      initiatedByUserId: parseUserId(params.actorUserId),
       resultKeyHash: Buffer.from(params.resultKeyHash),
       status: 'failed',
       platform: params.platform,
@@ -173,23 +292,42 @@ export class InMemorySocialPersistence implements SocialPersistencePort {
     params: ConsumeCallbackResultParams,
   ): Promise<OAuthCallbackResultSnapshot | null> {
     const keyHashBuf = Buffer.from(params.resultKeyHash);
-    for (const [id, res] of this.callbackResults.entries()) {
+    let foundResult: OAuthCallbackResultSnapshot | undefined;
+
+    for (const res of this.callbackResults.values()) {
       if (
         res.workspaceId === params.workspaceId &&
-        Buffer.from(res.resultKeyHash).equals(keyHashBuf) &&
-        res.consumedAt === null &&
-        new Date(res.expiresAt).getTime() > new Date(params.now).getTime()
+        Buffer.from(res.resultKeyHash).equals(keyHashBuf)
       ) {
-        const consumed: OAuthCallbackResultSnapshot = {
-          ...res,
-          consumedAt: params.now,
-          version: res.version + 1,
-        };
-        this.callbackResults.set(id, consumed);
-        return consumed;
+        foundResult = res;
+        break;
       }
     }
-    return null;
+
+    if (!foundResult) {
+      throw new CallbackResultNotFoundError('OAuth callback result was not found.');
+    }
+
+    if (foundResult.initiatedByUserId !== params.actorUserId) {
+      throw new CallbackResultForbiddenError('Not authorized to consume this callback result.');
+    }
+
+    if (
+      foundResult.consumedAt !== null ||
+      new Date(foundResult.expiresAt).getTime() <= new Date(params.now).getTime()
+    ) {
+      throw new CallbackResultGoneError(
+        'OAuth callback result has expired or has already been consumed.',
+      );
+    }
+
+    const consumed: OAuthCallbackResultSnapshot = {
+      ...foundResult,
+      consumedAt: params.now,
+      version: foundResult.version + 1,
+    };
+    this.callbackResults.set(foundResult.id, consumed);
+    return consumed;
   }
 
   public async listSocialAccounts(params: {

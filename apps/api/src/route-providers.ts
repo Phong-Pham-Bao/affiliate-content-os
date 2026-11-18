@@ -11,14 +11,12 @@ import type { PostgresTenancyAdapter } from '@affiliate-content-os/infrastructur
 import type { PostgresCatalogAdapter } from '@affiliate-content-os/infrastructure/catalog';
 import type { PostgresAnalysisAdapter } from '@affiliate-content-os/infrastructure/analysis';
 import type { PostgresWorkforceAdapter } from '@affiliate-content-os/infrastructure/workforce';
-import type {
-  LocalSocialCredentialProtector,
-  PostgresSocialPersistenceAdapter,
-} from '@affiliate-content-os/infrastructure/social';
+import type { PostgresSocialPersistenceAdapter } from '@affiliate-content-os/infrastructure/social';
 import type {
   ClockPort,
   DefaultIdGenerator,
   SocialAuthAdapter,
+  SocialCredentialProtectorPort,
 } from '@affiliate-content-os/application';
 import type { SocialPlatform } from '@affiliate-content-os/domain';
 import type { AuthDependencies } from './auth/index.js';
@@ -35,7 +33,7 @@ export interface RouteProvidersContext {
   readonly analysisAdapter: PostgresAnalysisAdapter;
   readonly workforceAdapter: PostgresWorkforceAdapter;
   readonly socialPersistence: PostgresSocialPersistenceAdapter;
-  readonly socialProtector: LocalSocialCredentialProtector;
+  readonly socialProtector?: SocialCredentialProtectorPort | undefined;
   readonly socialAdapters: ReadonlyMap<SocialPlatform, SocialAuthAdapter>;
   readonly clock: ClockPort;
   readonly idGenerator: DefaultIdGenerator;

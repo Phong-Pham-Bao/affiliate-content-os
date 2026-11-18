@@ -156,4 +156,80 @@ describe('LocalSocialCredentialProtector', () => {
       }),
     ).toThrow(SocialCredentialEncryptionError);
   });
+
+  describe('PKCE Verifier encryption', () => {
+    const transactionId = '018f3a2c-4e5b-7c8d-9e0f-3a4b5c6d7e8f';
+    const verifier = 'high-entropy-pkce-code-verifier-string-0123456789';
+
+    it('encrypts and decrypts PKCE verifier successfully (round-trip)', () => {
+      const protector = new LocalSocialCredentialProtector(validKey, keyVersion);
+
+      const encrypted = protector.encryptOAuthVerifier({
+        workspaceId,
+        transactionId,
+        platform,
+        codeVerifier: verifier,
+      });
+
+      expect(encrypted.ciphertext.length).toBeGreaterThan(0);
+      expect(encrypted.iv).toHaveLength(12);
+      expect(encrypted.authTag).toHaveLength(16);
+      expect(encrypted.keyVersion).toBe(keyVersion);
+
+      const decrypted = protector.decryptOAuthVerifier({
+        workspaceId,
+        transactionId,
+        platform,
+        encryptedVerifier: encrypted,
+      });
+
+      expect(decrypted).toBe(verifier);
+    });
+
+    it('fails PKCE decryption if transactionId AAD is swapped', () => {
+      const protector = new LocalSocialCredentialProtector(validKey, keyVersion);
+
+      const encrypted = protector.encryptOAuthVerifier({
+        workspaceId,
+        transactionId,
+        platform,
+        codeVerifier: verifier,
+      });
+
+      expect(() =>
+        protector.decryptOAuthVerifier({
+          workspaceId,
+          transactionId: '018f3a2c-4e5b-7c8d-9e0f-999999999999',
+          platform,
+          encryptedVerifier: encrypted,
+        }),
+      ).toThrow(SocialCredentialEncryptionError);
+    });
+
+    it('fails PKCE decryption if ciphertext or tag is tampered with', () => {
+      const protector = new LocalSocialCredentialProtector(validKey, keyVersion);
+
+      const encrypted = protector.encryptOAuthVerifier({
+        workspaceId,
+        transactionId,
+        platform,
+        codeVerifier: verifier,
+      });
+
+      const tampered = new Uint8Array(encrypted.ciphertext);
+      tampered[0] = tampered[0]! ^ 0x01;
+
+      expect(() =>
+        protector.decryptOAuthVerifier({
+          workspaceId,
+          transactionId,
+          platform,
+          encryptedVerifier: {
+            ...encrypted,
+            ciphertext: tampered,
+          },
+        }),
+      ).toThrow(SocialCredentialEncryptionError);
+    });
+  });
 });

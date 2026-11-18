@@ -55,6 +55,13 @@ export interface EncryptedSocialCredentials {
   readonly keyVersion: string;
 }
 
+export interface EncryptedOAuthVerifier {
+  readonly ciphertext: Uint8Array;
+  readonly iv: Uint8Array;
+  readonly authTag: Uint8Array;
+  readonly keyVersion: string;
+}
+
 export interface DecryptedSocialCredentials {
   readonly accessToken: string;
   readonly refreshToken: string | null;
@@ -74,12 +81,58 @@ export interface SocialCredentialProtectorPort {
     readonly platform: SocialPlatform;
     readonly credentials: EncryptedSocialCredentials;
   }): DecryptedSocialCredentials;
+  encryptOAuthVerifier(params: {
+    readonly workspaceId: string;
+    readonly transactionId: string;
+    readonly platform: SocialPlatform;
+    readonly codeVerifier: string;
+  }): EncryptedOAuthVerifier;
+  decryptOAuthVerifier(params: {
+    readonly workspaceId: string;
+    readonly transactionId: string;
+    readonly platform: SocialPlatform;
+    readonly encryptedVerifier: EncryptedOAuthVerifier;
+  }): string;
 }
 
 export interface SocialAuditContext {
   readonly ipHash?: string | null | undefined;
   readonly userAgentSummary?: string | null | undefined;
   readonly correlationId?: string | null | undefined;
+}
+
+export interface AuthorizeResponseData {
+  readonly authorizationUrl: string;
+  readonly transactionId: string;
+  readonly expiresAt: string;
+}
+
+export interface SaveOAuthTransactionWithIdempotencyParams {
+  readonly id: string;
+  readonly workspaceId: string;
+  readonly platform: SocialPlatform;
+  readonly initiatedByUserId: string;
+  readonly stateHash: Uint8Array;
+  readonly pkceVerifierCiphertext?: Uint8Array | null | undefined;
+  readonly pkceVerifierIv?: Uint8Array | null | undefined;
+  readonly pkceVerifierAuthTag?: Uint8Array | null | undefined;
+  readonly encryptionKeyVersion?: string | null | undefined;
+  readonly redirectUri: string;
+  readonly returnTo: string;
+  readonly requestedScopes: readonly string[];
+  readonly createdAt: string;
+  readonly expiresAt: string;
+  readonly idempotencyKey: string;
+  readonly keyHash: Uint8Array;
+  readonly requestHash: Uint8Array;
+  readonly routeKey: string;
+  readonly responseData: AuthorizeResponseData;
+  readonly auditContext?: SocialAuditContext | undefined;
+}
+
+export interface SaveOAuthTransactionWithIdempotencyResult {
+  readonly replayed: boolean;
+  readonly response: AuthorizeResponseData;
 }
 
 export interface SaveOAuthTransactionParams {
@@ -99,6 +152,28 @@ export interface SaveOAuthTransactionParams {
   readonly createdAt: string;
 }
 
+export interface ClaimOAuthTransactionParams {
+  readonly stateHash: Uint8Array;
+  readonly platform: SocialPlatform;
+  readonly now: string;
+  readonly claimTtlSeconds: number;
+}
+
+export interface ClaimedOAuthTransaction {
+  readonly id: string;
+  readonly workspaceId: string;
+  readonly platform: SocialPlatform;
+  readonly initiatedByUserId: string;
+  readonly redirectUri: string;
+  readonly returnTo: string;
+  readonly requestedScopes: readonly string[];
+  readonly encryptedVerifier?: EncryptedOAuthVerifier | undefined;
+  readonly createdAt: string;
+  readonly expiresAt: string;
+  readonly claimedAt: string;
+  readonly version: number;
+}
+
 export interface CompleteOAuthCallbackAtomicParams {
   readonly transactionId: string;
   readonly stateHash: Uint8Array;
@@ -113,7 +188,7 @@ export interface CompleteOAuthCallbackAtomicParams {
   readonly capabilitiesCheckedAt: string;
   readonly tokenExpiresAt: string | null;
   readonly environment: SocialAccountEnvironment;
-  readonly encryptedCredentials: EncryptedSocialCredentials;
+  readonly encryptCredentials: (accountId: string) => EncryptedSocialCredentials;
   readonly resultKeyHash: Uint8Array;
   readonly resultExpiresAt: string;
   readonly now: string;
@@ -130,6 +205,7 @@ export interface RecordFailedOAuthCallbackParams {
   readonly stateHash: Uint8Array;
   readonly workspaceId: string;
   readonly platform: SocialPlatform;
+  readonly actorUserId: string;
   readonly errorCode: string;
   readonly errorDescription: string;
   readonly resultKeyHash: Uint8Array;
@@ -140,12 +216,17 @@ export interface RecordFailedOAuthCallbackParams {
 
 export interface ConsumeCallbackResultParams {
   readonly workspaceId: string;
+  readonly actorUserId: string;
   readonly resultKeyHash: Uint8Array;
   readonly now: string;
 }
 
 export interface SocialPersistencePort {
   saveOAuthTransaction(params: SaveOAuthTransactionParams): Promise<OAuthTransactionSnapshot>;
+  saveOAuthTransactionWithIdempotency(
+    params: SaveOAuthTransactionWithIdempotencyParams,
+  ): Promise<SaveOAuthTransactionWithIdempotencyResult>;
+  claimOAuthTransaction(params: ClaimOAuthTransactionParams): Promise<ClaimedOAuthTransaction>;
   findPendingTransactionByStateHash(
     stateHash: Uint8Array,
   ): Promise<OAuthTransactionSnapshot | null>;

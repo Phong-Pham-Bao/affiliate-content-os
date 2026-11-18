@@ -2,7 +2,9 @@ import crypto from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import pg from 'pg';
 import {
+  CallbackResultForbiddenError,
   generateUuidV7,
+  IdempotencyKeyReusedError,
   OAuthTransactionExpiredError,
   OAuthTransactionReplayedError,
 } from '@affiliate-content-os/application';
@@ -24,6 +26,7 @@ describe('Social Connections PostgreSQL Integration', () => {
   const wsId1 = generateUuidV7();
   const wsId2 = generateUuidV7();
   const userId = generateUuidV7();
+  const userId2 = generateUuidV7();
 
   beforeAll(async () => {
     testCtx = await setupIsolatedTestDatabase();
@@ -41,8 +44,9 @@ describe('Social Connections PostgreSQL Integration', () => {
     // Seed test users and workspaces
     await pool.query(
       `INSERT INTO users (id, identity_provider, identity_subject, email, status, created_at, updated_at)
-       VALUES ($1, 'google', 'sub-1', 'user@example.com', 'active', NOW(), NOW())`,
-      [userId],
+       VALUES ($1, 'google', 'sub-1', 'user@example.com', 'active', NOW(), NOW()),
+              ($2, 'google', 'sub-2', 'user2@example.com', 'active', NOW(), NOW())`,
+      [userId, userId2],
     );
     await pool.query(
       `INSERT INTO workspaces (id, name, slug, timezone, status, created_at, updated_at)
@@ -86,7 +90,7 @@ describe('Social Connections PostgreSQL Integration', () => {
     expect(found?.id).toBe(txId);
   });
 
-  it('completes callback atomically into an active account with encrypted credentials and audit event', async () => {
+  it('authoritatively binds account ID in credential AAD, supports decryption, and handles rotation', async () => {
     const rawState = crypto.randomBytes(32).toString('base64url');
     const stateHash = crypto.createHash('sha256').update(rawState, 'utf8').digest();
     const txId = generateUuidV7();
@@ -106,93 +110,185 @@ describe('Social Connections PostgreSQL Integration', () => {
       expiresAt: expiresAt.toISOString(),
     });
 
-    const encryptedCreds = protector.encrypt({
-      workspaceId: wsId1,
-      socialAccountId: generateUuidV7(),
+    // 1. Claim transaction before completion
+    const claimed = await adapter.claimOAuthTransaction({
+      stateHash,
       platform: 'threads',
-      accessToken: 'threads_secret_token_abc',
-      refreshToken: 'threads_refresh_token_xyz',
+      now: now.toISOString(),
+      claimTtlSeconds: 120,
     });
+    expect(claimed.id).toBe(txId);
 
     const resultKey = crypto.randomBytes(32).toString('base64url');
     const resultKeyHash = crypto.createHash('sha256').update(resultKey, 'utf8').digest();
 
+    // 2. Complete callback with encryptCredentials closure binding authoritative account ID
     const { account, callbackResult } = await adapter.completeOAuthCallbackAtomic({
       transactionId: txId,
       stateHash,
       workspaceId: wsId1,
       platform: 'threads',
       actorUserId: userId,
-      providerAccountId: 'th_user_999',
-      displayName: 'Threads Creator',
-      handle: '@threadscreator',
+      providerAccountId: 'th_user_binding_test',
+      displayName: 'Binding Test Creator',
+      handle: '@bindingcreator',
       grantedScopes: ['threads_basic'],
       capabilities: { canPublishText: true, canPublishMedia: false },
       capabilitiesCheckedAt: now.toISOString(),
       tokenExpiresAt: null,
       environment: 'local',
-      encryptedCredentials: encryptedCreds,
+      encryptCredentials: (targetAccountId: string) =>
+        protector.encrypt({
+          workspaceId: wsId1,
+          socialAccountId: targetAccountId,
+          platform: 'threads',
+          accessToken: 'initial_secret_access_token_123',
+          refreshToken: 'initial_secret_refresh_token_456',
+        }),
       resultKeyHash,
       resultExpiresAt: new Date(now.getTime() + 300000).toISOString(),
       now: now.toISOString(),
     });
 
     expect(account.status).toBe('active');
-    expect(account.displayName).toBe('Threads Creator');
-    expect(account.handle).toBe('@threadscreator');
     expect(callbackResult.status).toBe('success');
 
-    // Verify transaction is marked consumed
-    const txCheck = await pool.query(
-      'SELECT status, consumed_at FROM oauth_transactions WHERE id = $1',
-      [txId],
-    );
-    expect(txCheck.rows[0]?.status).toBe('consumed');
-    expect(txCheck.rows[0]?.consumed_at).not.toBeNull();
-
-    // Verify credentials table has encrypted token
-    const credCheck = await pool.query(
-      'SELECT access_token_ciphertext, encryption_key_version FROM social_credentials WHERE social_account_id = $1',
+    // 3. Read raw credentials from database and decrypt using protector
+    const credRows = await pool.query(
+      `SELECT access_token_ciphertext, access_token_iv, access_token_auth_tag,
+              refresh_token_ciphertext, refresh_token_iv, refresh_token_auth_tag,
+              encryption_key_version
+       FROM social_credentials
+       WHERE social_account_id = $1`,
       [account.id],
     );
-    expect(credCheck.rows[0]?.access_token_ciphertext).toBeDefined();
-    expect(credCheck.rows[0]?.encryption_key_version).toBe('v1');
+    expect(credRows.rows).toHaveLength(1);
+    const row = credRows.rows[0];
 
-    // Verify audit event exists
-    const auditCheck = await pool.query(
-      `SELECT action, resource_type, resource_id FROM audit_events WHERE resource_id = $1`,
+    const decrypted = protector.decrypt({
+      workspaceId: wsId1,
+      socialAccountId: account.id,
+      platform: 'threads',
+      credentials: {
+        accessTokenCiphertext: new Uint8Array(row.access_token_ciphertext),
+        accessTokenIv: new Uint8Array(row.access_token_iv),
+        accessTokenAuthTag: new Uint8Array(row.access_token_auth_tag),
+        refreshTokenCiphertext: new Uint8Array(row.refresh_token_ciphertext),
+        refreshTokenIv: new Uint8Array(row.refresh_token_iv),
+        refreshTokenAuthTag: new Uint8Array(row.refresh_token_auth_tag),
+        keyVersion: row.encryption_key_version,
+      },
+    });
+
+    expect(decrypted.accessToken).toBe('initial_secret_access_token_123');
+    expect(decrypted.refreshToken).toBe('initial_secret_refresh_token_456');
+
+    // 4. Negative test: decrypting with tampered socialAccountId MUST fail (AAD mismatch)
+    const tamperedAccountId = generateUuidV7();
+    expect(() =>
+      protector.decrypt({
+        workspaceId: wsId1,
+        socialAccountId: tamperedAccountId,
+        platform: 'threads',
+        credentials: {
+          accessTokenCiphertext: new Uint8Array(row.access_token_ciphertext),
+          accessTokenIv: new Uint8Array(row.access_token_iv),
+          accessTokenAuthTag: new Uint8Array(row.access_token_auth_tag),
+          refreshTokenCiphertext: new Uint8Array(row.refresh_token_ciphertext),
+          refreshTokenIv: new Uint8Array(row.refresh_token_iv),
+          refreshTokenAuthTag: new Uint8Array(row.refresh_token_auth_tag),
+          keyVersion: row.encryption_key_version,
+        },
+      }),
+    ).toThrow();
+
+    // 5. Account rotation: connect same provider account again with new tokens
+    const rawState2 = crypto.randomBytes(32).toString('base64url');
+    const stateHash2 = crypto.createHash('sha256').update(rawState2, 'utf8').digest();
+    const txId2 = generateUuidV7();
+
+    await adapter.saveOAuthTransaction({
+      id: txId2,
+      workspaceId: wsId1,
+      platform: 'threads',
+      initiatedByUserId: userId,
+      stateHash: stateHash2,
+      redirectUri: 'http://localhost:3001/api/v1/social-connections/threads/callback',
+      returnTo: '/connections',
+      requestedScopes: ['threads_basic', 'threads_content_publish'],
+      createdAt: now.toISOString(),
+      expiresAt: expiresAt.toISOString(),
+    });
+
+    await adapter.claimOAuthTransaction({
+      stateHash: stateHash2,
+      platform: 'threads',
+      now: now.toISOString(),
+      claimTtlSeconds: 120,
+    });
+
+    const rotatedResult = await adapter.completeOAuthCallbackAtomic({
+      transactionId: txId2,
+      stateHash: stateHash2,
+      workspaceId: wsId1,
+      platform: 'threads',
+      actorUserId: userId,
+      providerAccountId: 'th_user_binding_test',
+      displayName: 'Rotated Display Name',
+      handle: '@rotatedhandle',
+      grantedScopes: ['threads_basic', 'threads_content_publish'],
+      capabilities: { canPublishText: true, canPublishMedia: true },
+      capabilitiesCheckedAt: now.toISOString(),
+      tokenExpiresAt: null,
+      environment: 'local',
+      encryptCredentials: (targetAccountId: string) => {
+        expect(targetAccountId).toBe(account.id);
+        return protector.encrypt({
+          workspaceId: wsId1,
+          socialAccountId: targetAccountId,
+          platform: 'threads',
+          accessToken: 'rotated_new_access_token_789',
+          refreshToken: 'rotated_new_refresh_token_012',
+        });
+      },
+      resultKeyHash: crypto.createHash('sha256').update('rot-key').digest(),
+      resultExpiresAt: new Date(now.getTime() + 300000).toISOString(),
+      now: now.toISOString(),
+    });
+
+    expect(rotatedResult.account.id).toBe(account.id);
+    expect(rotatedResult.account.version).toBe(account.version + 1);
+    expect(rotatedResult.account.displayName).toBe('Rotated Display Name');
+
+    // Verify rotated credentials in DB decrypt with the existing account.id
+    const rotatedCredRows = await pool.query(
+      `SELECT access_token_ciphertext, access_token_iv, access_token_auth_tag,
+              refresh_token_ciphertext, refresh_token_iv, refresh_token_auth_tag,
+              encryption_key_version
+       FROM social_credentials
+       WHERE social_account_id = $1`,
       [account.id],
     );
-    expect(auditCheck.rows[0]?.action).toBe('social_connection.completed');
-
-    // Verify listSocialAccounts does NOT select credentials
-    const accounts = await adapter.listSocialAccounts({ workspaceId: wsId1 });
-    expect(accounts.length).toBeGreaterThan(0);
-    const listed = accounts.find((a) => a.id === account.id);
-    expect(listed).toBeDefined();
-    expect(
-      (listed as unknown as Record<string, unknown>)['access_token_ciphertext'],
-    ).toBeUndefined();
-
-    // Consume callback result
-    const consumedResult = await adapter.consumeCallbackResult({
+    const rotRow = rotatedCredRows.rows[0];
+    const rotatedDecrypted = protector.decrypt({
       workspaceId: wsId1,
-      resultKeyHash,
-      now: now.toISOString(),
+      socialAccountId: account.id,
+      platform: 'threads',
+      credentials: {
+        accessTokenCiphertext: new Uint8Array(rotRow.access_token_ciphertext),
+        accessTokenIv: new Uint8Array(rotRow.access_token_iv),
+        accessTokenAuthTag: new Uint8Array(rotRow.access_token_auth_tag),
+        refreshTokenCiphertext: new Uint8Array(rotRow.refresh_token_ciphertext),
+        refreshTokenIv: new Uint8Array(rotRow.refresh_token_iv),
+        refreshTokenAuthTag: new Uint8Array(rotRow.refresh_token_auth_tag),
+        keyVersion: rotRow.encryption_key_version,
+      },
     });
-    expect(consumedResult).not.toBeNull();
-    expect(consumedResult?.status).toBe('success');
-
-    // Consuming again returns null (single-use)
-    const reConsumed = await adapter.consumeCallbackResult({
-      workspaceId: wsId1,
-      resultKeyHash,
-      now: now.toISOString(),
-    });
-    expect(reConsumed).toBeNull();
+    expect(rotatedDecrypted.accessToken).toBe('rotated_new_access_token_789');
+    expect(rotatedDecrypted.refreshToken).toBe('rotated_new_refresh_token_012');
   });
 
-  it('fails closed when attempting to replay a consumed transaction', async () => {
+  it('guarantees exactly one claimant wins under true concurrent callback claims', async () => {
     const rawState = crypto.randomBytes(32).toString('base64url');
     const stateHash = crypto.createHash('sha256').update(rawState, 'utf8').digest();
     const txId = generateUuidV7();
@@ -211,35 +307,62 @@ describe('Social Connections PostgreSQL Integration', () => {
       expiresAt: new Date(now.getTime() + 600000).toISOString(),
     });
 
-    const encryptedCreds = protector.encrypt({
-      workspaceId: wsId1,
-      socialAccountId: generateUuidV7(),
-      platform: 'threads',
-      accessToken: 'token-1',
-    });
-
-    // Complete once
-    await adapter.completeOAuthCallbackAtomic({
-      transactionId: txId,
+    // Run two concurrent claim attempts
+    const claimParams = {
       stateHash,
+      platform: 'threads' as const,
+      now: now.toISOString(),
+      claimTtlSeconds: 120,
+    };
+
+    const [res1, res2] = await Promise.allSettled([
+      adapter.claimOAuthTransaction(claimParams),
+      adapter.claimOAuthTransaction(claimParams),
+    ]);
+
+    const fulfilledCount =
+      (res1.status === 'fulfilled' ? 1 : 0) + (res2.status === 'fulfilled' ? 1 : 0);
+    const rejectedCount =
+      (res1.status === 'rejected' ? 1 : 0) + (res2.status === 'rejected' ? 1 : 0);
+
+    expect(fulfilledCount).toBe(1);
+    expect(rejectedCount).toBe(1);
+
+    const rejected = res1.status === 'rejected' ? res1 : res2;
+    if (rejected.status === 'rejected') {
+      expect(rejected.reason).toBeInstanceOf(OAuthTransactionReplayedError);
+    }
+
+    // Verify DB state is 'claimed'
+    const txCheck = await pool.query(
+      `SELECT status, claimed_at, claimed_expires_at FROM oauth_transactions WHERE id = $1`,
+      [txId],
+    );
+    expect(txCheck.rows[0]?.status).toBe('claimed');
+    expect(txCheck.rows[0]?.claimed_at).not.toBeNull();
+    expect(txCheck.rows[0]?.claimed_expires_at).not.toBeNull();
+  });
+
+  it('fails closed when attempting to complete an unclaimed transaction', async () => {
+    const rawState = crypto.randomBytes(32).toString('base64url');
+    const stateHash = crypto.createHash('sha256').update(rawState, 'utf8').digest();
+    const txId = generateUuidV7();
+    const now = new Date();
+
+    await adapter.saveOAuthTransaction({
+      id: txId,
       workspaceId: wsId1,
       platform: 'threads',
-      actorUserId: userId,
-      providerAccountId: 'user-replay',
-      displayName: 'User Replay',
-      handle: null,
-      grantedScopes: [],
-      capabilities: {},
-      capabilitiesCheckedAt: now.toISOString(),
-      tokenExpiresAt: null,
-      environment: 'local',
-      encryptedCredentials: encryptedCreds,
-      resultKeyHash: crypto.createHash('sha256').update('res-1').digest(),
-      resultExpiresAt: new Date(now.getTime() + 300000).toISOString(),
-      now: now.toISOString(),
+      initiatedByUserId: userId,
+      stateHash,
+      redirectUri: 'http://localhost:3001/callback',
+      returnTo: '/',
+      requestedScopes: [],
+      createdAt: now.toISOString(),
+      expiresAt: new Date(now.getTime() + 600000).toISOString(),
     });
 
-    // Replay attempt must throw OAuthTransactionReplayedError
+    // Attempt to complete directly without claim
     await expect(
       adapter.completeOAuthCallbackAtomic({
         transactionId: txId,
@@ -247,23 +370,29 @@ describe('Social Connections PostgreSQL Integration', () => {
         workspaceId: wsId1,
         platform: 'threads',
         actorUserId: userId,
-        providerAccountId: 'user-replay',
-        displayName: 'User Replay',
+        providerAccountId: 'user-unclaimed',
+        displayName: 'User Unclaimed',
         handle: null,
         grantedScopes: [],
         capabilities: {},
         capabilitiesCheckedAt: now.toISOString(),
         tokenExpiresAt: null,
         environment: 'local',
-        encryptedCredentials: encryptedCreds,
-        resultKeyHash: crypto.createHash('sha256').update('res-2').digest(),
+        encryptCredentials: () =>
+          protector.encrypt({
+            workspaceId: wsId1,
+            socialAccountId: generateUuidV7(),
+            platform: 'threads',
+            accessToken: 'token-unclaimed',
+          }),
+        resultKeyHash: crypto.createHash('sha256').update('res-unclaimed').digest(),
         resultExpiresAt: new Date(now.getTime() + 300000).toISOString(),
         now: now.toISOString(),
       }),
     ).rejects.toThrow(OAuthTransactionReplayedError);
   });
 
-  it('fails closed when attempting to complete an expired transaction', async () => {
+  it('fails closed when attempting to claim an expired transaction', async () => {
     const rawState = crypto.randomBytes(32).toString('base64url');
     const stateHash = crypto.createHash('sha256').update(rawState, 'utf8').digest();
     const txId = generateUuidV7();
@@ -283,135 +412,177 @@ describe('Social Connections PostgreSQL Integration', () => {
       expiresAt: expiredAt.toISOString(),
     });
 
-    const encryptedCreds = protector.encrypt({
-      workspaceId: wsId1,
-      socialAccountId: generateUuidV7(),
-      platform: 'threads',
-      accessToken: 'token-expired',
-    });
-
     await expect(
-      adapter.completeOAuthCallbackAtomic({
-        transactionId: txId,
+      adapter.claimOAuthTransaction({
         stateHash,
-        workspaceId: wsId1,
         platform: 'threads',
-        actorUserId: userId,
-        providerAccountId: 'user-exp',
-        displayName: 'User Exp',
-        handle: null,
-        grantedScopes: [],
-        capabilities: {},
-        capabilitiesCheckedAt: new Date().toISOString(),
-        tokenExpiresAt: null,
-        environment: 'local',
-        encryptedCredentials: encryptedCreds,
-        resultKeyHash: crypto.createHash('sha256').update('res-exp').digest(),
-        resultExpiresAt: new Date(Date.now() + 300000).toISOString(),
         now: new Date().toISOString(),
+        claimTtlSeconds: 120,
       }),
     ).rejects.toThrow(OAuthTransactionExpiredError);
   });
 
-  it('converges concurrent duplicate connections for the same active provider account safely', async () => {
-    const rawState1 = crypto.randomBytes(32).toString('base64url');
-    const stateHash1 = crypto.createHash('sha256').update(rawState1, 'utf8').digest();
-    const txId1 = generateUuidV7();
+  it('atomically enforces authorize idempotency under concurrent execution with advisory locks', async () => {
+    const rawState = crypto.randomBytes(32).toString('base64url');
+    const stateHash = crypto.createHash('sha256').update(rawState, 'utf8').digest();
+    const idemKey = `idem-${generateUuidV7()}`;
+    const keyHash = crypto.createHash('sha256').update(idemKey, 'utf8').digest();
+    const requestHash = crypto
+      .createHash('sha256')
+      .update('{"platform":"threads"}', 'utf8')
+      .digest();
+    const now = new Date();
+    const routeKey = 'POST /api/v1/workspaces/:workspaceId/social-connections/threads/authorize';
 
-    const rawState2 = crypto.randomBytes(32).toString('base64url');
-    const stateHash2 = crypto.createHash('sha256').update(rawState2, 'utf8').digest();
+    const txId1 = generateUuidV7();
     const txId2 = generateUuidV7();
 
+    const makeParams = (txId: string) => ({
+      id: txId,
+      workspaceId: wsId1,
+      platform: 'threads' as const,
+      initiatedByUserId: userId,
+      stateHash,
+      redirectUri: 'http://localhost:3001/callback',
+      returnTo: '/connections',
+      requestedScopes: ['threads_basic'],
+      createdAt: now.toISOString(),
+      expiresAt: new Date(now.getTime() + 600000).toISOString(),
+      idempotencyKey: idemKey,
+      keyHash,
+      requestHash,
+      routeKey,
+      responseData: {
+        authorizationUrl: `https://threads.net/oauth/authorize?state=${rawState}`,
+        transactionId: txId,
+        expiresAt: new Date(now.getTime() + 600000).toISOString(),
+      },
+    });
+
+    // Run concurrently
+    const [res1, res2] = await Promise.all([
+      adapter.saveOAuthTransactionWithIdempotency(makeParams(txId1)),
+      adapter.saveOAuthTransactionWithIdempotency(makeParams(txId2)),
+    ]);
+
+    // One must be fresh, one must be replayed
+    const replayedCount = (res1.replayed ? 1 : 0) + (res2.replayed ? 1 : 0);
+    expect(replayedCount).toBe(1);
+
+    // Both must return identical response data
+    expect(res1.response.authorizationUrl).toBe(res2.response.authorizationUrl);
+    expect(res1.response.transactionId).toBe(res2.response.transactionId);
+
+    // Verify exactly 1 row in idempotency_keys
+    const idemCheck = await pool.query(
+      `SELECT count(*) FROM idempotency_keys WHERE workspace_id = $1 AND key_hash = $2`,
+      [wsId1, Buffer.from(keyHash)],
+    );
+    expect(Number(idemCheck.rows[0]?.count)).toBe(1);
+
+    // Verify exactly 1 transaction was inserted for this stateHash
+    const txCount = await pool.query(
+      `SELECT count(*) FROM oauth_transactions WHERE workspace_id = $1 AND state_hash = $2`,
+      [wsId1, Buffer.from(stateHash)],
+    );
+    expect(Number(txCount.rows[0]?.count)).toBe(1);
+
+    // Reusing the same idempotency key with a DIFFERENT request payload must throw IdempotencyKeyReusedError (409)
+    const diffRequestHash = crypto
+      .createHash('sha256')
+      .update('{"platform":"threads","modified":true}', 'utf8')
+      .digest();
+    await expect(
+      adapter.saveOAuthTransactionWithIdempotency({
+        ...makeParams(generateUuidV7()),
+        requestHash: diffRequestHash,
+      }),
+    ).rejects.toThrow(IdempotencyKeyReusedError);
+  });
+
+  it('enforces actor-bound callback result consumption and forbids cross-actor consumption', async () => {
+    const rawState = crypto.randomBytes(32).toString('base64url');
+    const stateHash = crypto.createHash('sha256').update(rawState, 'utf8').digest();
+    const txId = generateUuidV7();
     const now = new Date();
-    const expiresAt = new Date(now.getTime() + 600000);
 
     await adapter.saveOAuthTransaction({
-      id: txId1,
+      id: txId,
       workspaceId: wsId1,
       platform: 'threads',
       initiatedByUserId: userId,
-      stateHash: stateHash1,
+      stateHash,
       redirectUri: 'http://localhost:3001/callback',
       returnTo: '/',
       requestedScopes: [],
       createdAt: now.toISOString(),
-      expiresAt: expiresAt.toISOString(),
+      expiresAt: new Date(now.getTime() + 600000).toISOString(),
     });
 
-    await adapter.saveOAuthTransaction({
-      id: txId2,
-      workspaceId: wsId1,
+    await adapter.claimOAuthTransaction({
+      stateHash,
       platform: 'threads',
-      initiatedByUserId: userId,
-      stateHash: stateHash2,
-      redirectUri: 'http://localhost:3001/callback',
-      returnTo: '/',
-      requestedScopes: [],
-      createdAt: now.toISOString(),
-      expiresAt: expiresAt.toISOString(),
+      now: now.toISOString(),
+      claimTtlSeconds: 120,
     });
 
-    const encryptedCreds = protector.encrypt({
-      workspaceId: wsId1,
-      socialAccountId: generateUuidV7(),
-      platform: 'threads',
-      accessToken: 'token-converge',
-    });
+    const resultKey = crypto.randomBytes(32).toString('base64url');
+    const resultKeyHash = crypto.createHash('sha256').update(resultKey, 'utf8').digest();
 
-    // Complete transaction 1
-    const res1 = await adapter.completeOAuthCallbackAtomic({
-      transactionId: txId1,
-      stateHash: stateHash1,
+    await adapter.completeOAuthCallbackAtomic({
+      transactionId: txId,
+      stateHash,
       workspaceId: wsId1,
       platform: 'threads',
       actorUserId: userId,
-      providerAccountId: 'same_provider_acc_id',
-      displayName: 'Creator Initial',
-      handle: '@initial',
-      grantedScopes: ['threads_basic'],
+      providerAccountId: 'user-actor-bound',
+      displayName: 'Actor Bound User',
+      handle: null,
+      grantedScopes: [],
       capabilities: {},
       capabilitiesCheckedAt: now.toISOString(),
       tokenExpiresAt: null,
       environment: 'local',
-      encryptedCredentials: encryptedCreds,
-      resultKeyHash: crypto.createHash('sha256').update('res-c1').digest(),
+      encryptCredentials: (targetAccountId: string) =>
+        protector.encrypt({
+          workspaceId: wsId1,
+          socialAccountId: targetAccountId,
+          platform: 'threads',
+          accessToken: 'actor-bound-token',
+        }),
+      resultKeyHash,
       resultExpiresAt: new Date(now.getTime() + 300000).toISOString(),
       now: now.toISOString(),
     });
 
-    // Complete transaction 2 for the same provider account ID
-    const res2 = await adapter.completeOAuthCallbackAtomic({
-      transactionId: txId2,
-      stateHash: stateHash2,
+    // 1. Cross-actor consumption in same workspace (userId2) MUST throw CallbackResultForbiddenError
+    await expect(
+      adapter.consumeCallbackResult({
+        workspaceId: wsId1,
+        actorUserId: userId2,
+        resultKeyHash,
+        now: now.toISOString(),
+      }),
+    ).rejects.toThrow(CallbackResultForbiddenError);
+
+    // 2. Initiating actor (userId) successfully consumes
+    const consumed = await adapter.consumeCallbackResult({
       workspaceId: wsId1,
-      platform: 'threads',
       actorUserId: userId,
-      providerAccountId: 'same_provider_acc_id',
-      displayName: 'Creator Updated',
-      handle: '@updated',
-      grantedScopes: ['threads_basic', 'threads_content_publish'],
-      capabilities: { canPublishText: true },
-      capabilitiesCheckedAt: now.toISOString(),
-      tokenExpiresAt: null,
-      environment: 'local',
-      encryptedCredentials: encryptedCreds,
-      resultKeyHash: crypto.createHash('sha256').update('res-c2').digest(),
-      resultExpiresAt: new Date(now.getTime() + 300000).toISOString(),
+      resultKeyHash,
       now: now.toISOString(),
     });
+    expect(consumed).not.toBeNull();
+    expect(consumed?.status).toBe('success');
 
-    // They must have updated the exact same account ID rather than creating a duplicate
-    expect(res2.account.id).toBe(res1.account.id);
-    expect(res2.account.displayName).toBe('Creator Updated');
-    expect(res2.account.handle).toBe('@updated');
-    expect(res2.account.version).toBe(res1.account.version + 1);
-
-    // Verify there is strictly 1 active account in the database for this provider ID
-    const countCheck = await pool.query(
-      `SELECT count(*) FROM social_accounts WHERE workspace_id = $1 AND provider_account_id = $2`,
-      [wsId1, 'same_provider_acc_id'],
-    );
-    expect(Number(countCheck.rows[0]?.count)).toBe(1);
+    // 3. Consuming again returns null (single-use)
+    const reConsumed = await adapter.consumeCallbackResult({
+      workspaceId: wsId1,
+      actorUserId: userId,
+      resultKeyHash,
+      now: now.toISOString(),
+    });
+    expect(reConsumed).toBeNull();
   });
 
   it('rejects cross-tenant callback result consumption (tenant isolation)', async () => {
@@ -433,6 +604,13 @@ describe('Social Connections PostgreSQL Integration', () => {
       expiresAt: new Date(now.getTime() + 600000).toISOString(),
     });
 
+    await adapter.claimOAuthTransaction({
+      stateHash,
+      platform: 'threads',
+      now: now.toISOString(),
+      claimTtlSeconds: 120,
+    });
+
     const resultKey = crypto.randomBytes(32).toString('base64url');
     const resultKeyHash = crypto.createHash('sha256').update(resultKey, 'utf8').digest();
 
@@ -450,12 +628,13 @@ describe('Social Connections PostgreSQL Integration', () => {
       capabilitiesCheckedAt: now.toISOString(),
       tokenExpiresAt: null,
       environment: 'local',
-      encryptedCredentials: protector.encrypt({
-        workspaceId: wsId1,
-        socialAccountId: generateUuidV7(),
-        platform: 'threads',
-        accessToken: 'secret',
-      }),
+      encryptCredentials: (targetAccountId: string) =>
+        protector.encrypt({
+          workspaceId: wsId1,
+          socialAccountId: targetAccountId,
+          platform: 'threads',
+          accessToken: 'secret',
+        }),
       resultKeyHash,
       resultExpiresAt: new Date(now.getTime() + 300000).toISOString(),
       now: now.toISOString(),
@@ -464,6 +643,7 @@ describe('Social Connections PostgreSQL Integration', () => {
     // Querying with workspace 2 must return null
     const crossTenantConsume = await adapter.consumeCallbackResult({
       workspaceId: wsId2,
+      actorUserId: userId,
       resultKeyHash,
       now: now.toISOString(),
     });

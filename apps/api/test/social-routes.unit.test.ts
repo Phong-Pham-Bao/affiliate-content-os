@@ -117,6 +117,69 @@ describe('Social Connections API Routes', () => {
       expect(body.transactionId).toBeDefined();
       expect(body.expiresAt).toBeDefined();
     });
+
+    it('replays identical authorize response for repeated Idempotency-Key', async () => {
+      const { deps } = createTestSocialDeps();
+      const app = createApp({ auth: deps.auth, social: deps });
+
+      const res1 = await app.inject({
+        method: 'POST',
+        url: `/api/v1/workspaces/${TEST_WORKSPACE_ID}/social-connections/threads/authorize`,
+        cookies: { [COOKIE_SESSION]: validSessionCookie },
+        headers: {
+          'idempotency-key': 'idemp-replay-key-1',
+          origin: validOrigin,
+        },
+        payload: { returnTo: '/connections' },
+      });
+      expect(res1.statusCode).toBe(200);
+      const body1 = res1.json();
+
+      const res2 = await app.inject({
+        method: 'POST',
+        url: `/api/v1/workspaces/${TEST_WORKSPACE_ID}/social-connections/threads/authorize`,
+        cookies: { [COOKIE_SESSION]: validSessionCookie },
+        headers: {
+          'idempotency-key': 'idemp-replay-key-1',
+          origin: validOrigin,
+        },
+        payload: { returnTo: '/connections' },
+      });
+      expect(res2.statusCode).toBe(200);
+      const body2 = res2.json();
+
+      expect(body2.transactionId).toBe(body1.transactionId);
+      expect(body2.authorizationUrl).toBe(body1.authorizationUrl);
+    });
+
+    it('returns 409 IDEMPOTENCY_KEY_REUSED when same key is reused with different payload', async () => {
+      const { deps } = createTestSocialDeps();
+      const app = createApp({ auth: deps.auth, social: deps });
+
+      await app.inject({
+        method: 'POST',
+        url: `/api/v1/workspaces/${TEST_WORKSPACE_ID}/social-connections/threads/authorize`,
+        cookies: { [COOKIE_SESSION]: validSessionCookie },
+        headers: {
+          'idempotency-key': 'idemp-mismatch-key-1',
+          origin: validOrigin,
+        },
+        payload: { returnTo: '/connections' },
+      });
+
+      const res2 = await app.inject({
+        method: 'POST',
+        url: `/api/v1/workspaces/${TEST_WORKSPACE_ID}/social-connections/threads/authorize`,
+        cookies: { [COOKIE_SESSION]: validSessionCookie },
+        headers: {
+          'idempotency-key': 'idemp-mismatch-key-1',
+          origin: validOrigin,
+        },
+        payload: { returnTo: '/other-return' },
+      });
+      expect(res2.statusCode).toBe(409);
+      expect(res2.json().code).toBe('IDEMPOTENCY_KEY_REUSED');
+    });
   });
 
   describe('OAuth Callback and Result Flow', () => {
@@ -204,6 +267,48 @@ describe('Social Connections API Routes', () => {
       expect(accounts.length).toBe(1);
       expect(accounts[0].platform).toBe('threads');
       expect(accounts[0].status).toBe('active');
+    });
+
+    it('returns 403 FORBIDDEN when a different user in the same workspace attempts to consume result', async () => {
+      const { deps, setActiveUser } = createTestSocialDeps();
+      const app = createApp({ auth: deps.auth, social: deps });
+
+      // Owner authorizes
+      const authRes = await app.inject({
+        method: 'POST',
+        url: `/api/v1/workspaces/${TEST_WORKSPACE_ID}/social-connections/threads/authorize`,
+        cookies: { [COOKIE_SESSION]: validSessionCookie },
+        headers: {
+          'idempotency-key': 'actor-isolation-key-1',
+          origin: validOrigin,
+        },
+        payload: { returnTo: '/connections' },
+      });
+      expect(authRes.statusCode).toBe(200);
+      const state = new URL(authRes.json().authorizationUrl).searchParams.get('state')!;
+
+      // Provider callback
+      const callbackRes = await app.inject({
+        method: 'GET',
+        url: `/api/v1/social-connections/threads/callback?state=${encodeURIComponent(state)}&code=actor_test_code`,
+      });
+      expect(callbackRes.statusCode).toBe(302);
+      const resultKey = new URL(
+        callbackRes.headers.location!,
+        'http://localhost:3000',
+      ).searchParams.get('connection_result')!;
+
+      // Switch active user to EDITOR_USER_ID
+      setActiveUser(EDITOR_USER_ID);
+
+      const consumeRes = await app.inject({
+        method: 'GET',
+        url: `/api/v1/workspaces/${TEST_WORKSPACE_ID}/social-connections/callback-results/${resultKey}`,
+        cookies: { [COOKIE_SESSION]: validSessionCookie },
+      });
+
+      expect(consumeRes.statusCode).toBe(403);
+      expect(consumeRes.json().code).toBe('FORBIDDEN');
     });
   });
 });

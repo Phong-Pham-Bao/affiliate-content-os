@@ -46,6 +46,30 @@ export async function fetchSocialAccounts(
   return data.items;
 }
 
+export function isAllowedAuthorizationUrl(rawUrl: string, windowOrigin: string): boolean {
+  try {
+    const url = new URL(rawUrl, windowOrigin);
+    if (url.origin === windowOrigin && url.pathname === '/fake-social-auth') {
+      return true;
+    }
+    if (
+      (url.origin === 'https://threads.net' || url.origin === 'https://www.threads.net') &&
+      url.pathname === '/oauth/authorize'
+    ) {
+      return true;
+    }
+    if (
+      url.origin === 'https://www.tiktok.com' &&
+      (url.pathname === '/v2/auth/authorize/' || url.pathname === '/auth/authorize/')
+    ) {
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 export async function beginSocialAuthorize(
   workspaceId: string,
   platform: SocialPlatform,
@@ -66,15 +90,10 @@ export async function beginSocialAuthorize(
   );
   const data = await handleApiResponse<SocialAuthorizeResponseDTO>(res);
 
-  // Validate authorizationUrl shape and origin
-  try {
-    const url = new URL(data.authorizationUrl, window.location.origin);
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-      throw new Error('Invalid authorization URL protocol');
-    }
-  } catch {
+  // Validate authorizationUrl against adapter/config-owned allowed origins and paths
+  if (!isAllowedAuthorizationUrl(data.authorizationUrl, window.location.origin)) {
     throw new SocialApiClientError(
-      'Server returned an invalid authorization URL.',
+      'Server returned an untrusted or invalid authorization URL.',
       500,
       'INVALID_AUTHORIZATION_URL',
     );

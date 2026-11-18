@@ -44,5 +44,8 @@ export default defineConfig({
     url: 'http://localhost:3000',
     reuseExistingServer: !process.env.CI,
     timeout: 30000,
+    env: {
+      ALLOW_FAKE_SOCIAL_AUTH: 'true',
+    },
   },
 });

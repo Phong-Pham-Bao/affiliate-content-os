@@ -110,12 +110,19 @@ export function loadSocialConfig(rawEnv: RawEnvironment, nodeEnv?: NodeEnv): Soc
         message: 'Fake social adapter cannot be enabled in production',
       });
     }
-    if (enabled && keyProvider === 'local') {
-      issues.push({
-        field: 'SOCIAL_KEY_PROVIDER',
-        message:
-          'Local credential encryption key cannot be used in production. A production-approved KMS key provider is required',
-      });
+    if (enabled) {
+      if (keyProvider === 'kms') {
+        issues.push({
+          field: 'SOCIAL_KEY_PROVIDER',
+          message: 'Managed KMS key provider is not implemented in Checkpoint A',
+        });
+      } else {
+        issues.push({
+          field: 'SOCIAL_KEY_PROVIDER',
+          message:
+            'Local credential encryption key cannot be used in production. A production-approved KMS key provider is required',
+        });
+      }
     }
   }
 

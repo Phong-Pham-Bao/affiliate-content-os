@@ -13,23 +13,36 @@ export const SQL_FIND_TRANSACTION_BY_STATE_HASH = `
   SELECT * FROM oauth_transactions WHERE state_hash = $1;
 `;
 
+export const SQL_CLAIM_TRANSACTION = `
+  UPDATE oauth_transactions
+  SET status = 'claimed',
+      claimed_at = $3,
+      claimed_expires_at = ($3::timestamptz + ($4 || ' seconds')::interval),
+      version = version + 1
+  WHERE state_hash = $1
+    AND platform = $2
+    AND status = 'pending'
+    AND expires_at > $3
+  RETURNING *;
+`;
+
 export const SQL_LOCK_TRANSACTION_FOR_UPDATE = `
-  SELECT id, status, version, expires_at
+  SELECT id, status, version, expires_at, initiated_by_user_id
   FROM oauth_transactions
-  WHERE id = $1 AND state_hash = $2
+  WHERE id = $1 AND workspace_id = $2
   FOR UPDATE;
 `;
 
-export const SQL_CONSUME_TRANSACTION = `
+export const SQL_CONSUME_CLAIMED_TRANSACTION = `
   UPDATE oauth_transactions
   SET status = 'consumed', consumed_at = $2, version = version + 1
-  WHERE id = $1 AND status = 'pending' AND version = $3;
+  WHERE id = $1 AND status = 'claimed' AND version = $3;
 `;
 
-export const SQL_FAIL_TRANSACTION = `
+export const SQL_FAIL_CLAIMED_TRANSACTION = `
   UPDATE oauth_transactions
   SET status = 'failed', consumed_at = $2, version = version + 1
-  WHERE id = $1 AND status = 'pending';
+  WHERE id = $1 AND status = 'claimed';
 `;
 
 export const SQL_FIND_ACTIVE_ACCOUNT_FOR_UPDATE = `
@@ -80,18 +93,25 @@ export const SQL_UPDATE_SOCIAL_CREDENTIALS = `
 
 export const SQL_INSERT_CALLBACK_RESULT = `
   INSERT INTO oauth_callback_results (
-    id, workspace_id, transaction_id, result_key_hash, status, platform,
+    id, workspace_id, transaction_id, initiated_by_user_id, result_key_hash, status, platform,
     social_account_id, error_code, error_description, created_at, expires_at
   ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
   ) RETURNING *;
 `;
 
 export const SQL_CONSUME_CALLBACK_RESULT = `
   UPDATE oauth_callback_results
-  SET consumed_at = $3, version = version + 1
-  WHERE workspace_id = $1 AND result_key_hash = $2 AND consumed_at IS NULL AND expires_at > $3
+  SET consumed_at = $4, version = version + 1
+  WHERE workspace_id = $1 AND initiated_by_user_id = $2 AND result_key_hash = $3 AND consumed_at IS NULL AND expires_at > $4
   RETURNING *;
+`;
+
+export const SQL_FIND_CALLBACK_RESULT_BY_KEY = `
+  SELECT id, workspace_id, transaction_id, initiated_by_user_id, result_key_hash, status, platform,
+         social_account_id, error_code, error_description, created_at, expires_at, consumed_at, version
+  FROM oauth_callback_results
+  WHERE workspace_id = $1 AND result_key_hash = $2;
 `;
 
 export const SQL_LIST_SOCIAL_ACCOUNTS = `

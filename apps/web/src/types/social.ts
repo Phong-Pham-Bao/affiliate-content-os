@@ -1,7 +1,7 @@
 export type SocialPlatform = 'threads' | 'tiktok';
 
 export type SocialAccountStatus =
-  'active' | 'degraded' | 'reauth_required' | 'review_gated' | 'disconnected';
+  'connecting' | 'active' | 'degraded' | 'reauth_required' | 'review_gated' | 'disconnected';
 
 export interface SocialAccountCapabilities {
   readonly canPublishText?: boolean | undefined;

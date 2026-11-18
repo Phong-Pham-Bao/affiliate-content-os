@@ -62,6 +62,14 @@ export class CallbackResultGoneError extends Error {
   }
 }
 
+export class CallbackResultForbiddenError extends Error {
+  public override readonly name = 'CallbackResultForbiddenError';
+  constructor(message = 'Not authorized to consume this callback result.') {
+    super(message);
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
 export class SocialAuthExchangeError extends Error {
   public override readonly name = 'SocialAuthExchangeError';
   constructor(message = 'Failed to exchange authorization code with provider.') {

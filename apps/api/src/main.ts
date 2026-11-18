@@ -25,7 +25,12 @@ import {
   FakeSocialAuthAdapter,
   PostgresSocialPersistenceAdapter,
 } from '@affiliate-content-os/infrastructure/social';
-import { SystemClock, DefaultIdGenerator } from '@affiliate-content-os/application';
+import type { SocialPlatform } from '@affiliate-content-os/domain';
+import {
+  SystemClock,
+  DefaultIdGenerator,
+  type SocialAuthAdapter,
+} from '@affiliate-content-os/application';
 import { startApiServer } from './server.js';
 import { createRouteProviders } from './route-providers.js';
 
@@ -58,25 +63,31 @@ async function main(): Promise<void> {
   const analysisAdapter = new PostgresAnalysisAdapter(database.pool!);
   const workforceAdapter = new PostgresWorkforceAdapter(database.pool!);
   const socialPersistence = new PostgresSocialPersistenceAdapter(database);
-  const socialProtector = socialConfig.credentialEncryptionKeyBase64Url
-    ? new LocalSocialCredentialProtector(
-        socialConfig.credentialEncryptionKeyBase64Url,
-        socialConfig.credentialKeyVersion ?? 'v1',
-      )
-    : (undefined as never);
+  const socialProtector =
+    socialConfig.enabled && socialConfig.credentialEncryptionKeyBase64Url
+      ? new LocalSocialCredentialProtector(
+          socialConfig.credentialEncryptionKeyBase64Url,
+          socialConfig.credentialKeyVersion ?? 'v1',
+        )
+      : undefined;
 
-  const fakeThreadsAdapter = new FakeSocialAuthAdapter({
-    platform: 'threads',
-    authBaseUrl: config.appBaseUrl,
-  });
-  const fakeTikTokAdapter = new FakeSocialAuthAdapter({
-    platform: 'tiktok',
-    authBaseUrl: config.appBaseUrl,
-  });
-  const socialAdapters = new Map([
-    ['threads' as const, fakeThreadsAdapter],
-    ['tiktok' as const, fakeTikTokAdapter],
-  ]);
+  const socialAdapters = new Map<SocialPlatform, SocialAuthAdapter>();
+  if (socialConfig.enabled && socialConfig.fakeAdapterEnabled && config.nodeEnv !== 'production') {
+    socialAdapters.set(
+      'threads',
+      new FakeSocialAuthAdapter({
+        platform: 'threads',
+        authBaseUrl: config.appBaseUrl,
+      }),
+    );
+    socialAdapters.set(
+      'tiktok',
+      new FakeSocialAuthAdapter({
+        platform: 'tiktok',
+        authBaseUrl: config.appBaseUrl,
+      }),
+    );
+  }
 
   const clock = new SystemClock();
   const idGenerator = new DefaultIdGenerator();

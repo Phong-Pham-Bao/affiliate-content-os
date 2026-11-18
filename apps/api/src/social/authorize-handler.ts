@@ -1,10 +1,7 @@
 import crypto from 'node:crypto';
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import {
-  IdempotencyKeyReusedError,
-  beginSocialAuthorization,
-} from '@affiliate-content-os/application';
-import { validateIdempotencyKey, type WorkspaceId } from '@affiliate-content-os/domain';
+import { beginSocialAuthorization } from '@affiliate-content-os/application';
+import { validateIdempotencyKey } from '@affiliate-content-os/domain';
 import { MalformedIdempotencyKeyError } from '../catalog/errors.js';
 import { requireAuthenticatedSession } from '../auth/session-auth.js';
 import { extractSocialAuditContext, validateSocialMutationOrigin } from './helpers.js';
@@ -41,12 +38,11 @@ export async function handleAuthorizeSocialConnection(
     readonly platform: string;
   };
 
-  const { keyHash } = extractSocialIdempotencyKey(request);
+  const { rawKey, keyHash } = extractSocialIdempotencyKey(request);
 
   const body = (request.body as { readonly returnTo?: string } | undefined) ?? {};
   const returnTo = typeof body.returnTo === 'string' ? body.returnTo : undefined;
 
-  const routeKey = `POST /api/v1/workspaces/:workspaceId/social-connections/${platform}/authorize`;
   const requestHash = crypto
     .createHash('sha256')
     .update(
@@ -57,26 +53,6 @@ export async function handleAuthorizeSocialConnection(
       }),
     )
     .digest();
-
-  // Check idempotency cache if store is configured
-  if (deps.idempotencyStore) {
-    const cached = await deps.idempotencyStore.findIdempotencyRecord({
-      principalId: authContext.user.id,
-      routeKey,
-      keyHash,
-      workspaceId: workspaceId as WorkspaceId,
-    });
-
-    if (cached) {
-      if (!Buffer.from(cached.requestHash).equals(requestHash)) {
-        throw new IdempotencyKeyReusedError();
-      }
-      return reply
-        .status(cached.statusCode)
-        .type('application/json; charset=utf-8')
-        .send(cached.responseJson);
-    }
-  }
 
   const appBaseUrl = deps.auth.appBaseUrl ?? 'http://127.0.0.1:3000';
   const redirectUri = `${appBaseUrl}/api/v1/social-connections/${platform}/callback`;
@@ -94,10 +70,14 @@ export async function handleAuthorizeSocialConnection(
       platform,
       redirectUri,
       returnTo,
+      idempotencyKey: rawKey,
+      keyHash,
+      requestHash,
     },
     {
       persistence: deps.socialPersistence,
       workspaceAuthorization: deps.workspaceAuthorization,
+      protector: deps.credentialProtector,
       adapters: deps.authAdapters,
       enabled: deps.socialConfig.enabled,
       transactionTtlSeconds: ttlSeconds,
@@ -110,7 +90,7 @@ export async function handleAuthorizeSocialConnection(
     },
   );
 
-  const responseDto = serializeAuthorizeResponse(result, expiresAt);
+  const responseDto = serializeAuthorizeResponse(result, result.expiresAt ?? expiresAt);
 
   return reply.status(200).type('application/json; charset=utf-8').send(responseDto);
 }

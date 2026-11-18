@@ -70,6 +70,7 @@ export async function getSocialCallbackResult(
 
   const consumed = await deps.persistence.consumeCallbackResult({
     workspaceId: wsId,
+    actorUserId: actorId,
     resultKeyHash,
     now: now.toISOString(),
   });

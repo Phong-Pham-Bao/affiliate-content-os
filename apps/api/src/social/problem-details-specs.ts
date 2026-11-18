@@ -1,5 +1,6 @@
 import type { ProblemSpec } from '../auth/problem-details-specs.js';
 import {
+  CallbackResultForbiddenError,
   CallbackResultGoneError,
   CallbackResultNotFoundError,
   OAuthCallbackInvalidError,
@@ -14,6 +15,13 @@ import {
 } from '@affiliate-content-os/application';
 
 export const SOCIAL_PROBLEM_SPECS: Record<string, ProblemSpec> = {
+  SOCIAL_CALLBACK_RESULT_FORBIDDEN: {
+    status: 403,
+    code: 'FORBIDDEN',
+    type: 'https://affiliate-content-os.example/problems/forbidden',
+    title: 'Forbidden',
+    detail: 'Not authorized to consume this callback result.',
+  },
   SOCIAL_AUTH_NOT_CONFIGURED: {
     status: 503,
     code: 'SOCIAL_AUTH_NOT_CONFIGURED',
@@ -116,6 +124,9 @@ export function resolveSocialProblemSpec(error: unknown): ProblemSpec | null {
   }
   if (error instanceof CallbackResultNotFoundError || name === 'CallbackResultNotFoundError') {
     return SOCIAL_PROBLEM_SPECS['SOCIAL_CALLBACK_RESULT_NOT_FOUND']!;
+  }
+  if (error instanceof CallbackResultForbiddenError || name === 'CallbackResultForbiddenError') {
+    return SOCIAL_PROBLEM_SPECS['SOCIAL_CALLBACK_RESULT_FORBIDDEN']!;
   }
   if (error instanceof CallbackResultGoneError || name === 'CallbackResultGoneError') {
     return SOCIAL_PROBLEM_SPECS['SOCIAL_CALLBACK_RESULT_GONE']!;

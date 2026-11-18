@@ -27,6 +27,7 @@ export {
 } from './list-social-accounts.js';
 
 export {
+  CallbackResultForbiddenError,
   CallbackResultGoneError,
   CallbackResultNotFoundError,
   OAuthCallbackInvalidError,
@@ -41,17 +42,23 @@ export {
 } from './errors.js';
 
 export {
+  type AuthorizeResponseData,
+  type ClaimOAuthTransactionParams,
+  type ClaimedOAuthTransaction,
   type CompleteOAuthCallbackAtomicParams,
   type CompleteOAuthCallbackAtomicResult,
   type ConsumeCallbackResultParams,
   type CreateAuthorizationUrlInput,
   type CreateAuthorizationUrlResult,
   type DecryptedSocialCredentials,
+  type EncryptedOAuthVerifier,
   type EncryptedSocialCredentials,
   type ExchangeCodeInput,
   type ExchangeCodeResult,
   type RecordFailedOAuthCallbackParams,
   type SaveOAuthTransactionParams,
+  type SaveOAuthTransactionWithIdempotencyParams,
+  type SaveOAuthTransactionWithIdempotencyResult,
   type SocialAuditContext,
   type SocialAuthAdapter,
   type SocialCredentialProtectorPort,

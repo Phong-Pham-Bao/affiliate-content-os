@@ -14,7 +14,13 @@ export type SocialAccountStatus = (typeof SOCIAL_ACCOUNT_STATUSES)[number];
 export const SOCIAL_ACCOUNT_ENVIRONMENTS = ['production', 'test', 'local'] as const;
 export type SocialAccountEnvironment = (typeof SOCIAL_ACCOUNT_ENVIRONMENTS)[number];
 
-export const OAUTH_TRANSACTION_STATUSES = ['pending', 'consumed', 'expired', 'failed'] as const;
+export const OAUTH_TRANSACTION_STATUSES = [
+  'pending',
+  'claimed',
+  'consumed',
+  'expired',
+  'failed',
+] as const;
 export type OAuthTransactionStatus = (typeof OAUTH_TRANSACTION_STATUSES)[number];
 
 export const OAUTH_CALLBACK_RESULT_STATUSES = ['success', 'failed'] as const;
@@ -75,6 +81,8 @@ export interface OAuthTransactionSnapshot {
   readonly returnTo: string;
   readonly requestedScopes: readonly string[];
   readonly status: OAuthTransactionStatus;
+  readonly claimedAt: string | null;
+  readonly claimedExpiresAt: string | null;
   readonly createdAt: string;
   readonly expiresAt: string;
   readonly consumedAt: string | null;
@@ -85,6 +93,7 @@ export interface OAuthCallbackResultSnapshot {
   readonly id: string;
   readonly workspaceId: string;
   readonly transactionId: string;
+  readonly initiatedByUserId: string;
   readonly resultKeyHash: Uint8Array;
   readonly status: OAuthCallbackResultStatus;
   readonly platform: SocialPlatform;

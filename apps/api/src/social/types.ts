@@ -15,7 +15,7 @@ export interface SocialRouteDependencies {
   readonly auth: AuthDependencies;
   readonly socialConfig: SocialConfig;
   readonly socialPersistence: SocialPersistencePort;
-  readonly credentialProtector: SocialCredentialProtectorPort;
+  readonly credentialProtector?: SocialCredentialProtectorPort | undefined;
   readonly authAdapters: ReadonlyMap<SocialPlatform, SocialAuthAdapter>;
   readonly workspaceAuthorization: WorkspaceAuthorizationPort;
   readonly idempotencyStore?: IdempotencyStorePort | undefined;

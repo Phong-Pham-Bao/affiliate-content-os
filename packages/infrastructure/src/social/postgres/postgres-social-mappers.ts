@@ -34,6 +34,8 @@ export interface OAuthTransactionRow {
   return_to: string;
   requested_scopes: unknown;
   status: string;
+  claimed_at?: Date | string | null;
+  claimed_expires_at?: Date | string | null;
   created_at: Date | string;
   expires_at: Date | string;
   consumed_at: Date | string | null;
@@ -44,6 +46,7 @@ export interface OAuthCallbackResultRow {
   id: string;
   workspace_id: string;
   transaction_id: string;
+  initiated_by_user_id: string;
   result_key_hash: Buffer;
   status: string;
   platform: string;
@@ -101,6 +104,8 @@ export function mapOAuthTransactionRow(row: OAuthTransactionRow): OAuthTransacti
     returnTo: row.return_to,
     requestedScopes: Array.isArray(row.requested_scopes) ? row.requested_scopes : [],
     status: row.status as OAuthTransactionSnapshot['status'],
+    claimedAt: toIsoString(row.claimed_at ?? null),
+    claimedExpiresAt: toIsoString(row.claimed_expires_at ?? null),
     createdAt: toIsoString(row.created_at)!,
     expiresAt: toIsoString(row.expires_at)!,
     consumedAt: toIsoString(row.consumed_at),
@@ -115,6 +120,7 @@ export function mapOAuthCallbackResultRow(
     id: row.id,
     workspaceId: row.workspace_id,
     transactionId: row.transaction_id,
+    initiatedByUserId: row.initiated_by_user_id,
     resultKeyHash: new Uint8Array(
       row.result_key_hash.buffer,
       row.result_key_hash.byteOffset,

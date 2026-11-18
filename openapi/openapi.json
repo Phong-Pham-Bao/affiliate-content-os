@@ -12442,6 +12442,7 @@
                           "status": {
                             "type": "string",
                             "enum": [
+                              "connecting",
                               "active",
                               "degraded",
                               "reauth_required",
@@ -12471,7 +12472,7 @@
                             "additionalProperties": false
                           },
                           "capabilitiesCheckedAt": {
-                            "type": "string",
+                            "type": ["string", "null"],
                             "format": "date-time"
                           },
                           "tokenExpiresAt": {

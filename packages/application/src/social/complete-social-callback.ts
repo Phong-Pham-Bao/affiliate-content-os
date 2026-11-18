@@ -2,9 +2,6 @@ import crypto from 'node:crypto';
 import { isSocialPlatform, type SocialPlatform } from '@affiliate-content-os/domain';
 import {
   OAuthCallbackInvalidError,
-  OAuthTransactionExpiredError,
-  OAuthTransactionNotFoundError,
-  OAuthTransactionReplayedError,
   SocialAuthNotConfiguredError,
   SocialPlatformUnsupportedError,
 } from './errors.js';
@@ -39,9 +36,30 @@ export interface CompleteSocialCallbackResult {
   readonly isSuccess: boolean;
 }
 
-function buildRedirectWithResult(returnTo: string, resultKey: string): string {
-  const separator = returnTo.includes('?') ? '&' : '?';
-  return `${returnTo}${separator}connection_result=${encodeURIComponent(resultKey)}`;
+function buildRedirectWithResult(returnTo: string | null | undefined, resultKey: string): string {
+  const base = returnTo && returnTo.length > 0 ? returnTo : '/';
+  const separator = base.includes('?') ? '&' : '?';
+  return `${base}${separator}connection_result=${encodeURIComponent(resultKey)}`;
+}
+
+function mapProviderErrorCode(rawError: unknown): { safeCode: string; safeDescription: string } {
+  const str = typeof rawError === 'string' ? rawError.toLowerCase().trim() : '';
+  if (str === 'access_denied' || str.includes('denied') || str.includes('cancel')) {
+    return {
+      safeCode: 'access_denied',
+      safeDescription: 'The authorization request was denied.',
+    };
+  }
+  if (str === 'timeout' || str.includes('timeout')) {
+    return {
+      safeCode: 'provider_timeout',
+      safeDescription: 'The social provider timed out during authorization.',
+    };
+  }
+  return {
+    safeCode: 'provider_error',
+    safeDescription: 'An error occurred during authorization with the provider.',
+  };
 }
 
 export async function completeSocialCallback(
@@ -75,27 +93,17 @@ export async function completeSocialCallback(
     );
   }
 
+  const now = deps.clock.now();
   const rawState = command.state;
   const stateHash = crypto.createHash('sha256').update(rawState, 'utf8').digest();
 
-  const transaction = await deps.persistence.findPendingTransactionByStateHash(stateHash);
-  if (!transaction) {
-    throw new OAuthTransactionNotFoundError();
-  }
-
-  const now = deps.clock.now();
-  const expiresAt = new Date(transaction.expiresAt);
-  if (now > expiresAt) {
-    throw new OAuthTransactionExpiredError();
-  }
-
-  if (transaction.status !== 'pending') {
-    throw new OAuthTransactionReplayedError();
-  }
-
-  if (transaction.platform !== platform) {
-    throw new OAuthCallbackInvalidError('Platform mismatch for OAuth transaction.');
-  }
+  // 1. Atomic claim fence: exactly one caller claims the pending transaction
+  const claimedTx = await deps.persistence.claimOAuthTransaction({
+    stateHash,
+    platform,
+    now: now.toISOString(),
+    claimTtlSeconds: 120,
+  });
 
   const resultKeyBytes = crypto.randomBytes(32);
   const resultKey = resultKeyBytes.toString('base64url');
@@ -104,22 +112,17 @@ export async function completeSocialCallback(
     now.getTime() + deps.callbackResultTtlSeconds * 1000,
   ).toISOString();
 
-  // Handle provider-denied or error callback
+  // 2. Handle provider denial/error
   if (hasError) {
-    const errorCode =
-      typeof command.error === 'string' ? command.error.slice(0, 100) : 'unknown_error';
-    const errorDesc =
-      typeof command.errorDescription === 'string'
-        ? command.errorDescription.slice(0, 500)
-        : 'Authorization was denied or failed at provider.';
-
+    const { safeCode, safeDescription } = mapProviderErrorCode(command.error);
     await deps.persistence.recordFailedOAuthCallbackAtomic({
-      transactionId: transaction.id,
+      transactionId: claimedTx.id,
       stateHash,
-      workspaceId: transaction.workspaceId,
+      workspaceId: claimedTx.workspaceId,
       platform,
-      errorCode,
-      errorDescription: errorDesc,
+      actorUserId: claimedTx.initiatedByUserId,
+      errorCode: safeCode,
+      errorDescription: safeDescription,
       resultKeyHash,
       resultExpiresAt,
       now: now.toISOString(),
@@ -127,16 +130,26 @@ export async function completeSocialCallback(
     });
 
     return {
-      redirectUrl: buildRedirectWithResult(transaction.returnTo, resultKey),
+      redirectUrl: buildRedirectWithResult(claimedTx.returnTo, resultKey),
       resultKey,
       isSuccess: false,
     };
   }
 
-  // Handle successful code callback
+  // 3. Handle successful code exchange
   const adapter = deps.adapters.get(platform);
   if (!adapter) {
     throw new SocialPlatformUnsupportedError(platform);
+  }
+
+  let codeVerifier: string | undefined;
+  if (claimedTx.encryptedVerifier) {
+    codeVerifier = deps.protector.decryptOAuthVerifier({
+      workspaceId: claimedTx.workspaceId,
+      transactionId: claimedTx.id,
+      platform,
+      encryptedVerifier: claimedTx.encryptedVerifier,
+    });
   }
 
   const code = command.code as string;
@@ -145,14 +158,16 @@ export async function completeSocialCallback(
     exchangeResult = await adapter.exchangeCode({
       platform,
       code,
-      redirectUri: transaction.redirectUri,
+      redirectUri: claimedTx.redirectUri,
+      codeVerifier,
     });
   } catch (_err: unknown) {
     await deps.persistence.recordFailedOAuthCallbackAtomic({
-      transactionId: transaction.id,
+      transactionId: claimedTx.id,
       stateHash,
-      workspaceId: transaction.workspaceId,
+      workspaceId: claimedTx.workspaceId,
       platform,
+      actorUserId: claimedTx.initiatedByUserId,
       errorCode: 'exchange_failed',
       errorDescription: 'Failed to exchange authorization code with provider.',
       resultKeyHash,
@@ -162,20 +177,11 @@ export async function completeSocialCallback(
     });
 
     return {
-      redirectUrl: buildRedirectWithResult(transaction.returnTo, resultKey),
+      redirectUrl: buildRedirectWithResult(claimedTx.returnTo, resultKey),
       resultKey,
       isSuccess: false,
     };
   }
-
-  const socialAccountId = crypto.randomUUID();
-  const encryptedCredentials = deps.protector.encrypt({
-    workspaceId: transaction.workspaceId,
-    socialAccountId,
-    platform,
-    accessToken: exchangeResult.accessToken,
-    refreshToken: exchangeResult.refreshToken,
-  });
 
   let tokenExpiresAt: string | null = null;
   if (exchangeResult.tokenExpiresInSeconds && exchangeResult.tokenExpiresInSeconds > 0) {
@@ -184,12 +190,13 @@ export async function completeSocialCallback(
     ).toISOString();
   }
 
+  // Authoritative credential encryption inside narrow completion boundary
   await deps.persistence.completeOAuthCallbackAtomic({
-    transactionId: transaction.id,
+    transactionId: claimedTx.id,
     stateHash,
-    workspaceId: transaction.workspaceId,
+    workspaceId: claimedTx.workspaceId,
     platform,
-    actorUserId: transaction.initiatedByUserId,
+    actorUserId: claimedTx.initiatedByUserId,
     providerAccountId: exchangeResult.providerAccountId,
     displayName: exchangeResult.displayName,
     handle: exchangeResult.handle,
@@ -198,7 +205,14 @@ export async function completeSocialCallback(
     capabilitiesCheckedAt: now.toISOString(),
     tokenExpiresAt,
     environment: exchangeResult.environment,
-    encryptedCredentials,
+    encryptCredentials: (authoritativeAccountId: string) =>
+      deps.protector.encrypt({
+        workspaceId: claimedTx.workspaceId,
+        socialAccountId: authoritativeAccountId,
+        platform,
+        accessToken: exchangeResult.accessToken,
+        refreshToken: exchangeResult.refreshToken,
+      }),
     resultKeyHash,
     resultExpiresAt,
     now: now.toISOString(),
@@ -206,7 +220,7 @@ export async function completeSocialCallback(
   });
 
   return {
-    redirectUrl: buildRedirectWithResult(transaction.returnTo, resultKey),
+    redirectUrl: buildRedirectWithResult(claimedTx.returnTo, resultKey),
     resultKey,
     isSuccess: true,
   };

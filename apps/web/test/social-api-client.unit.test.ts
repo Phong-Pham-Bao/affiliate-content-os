@@ -109,6 +109,37 @@ describe('Social API Client', () => {
     );
   });
 
+  it('beginSocialAuthorize throws on arbitrary untrusted external origin', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce({
+      ok: true,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      json: async () => ({
+        authorizationUrl: 'https://evil-attacker.com/oauth/authorize?state=xyz',
+        transactionId: '018f6c5b-21a4-789a-8def-000000000030',
+        expiresAt: '2026-11-18T10:10:00.000Z',
+      }),
+    } as unknown as Response);
+
+    await expect(beginSocialAuthorize(workspaceId, 'threads')).rejects.toThrow(
+      'Server returned an untrusted or invalid authorization URL.',
+    );
+  });
+
+  it('beginSocialAuthorize accepts official Threads authorization URL', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce({
+      ok: true,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      json: async () => ({
+        authorizationUrl: 'https://threads.net/oauth/authorize?client_id=123',
+        transactionId: '018f6c5b-21a4-789a-8def-000000000030',
+        expiresAt: '2026-11-18T10:10:00.000Z',
+      }),
+    } as unknown as Response);
+
+    const result = await beginSocialAuthorize(workspaceId, 'threads');
+    expect(result.authorizationUrl).toBe('https://threads.net/oauth/authorize?client_id=123');
+  });
+
   it('fetchCallbackResult retrieves callback result status', async () => {
     const resultKey = 'res_test123';
     vi.mocked(fetch).mockResolvedValueOnce({

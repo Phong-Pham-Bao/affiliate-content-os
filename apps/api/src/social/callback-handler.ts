@@ -1,5 +1,8 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import { completeSocialCallback } from '@affiliate-content-os/application';
+import {
+  completeSocialCallback,
+  SocialAuthNotConfiguredError,
+} from '@affiliate-content-os/application';
 import { extractSocialAuditContext, validateCallbackQueryParams } from './helpers.js';
 import type { SocialRouteDependencies } from './types.js';
 
@@ -8,6 +11,10 @@ export async function handleSocialCallback(
   reply: FastifyReply,
   deps: SocialRouteDependencies,
 ): Promise<void> {
+  if (!deps.credentialProtector || !deps.socialConfig.enabled) {
+    throw new SocialAuthNotConfiguredError();
+  }
+
   const { platform } = request.params as { readonly platform: string };
 
   const { state, code, error, errorDescription } = validateCallbackQueryParams(request);
