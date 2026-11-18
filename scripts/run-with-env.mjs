@@ -30,6 +30,13 @@ export function prepareEnvironment(options = {}) {
   if (!currentPath.includes(binDir)) {
     process.env[pathKey] = `${binDir}${path.delimiter}${currentPath}`;
   }
+
+  // Node 24 on Windows deadlocks with Playwright's experimental TS ESM loader
+  process.env['PW_DISABLE_TS_ESM'] = '1';
+  if (!process.env['NODE_OPTIONS']?.includes('--import tsx')) {
+    process.env['NODE_OPTIONS'] =
+      `${process.env['NODE_OPTIONS'] ? process.env['NODE_OPTIONS'] + ' ' : ''}--import tsx`;
+  }
 }
 
 export function runChildWithEnv(argv) {

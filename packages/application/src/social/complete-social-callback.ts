@@ -103,6 +103,7 @@ export async function completeSocialCallback(
     platform,
     now: now.toISOString(),
     claimTtlSeconds: 120,
+    auditContext: deps.auditContext,
   });
 
   const resultKeyBytes = crypto.randomBytes(32);

@@ -157,6 +157,7 @@ export interface ClaimOAuthTransactionParams {
   readonly platform: SocialPlatform;
   readonly now: string;
   readonly claimTtlSeconds: number;
+  readonly auditContext?: SocialAuditContext | undefined;
 }
 
 export interface ClaimedOAuthTransaction {

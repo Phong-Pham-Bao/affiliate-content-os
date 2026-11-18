@@ -4,16 +4,23 @@ import { FakeSocialAuthClient } from './fake-social-auth-client.js';
 
 export const dynamic = 'force-dynamic';
 
+function getEffectiveNodeEnv(): string | undefined {
+  const env = process.env;
+  const key = 'NODE_ENV';
+  return env[key];
+}
+
 export default async function FakeSocialAuthPage({
   searchParams,
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }): Promise<ReactElement> {
   await searchParams;
+  const nodeEnv = getEffectiveNodeEnv();
   const isProduction =
     process.env.APP_ENV === 'production' ||
     process.env.NEXT_PUBLIC_APP_ENV === 'production' ||
-    (process.env.NODE_ENV === 'production' && process.env.ALLOW_FAKE_SOCIAL_AUTH !== 'true');
+    nodeEnv === 'production';
 
   if (isProduction) {
     notFound();

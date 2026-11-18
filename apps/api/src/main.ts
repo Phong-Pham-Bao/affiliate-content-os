@@ -47,7 +47,7 @@ async function main(): Promise<void> {
     databaseConfig = loadDatabaseConfig(process.env);
     authConfig = loadAuthConfig(process.env);
     aiConfig = loadAIConfig(process.env);
-    socialConfig = loadSocialConfig(process.env);
+    socialConfig = loadSocialConfig(process.env, config.nodeEnv);
     if (databaseConfig.sslMode === 'verify-full' && databaseConfig.sslCaFile) {
       sslCaContent = readAndValidateSslCaFile(databaseConfig.sslCaFile);
     }

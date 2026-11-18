@@ -1,10 +1,16 @@
 import {
+  parseAuditEventId,
+  parseCorrelationId,
+  parseIsoTimestamp,
+  parseUserId,
+  parseWorkspaceId,
   type OAuthCallbackResultSnapshot,
   type OAuthTransactionSnapshot,
   type SocialAccountSnapshot,
 } from '@affiliate-content-os/domain';
 import {
   CallbackResultForbiddenError,
+  generateUuidV7,
   OAuthCallbackInvalidError,
   OAuthTransactionExpiredError,
   OAuthTransactionNotFoundError,
@@ -20,6 +26,10 @@ import {
   type SaveOAuthTransactionWithIdempotencyResult,
   type SocialPersistencePort,
 } from '@affiliate-content-os/application';
+import {
+  createPostgresAuditAdapter,
+  createTransactionScopedPostgresAuditAdapter,
+} from '../../audit/index.js';
 import type { Database } from '../../database/types.js';
 import {
   mapOAuthCallbackResultRow,
@@ -76,64 +86,96 @@ export class PostgresSocialPersistenceAdapter implements SocialPersistencePort {
   public async claimOAuthTransaction(
     params: ClaimOAuthTransactionParams,
   ): Promise<ClaimedOAuthTransaction> {
-    const res = await this.database.query<
-      OAuthTransactionRow & {
-        pkce_verifier_ciphertext: Buffer | null;
-        pkce_verifier_iv: Buffer | null;
-        pkce_verifier_auth_tag: Buffer | null;
-        encryption_key_version: string | null;
-      }
-    >(SQL_CLAIM_TRANSACTION, [
-      Buffer.from(params.stateHash),
-      params.platform,
-      params.now,
-      params.claimTtlSeconds,
-    ]);
+    const claimResult = await this.database.withTransaction(async (tx) => {
+      const res = await tx.query<
+        OAuthTransactionRow & {
+          pkce_verifier_ciphertext: Buffer | null;
+          pkce_verifier_iv: Buffer | null;
+          pkce_verifier_auth_tag: Buffer | null;
+          encryption_key_version: string | null;
+        }
+      >(SQL_CLAIM_TRANSACTION, [
+        Buffer.from(params.stateHash),
+        params.platform,
+        params.now,
+        params.claimTtlSeconds,
+      ]);
 
-    if (res.rows.length === 1) {
-      const row = res.rows[0]!;
-      let encryptedVerifier;
-      if (
-        row.pkce_verifier_ciphertext &&
-        row.pkce_verifier_iv &&
-        row.pkce_verifier_auth_tag &&
-        row.encryption_key_version
-      ) {
-        encryptedVerifier = {
-          ciphertext: new Uint8Array(
-            row.pkce_verifier_ciphertext.buffer,
-            row.pkce_verifier_ciphertext.byteOffset,
-            row.pkce_verifier_ciphertext.byteLength,
-          ),
-          iv: new Uint8Array(
-            row.pkce_verifier_iv.buffer,
-            row.pkce_verifier_iv.byteOffset,
-            row.pkce_verifier_iv.byteLength,
-          ),
-          authTag: new Uint8Array(
-            row.pkce_verifier_auth_tag.buffer,
-            row.pkce_verifier_auth_tag.byteOffset,
-            row.pkce_verifier_auth_tag.byteLength,
-          ),
-          keyVersion: row.encryption_key_version,
+      if (res.rows.length === 1) {
+        const row = res.rows[0]!;
+        let encryptedVerifier;
+        if (
+          row.pkce_verifier_ciphertext &&
+          row.pkce_verifier_iv &&
+          row.pkce_verifier_auth_tag &&
+          row.encryption_key_version
+        ) {
+          encryptedVerifier = {
+            ciphertext: new Uint8Array(
+              row.pkce_verifier_ciphertext.buffer,
+              row.pkce_verifier_ciphertext.byteOffset,
+              row.pkce_verifier_ciphertext.byteLength,
+            ),
+            iv: new Uint8Array(
+              row.pkce_verifier_iv.buffer,
+              row.pkce_verifier_iv.byteOffset,
+              row.pkce_verifier_iv.byteLength,
+            ),
+            authTag: new Uint8Array(
+              row.pkce_verifier_auth_tag.buffer,
+              row.pkce_verifier_auth_tag.byteOffset,
+              row.pkce_verifier_auth_tag.byteLength,
+            ),
+            keyVersion: row.encryption_key_version,
+          };
+        }
+
+        const auditAdapter = createTransactionScopedPostgresAuditAdapter(tx);
+        await auditAdapter.appendAuditEvent({
+          id: parseAuditEventId(generateUuidV7()),
+          workspaceId: parseWorkspaceId(row.workspace_id),
+          actorType: 'user',
+          actorUserId: parseUserId(row.initiated_by_user_id),
+          action: 'social_connection.authorization_claimed',
+          resourceType: 'oauth_transaction',
+          resourceId: row.id,
+          result: 'succeeded',
+          reasonCode: null,
+          changes: {
+            platform: { before: null, after: row.platform },
+            status: { before: 'pending', after: 'claimed' },
+          },
+          ipHash: params.auditContext?.ipHash ?? null,
+          userAgentSummary: params.auditContext?.userAgentSummary ?? null,
+          correlationId: params.auditContext?.correlationId
+            ? parseCorrelationId(params.auditContext.correlationId)
+            : null,
+          occurredAt: parseIsoTimestamp(params.now),
+          createdAt: parseIsoTimestamp(params.now),
+        });
+
+        const snap = mapOAuthTransactionRow(row);
+        return {
+          id: snap.id,
+          workspaceId: snap.workspaceId,
+          platform: snap.platform,
+          initiatedByUserId: snap.initiatedByUserId,
+          redirectUri: snap.redirectUri,
+          returnTo: snap.returnTo,
+          requestedScopes: snap.requestedScopes,
+          encryptedVerifier,
+          createdAt: snap.createdAt,
+          expiresAt: snap.expiresAt,
+          claimedAt: snap.claimedAt ?? params.now,
+          version: snap.version,
         };
       }
 
-      const snap = mapOAuthTransactionRow(row);
-      return {
-        id: snap.id,
-        workspaceId: snap.workspaceId,
-        platform: snap.platform,
-        initiatedByUserId: snap.initiatedByUserId,
-        redirectUri: snap.redirectUri,
-        returnTo: snap.returnTo,
-        requestedScopes: snap.requestedScopes,
-        encryptedVerifier,
-        createdAt: snap.createdAt,
-        expiresAt: snap.expiresAt,
-        claimedAt: snap.claimedAt ?? params.now,
-        version: snap.version,
-      };
+      return null;
+    });
+
+    if (claimResult !== null) {
+      return claimResult;
     }
 
     // Diagnosing failure reason
@@ -161,6 +203,39 @@ export class PostgresSocialPersistenceAdapter implements SocialPersistencePort {
       checkRow.status === 'failed' ||
       checkRow.status === 'expired'
     ) {
+      // Replay detected: record replay rejection audit event
+      try {
+        const auditAdapter = createPostgresAuditAdapter(this.database);
+        await auditAdapter.appendAuditEvent({
+          id: parseAuditEventId(generateUuidV7()),
+          workspaceId: parseWorkspaceId(checkRow.workspace_id),
+          actorType: 'user',
+          actorUserId: parseUserId(checkRow.initiated_by_user_id),
+          action: 'social_connection.replay_rejected',
+          resourceType: 'oauth_transaction',
+          resourceId: checkRow.id,
+          result: 'denied',
+          reasonCode:
+            checkRow.status === 'claimed'
+              ? 'transaction_already_claimed'
+              : checkRow.status === 'consumed'
+                ? 'transaction_already_consumed'
+                : 'transaction_replayed',
+          changes: {
+            claim_status: { before: checkRow.status, after: 'rejected' },
+          },
+          ipHash: params.auditContext?.ipHash ?? null,
+          userAgentSummary: params.auditContext?.userAgentSummary ?? null,
+          correlationId: params.auditContext?.correlationId
+            ? parseCorrelationId(params.auditContext.correlationId)
+            : null,
+          occurredAt: parseIsoTimestamp(params.now),
+          createdAt: parseIsoTimestamp(params.now),
+        });
+      } catch {
+        // Audit failure must not turn replay into success
+      }
+
       throw new OAuthTransactionReplayedError(
         'OAuth transaction state has already been claimed or consumed.',
       );

@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import {
   parseAuditEventId,
   parseCorrelationId,
@@ -32,6 +33,22 @@ import {
   SQL_UPDATE_SOCIAL_CREDENTIALS,
 } from './postgres-social-statements.js';
 
+export function computeSocialAccountUpsertAdvisoryLockKey(
+  workspaceId: string,
+  platform: string,
+  providerAccountId: string,
+): string {
+  const hash = crypto.createHash('sha256');
+  hash.update('social_account_upsert_lock:');
+  hash.update(workspaceId);
+  hash.update(':');
+  hash.update(platform);
+  hash.update(':');
+  hash.update(providerAccountId);
+  const digest = hash.digest();
+  return digest.readBigInt64BE(0).toString();
+}
+
 export async function executeCompleteOAuthCallbackTransaction(
   database: Database,
   params: CompleteOAuthCallbackAtomicParams,
@@ -57,7 +74,16 @@ export async function executeCompleteOAuthCallbackTransaction(
       );
     }
 
-    // 2. Resolve authoritative target account ID before encryption
+    // 2. Acquire transaction-scoped advisory lock derived from (workspace, platform, provider_account_id)
+    // to serialize first-time account insertions and updates concurrently for the same provider identity.
+    const accountLockKey = computeSocialAccountUpsertAdvisoryLockKey(
+      params.workspaceId,
+      params.platform,
+      params.providerAccountId,
+    );
+    await tx.query('SELECT pg_advisory_xact_lock($1::bigint)', [accountLockKey]);
+
+    // 3. Resolve authoritative target account ID before encryption
     const existingRes = await tx.query<SocialAccountRow>(SQL_FIND_ACTIVE_ACCOUNT_FOR_UPDATE, [
       params.workspaceId,
       params.platform,
