@@ -190,17 +190,26 @@ export async function executeCompleteOAuthCallbackTransaction(
     ]);
 
     // 5. Insert callback result
+    const cbStatus = params.callbackStatus ?? 'success';
+    const cbErrorCode =
+      cbStatus === 'partial' ? (params.callbackErrorCode ?? 'partial_exchange') : null;
+    const cbErrorDescription =
+      cbStatus === 'partial'
+        ? (params.callbackErrorDescription ??
+          'Account connected with limited capabilities. Re-authentication or review may be required.')
+        : null;
+
     const cbRes = await tx.query<OAuthCallbackResultRow>(SQL_INSERT_CALLBACK_RESULT, [
       generateUuidV7(),
       params.workspaceId,
       params.transactionId,
       params.actorUserId,
       Buffer.from(params.resultKeyHash),
-      'success',
+      cbStatus,
       params.platform,
       accountRow.id,
-      null,
-      null,
+      cbErrorCode,
+      cbErrorDescription,
       params.now,
       params.resultExpiresAt,
     ]);

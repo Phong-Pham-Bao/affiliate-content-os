@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { SocialAccountDTO } from '../src/types/social.js';
 import { ConnectionCard } from '../src/components/connections/connection-card.js';
+import { ConnectionsBanner } from '../src/components/connections/connections-banner.js';
 import { DisconnectDialog } from '../src/components/connections/disconnect-dialog.js';
 
 describe('Social Connections Lifecycle Components Rendering', () => {
@@ -88,5 +89,20 @@ describe('Social Connections Lifecycle Components Rendering', () => {
       />,
     );
     expect(html).toBe('');
+  });
+
+  it('ConnectionsBanner renders amber style and status role for partial status', () => {
+    const html = renderToStaticMarkup(
+      <ConnectionsBanner
+        banner={{ status: 'partial', message: 'Kết nối tài khoản THREADS với quyền hạn giới hạn.' }}
+        error={null}
+        onDismissBanner={() => {}}
+        onRetry={() => {}}
+      />,
+    );
+    expect(html).toContain('role="status"');
+    expect(html).toContain('background-color:#fef3c7');
+    expect(html).toContain('color:#92400e');
+    expect(html).toContain('Kết nối tài khoản THREADS với quyền hạn giới hạn.');
   });
 });

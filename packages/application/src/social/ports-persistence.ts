@@ -10,15 +10,18 @@ import type {
 } from '@affiliate-content-os/domain';
 import type { EncryptedOAuthVerifier, EncryptedSocialCredentials } from './ports-crypto.js';
 import type {
+  ClaimNextDueSocialAccountParams,
   ClaimSocialAccountForRefreshParams,
   ClaimedSocialAccountRefresh,
   CompleteSocialAccountRefreshParams,
   DisconnectSocialAccountParams,
   RecordFailedSocialAccountRefreshParams,
+  ReleaseSocialAccountRefreshLeaseParams,
   SocialAuditContext,
+  SocialIdempotencyInput,
 } from './ports-lifecycle-params.js';
 
-export type { SocialAuditContext };
+export type { SocialAuditContext, SocialIdempotencyInput };
 
 export interface AuthorizeResponseData {
   readonly authorizationUrl: string;
@@ -103,6 +106,9 @@ export interface CompleteOAuthCallbackAtomicParams {
   readonly exchangeStage?: OAuthExchangeStage | undefined;
   readonly statusReason?: SocialAccountStatusReason | null | undefined;
   readonly derivedStatus?: SocialAccountStatus | undefined;
+  readonly callbackStatus?: 'success' | 'partial' | undefined;
+  readonly callbackErrorCode?: string | null | undefined;
+  readonly callbackErrorDescription?: string | null | undefined;
   readonly encryptCredentials: (accountId: string) => EncryptedSocialCredentials;
   readonly resultKeyHash: Uint8Array;
   readonly resultExpiresAt: string;
@@ -165,8 +171,15 @@ export interface SocialPersistencePort {
     readonly workspaceId: string;
     readonly accountId: string;
   }): Promise<SocialAccountSnapshot | null>;
+  findEncryptedCredentials(params: {
+    readonly workspaceId: string;
+    readonly accountId: string;
+  }): Promise<EncryptedSocialCredentials | null>;
   claimSocialAccountForRefresh(
     params: ClaimSocialAccountForRefreshParams,
+  ): Promise<ClaimedSocialAccountRefresh | null>;
+  claimNextDueSocialAccountForRefresh(
+    params: ClaimNextDueSocialAccountParams,
   ): Promise<ClaimedSocialAccountRefresh | null>;
   completeSocialAccountRefreshAtomic(
     params: CompleteSocialAccountRefreshParams,
@@ -174,7 +187,18 @@ export interface SocialPersistencePort {
   recordFailedSocialAccountRefreshAtomic(
     params: RecordFailedSocialAccountRefreshParams,
   ): Promise<SocialAccountSnapshot>;
+  releaseSocialAccountRefreshLeaseAtomic(
+    params: ReleaseSocialAccountRefreshLeaseParams,
+  ): Promise<void>;
   disconnectSocialAccountAtomic(
     params: DisconnectSocialAccountParams,
   ): Promise<SocialAccountSnapshot>;
+  executeMutationWithIdempotency?(params: {
+    readonly workspaceId: string;
+    readonly accountId: string;
+    readonly actorUserId: string;
+    readonly idempotency: SocialIdempotencyInput;
+    readonly now: string;
+    readonly executeMutation: () => Promise<SocialAccountSnapshot>;
+  }): Promise<{ readonly replayed: boolean; readonly account: SocialAccountSnapshot }>;
 }

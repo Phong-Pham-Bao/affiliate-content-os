@@ -25,6 +25,8 @@ export interface ThreadsSocialAuthAdapterOptions {
   readonly transport?: HttpTransport | undefined;
 }
 
+const REQUIRED_SCOPES = ['threads_basic', 'threads_content_publish'] as const;
+
 export class ThreadsSocialAuthAdapter implements SocialAuthAdapter {
   public readonly platform: SocialPlatform = 'threads';
   public readonly supportsRefresh = true;
@@ -42,8 +44,8 @@ export class ThreadsSocialAuthAdapter implements SocialAuthAdapter {
   constructor(options: ThreadsSocialAuthAdapterOptions) {
     this.appId = options.appId;
     this.appSecret = options.appSecret;
-    this.authBaseUrl = options.authBaseUrl ?? 'https://threads.net';
-    this.apiBaseUrl = options.apiBaseUrl ?? 'https://graph.threads.net';
+    this.authBaseUrl = options.authBaseUrl ?? 'https://www.threads.com';
+    this.apiBaseUrl = options.apiBaseUrl ?? 'https://graph.threads.com';
     this.apiVersion = options.apiVersion ?? 'v1.0';
     this.timeoutMs = options.timeoutMs ?? 10000;
     this.environment = options.environment ?? 'production';
@@ -53,12 +55,21 @@ export class ThreadsSocialAuthAdapter implements SocialAuthAdapter {
   public async createAuthorizationUrl(
     input: CreateAuthorizationUrlInput,
   ): Promise<CreateAuthorizationUrlResult> {
-    const scopes =
-      input.scopes.length > 0 ? input.scopes.join(',') : 'threads_basic,threads_content_publish';
+    if (input.scopes && input.scopes.length > 0) {
+      const scopeSet = new Set(input.scopes);
+      const hasAllRequired = REQUIRED_SCOPES.every((s) => scopeSet.has(s));
+      const hasUnexpected = input.scopes.some(
+        (s) => !REQUIRED_SCOPES.includes(s as (typeof REQUIRED_SCOPES)[number]),
+      );
+      if (!hasAllRequired || hasUnexpected) {
+        throw new SocialAuthExchangeError('Invalid authorization scopes requested');
+      }
+    }
+
     const params = new URLSearchParams({
       client_id: this.appId,
       redirect_uri: input.redirectUri,
-      scope: scopes,
+      scope: 'threads_basic,threads_content_publish',
       response_type: 'code',
       state: input.state,
     });
@@ -95,28 +106,36 @@ export class ThreadsSocialAuthAdapter implements SocialAuthAdapter {
     }
 
     if (shortRes.status !== 200) {
-      throw classifyThreadsError(shortRes.status, shortRes.body, true);
+      throw classifyThreadsError(shortRes.status, shortRes.body, true, shortRes.headers);
     }
 
-    let shortData: { access_token?: string; user_id?: string | number };
+    let shortData: { access_token?: unknown; user_id?: unknown };
     try {
       shortData = JSON.parse(shortRes.body);
     } catch {
       throw new SocialAuthExchangeError('Invalid JSON from provider token endpoint');
     }
 
-    if (!shortData.access_token || !shortData.user_id) {
-      throw new SocialAuthExchangeError('Provider omitted access_token or user_id in response');
+    if (
+      typeof shortData.access_token !== 'string' ||
+      shortData.access_token.length === 0 ||
+      shortData.access_token.length > 1024 ||
+      (!shortData.user_id && shortData.user_id !== 0)
+    ) {
+      throw new SocialAuthExchangeError(
+        'Provider omitted or returned invalid access_token or user_id',
+      );
     }
 
     const shortLivedToken = String(shortData.access_token);
     const providerAccountId = String(shortData.user_id).trim();
 
-    // 2. Long-token exchange (post-token stage; failure is recoverable!)
+    // 2. Long-token exchange (post-token stage; failure is recoverable)
     let longLivedToken = shortLivedToken;
     let tokenExpiresInSeconds: number | null | undefined = 3600;
     let tokenKind: 'short_lived' | 'long_lived' = 'short_lived';
-    let stage: 'short_token_exchanged' | 'long_token_exchanged' | 'completed' =
+    let stage:
+      'short_token_exchanged' | 'long_token_exchanged' | 'profile_inspected' | 'completed' =
       'short_token_exchanged';
     let isRecoverablePartial = false;
 
@@ -131,12 +150,16 @@ export class ThreadsSocialAuthAdapter implements SocialAuthAdapter {
 
       if (longRes.status === 200) {
         const longData = JSON.parse(longRes.body);
-        if (longData.access_token) {
+        if (typeof longData.access_token === 'string' && longData.access_token.length > 0) {
           longLivedToken = String(longData.access_token);
           tokenExpiresInSeconds =
-            typeof longData.expires_in === 'number' ? longData.expires_in : 5184000;
+            typeof longData.expires_in === 'number' && Number.isFinite(longData.expires_in)
+              ? longData.expires_in
+              : 5184000;
           tokenKind = 'long_lived';
           stage = 'long_token_exchanged';
+        } else {
+          isRecoverablePartial = true;
         }
       } else {
         isRecoverablePartial = true;
@@ -146,8 +169,10 @@ export class ThreadsSocialAuthAdapter implements SocialAuthAdapter {
     }
 
     // 3. Profile lookup (post-token stage)
-    let displayName = `Threads User ${providerAccountId}`;
+    let displayName = providerAccountId;
     let handle: string | null = null;
+    let profileVerified = false;
+
     try {
       const profileUrl = `${this.apiBaseUrl}/${this.apiVersion}/me?fields=id,username,name&access_token=${encodeURIComponent(longLivedToken)}`;
       const profileRes = await this.transport.fetch({
@@ -156,22 +181,46 @@ export class ThreadsSocialAuthAdapter implements SocialAuthAdapter {
         headers: { Accept: 'application/json' },
         timeoutMs: this.timeoutMs,
       });
+
       if (profileRes.status === 200) {
         const profileData = JSON.parse(profileRes.body);
-        if (profileData.username) handle = `@${String(profileData.username).trim()}`;
-        if (profileData.name) displayName = String(profileData.name).trim();
-        else if (profileData.username) displayName = String(profileData.username).trim();
-        if (!isRecoverablePartial) stage = 'completed';
+        if (typeof profileData.id === 'string' || typeof profileData.id === 'number') {
+          const profileId = String(profileData.id).trim();
+          if (profileId !== providerAccountId) {
+            throw new SocialAuthExchangeError(
+              'Provider profile user ID does not match token exchange user ID',
+            );
+          }
+          profileVerified = true;
+          const validName =
+            typeof profileData.name === 'string' && profileData.name.trim().length > 0
+              ? profileData.name.trim().slice(0, 128)
+              : null;
+          const validUsername =
+            typeof profileData.username === 'string' && profileData.username.trim().length > 0
+              ? profileData.username.trim().slice(0, 64)
+              : null;
+          displayName = validName ?? validUsername ?? providerAccountId;
+          if (validUsername) handle = `@${validUsername}`;
+          if (!isRecoverablePartial) stage = 'profile_inspected';
+        } else {
+          isRecoverablePartial = true;
+        }
       } else {
         isRecoverablePartial = true;
       }
-    } catch {
+    } catch (err: unknown) {
+      if (err instanceof SocialAuthExchangeError && err.message.includes('does not match')) {
+        throw err;
+      }
       isRecoverablePartial = true;
     }
 
-    // 4. Granted scopes determination
+    // 4. Granted scopes determination: NEVER fabricate threads_content_publish
     const grantedScopes: string[] = ['threads_basic'];
-    if (!isRecoverablePartial) {
+    let grantsVerified = false;
+
+    if (!isRecoverablePartial && profileVerified) {
       try {
         const permUrl = `${this.apiBaseUrl}/${this.apiVersion}/me/permissions?access_token=${encodeURIComponent(longLivedToken)}`;
         const permRes = await this.transport.fetch({
@@ -180,26 +229,31 @@ export class ThreadsSocialAuthAdapter implements SocialAuthAdapter {
           headers: { Accept: 'application/json' },
           timeoutMs: this.timeoutMs,
         });
+
         if (permRes.status === 200) {
           const permData = JSON.parse(permRes.body);
           if (Array.isArray(permData.data)) {
             for (const item of permData.data) {
-              if (item.status === 'granted' && typeof item.permission === 'string') {
+              if (item && item.status === 'granted' && typeof item.permission === 'string') {
                 if (!grantedScopes.includes(item.permission)) grantedScopes.push(item.permission);
               }
             }
+            grantsVerified = grantedScopes.includes('threads_content_publish');
           }
-        } else {
-          // If me/permissions is unavailable, threads_content_publish is assumed if requested and unblocked
-          grantedScopes.push('threads_content_publish');
         }
       } catch {
-        grantedScopes.push('threads_content_publish');
+        // If inspection fails, do not fabricate permissions
       }
     }
 
+    if (!isRecoverablePartial && profileVerified && grantsVerified) {
+      stage = 'completed';
+    } else {
+      isRecoverablePartial = true;
+    }
+
     const capabilities: Record<string, boolean> = {
-      canPublishText: !isRecoverablePartial && grantedScopes.includes('threads_content_publish'),
+      canPublishText: stage === 'completed' && grantedScopes.includes('threads_content_publish'),
       canPublishMedia: false,
     };
 
@@ -228,17 +282,20 @@ export class ThreadsSocialAuthAdapter implements SocialAuthAdapter {
     });
 
     if (res.status !== 200) {
-      throw classifyThreadsError(res.status, res.body, false);
+      throw classifyThreadsError(res.status, res.body, false, res.headers);
     }
 
     const data = JSON.parse(res.body);
-    if (!data.access_token) {
+    if (typeof data.access_token !== 'string' || data.access_token.length === 0) {
       throw new SocialAuthExchangeError('Provider omitted access_token during refresh');
     }
 
     return {
       accessToken: String(data.access_token),
-      tokenExpiresInSeconds: typeof data.expires_in === 'number' ? data.expires_in : 5184000,
+      tokenExpiresInSeconds:
+        typeof data.expires_in === 'number' && Number.isFinite(data.expires_in)
+          ? data.expires_in
+          : 5184000,
       tokenKind: 'long_lived',
     };
   }

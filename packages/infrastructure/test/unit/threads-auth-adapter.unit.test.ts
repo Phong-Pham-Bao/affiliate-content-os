@@ -10,14 +10,14 @@ describe('ThreadsSocialAuthAdapter', () => {
   const defaultOptions = {
     appId: 'threads-app-123',
     appSecret: 'super-secret-threads-key-456',
-    authBaseUrl: 'https://threads.net',
-    apiBaseUrl: 'https://graph.threads.net',
+    authBaseUrl: 'https://www.threads.com',
+    apiBaseUrl: 'https://graph.threads.com',
     apiVersion: 'v1.0',
     timeoutMs: 5000,
     environment: 'local' as const,
   };
 
-  it('generates official Threads authorization URL with standard parameters', async () => {
+  it('generates official Threads authorization URL with standard parameters on www.threads.com', async () => {
     const adapter = new ThreadsSocialAuthAdapter(defaultOptions);
     const result = await adapter.createAuthorizationUrl({
       workspaceId: '018f3a2c-4e5b-7c8d-9e0f-1a2b3c4d5e6f',
@@ -27,8 +27,9 @@ describe('ThreadsSocialAuthAdapter', () => {
       scopes: ['threads_basic', 'threads_content_publish'],
     });
 
-    expect(result.authorizationUrl).toContain('https://threads.net/oauth/authorize?');
+    expect(result.authorizationUrl).toContain('https://www.threads.com/oauth/authorize?');
     const url = new URL(result.authorizationUrl);
+    expect(url.hostname).toBe('www.threads.com');
     expect(url.searchParams.get('client_id')).toBe('threads-app-123');
     expect(url.searchParams.get('redirect_uri')).toBe(
       'http://127.0.0.1:3000/api/v1/social-connections/threads/callback',
@@ -38,6 +39,29 @@ describe('ThreadsSocialAuthAdapter', () => {
     expect(url.searchParams.get('state')).toBe('random_state_abc123');
   });
 
+  it('rejects unexpected or missing scopes during createAuthorizationUrl', async () => {
+    const adapter = new ThreadsSocialAuthAdapter(defaultOptions);
+    await expect(
+      adapter.createAuthorizationUrl({
+        workspaceId: '018f3a2c-4e5b-7c8d-9e0f-1a2b3c4d5e6f',
+        platform: 'threads',
+        state: 'random_state_abc123',
+        redirectUri: 'http://127.0.0.1:3000/api/v1/social-connections/threads/callback',
+        scopes: ['threads_basic', 'malicious_extra_scope'],
+      }),
+    ).rejects.toThrow(SocialAuthExchangeError);
+
+    await expect(
+      adapter.createAuthorizationUrl({
+        workspaceId: '018f3a2c-4e5b-7c8d-9e0f-1a2b3c4d5e6f',
+        platform: 'threads',
+        state: 'random_state_abc123',
+        redirectUri: 'http://127.0.0.1:3000/api/v1/social-connections/threads/callback',
+        scopes: ['threads_basic'], // Missing threads_content_publish
+      }),
+    ).rejects.toThrow(SocialAuthExchangeError);
+  });
+
   it('exchanges authorization code through staged pipeline to long-lived token and profile', async () => {
     const mockTransport: HttpTransport = {
       fetch: vi
@@ -45,7 +69,7 @@ describe('ThreadsSocialAuthAdapter', () => {
         // 1. Short token exchange
         .mockResolvedValueOnce({
           status: 200,
-          headers: {},
+          headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
             access_token: 'short_token_xyz',
             user_id: 'threads_user_999',
@@ -54,7 +78,7 @@ describe('ThreadsSocialAuthAdapter', () => {
         // 2. Long token exchange
         .mockResolvedValueOnce({
           status: 200,
-          headers: {},
+          headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
             access_token: 'long_token_abc',
             token_type: 'bearer',
@@ -64,7 +88,7 @@ describe('ThreadsSocialAuthAdapter', () => {
         // 3. Profile lookup
         .mockResolvedValueOnce({
           status: 200,
-          headers: {},
+          headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
             id: 'threads_user_999',
             username: 'threads_creator_pro',
@@ -74,7 +98,7 @@ describe('ThreadsSocialAuthAdapter', () => {
         // 4. Permissions lookup
         .mockResolvedValueOnce({
           status: 200,
-          headers: {},
+          headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
             data: [
               { permission: 'threads_basic', status: 'granted' },
@@ -103,35 +127,120 @@ describe('ThreadsSocialAuthAdapter', () => {
     expect(result.capabilities).toEqual({ canPublishText: true, canPublishMedia: false });
     expect(result.environment).toBe('local');
     expect(result.isRecoverablePartial).toBe(false);
+    expect(result.stage).toBe('completed');
   });
 
-  it('returns recoverable partial result when post-token profile lookup fails', async () => {
+  it('throws terminal error if profile ID does not match token exchange user ID', async () => {
     const mockTransport: HttpTransport = {
       fetch: vi
         .fn()
-        // 1. Short token exchange succeeds
+        // 1. Short token exchange
         .mockResolvedValueOnce({
           status: 200,
-          headers: {},
+          headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
             access_token: 'short_token_xyz',
-            user_id: 'threads_user_999',
+            user_id: 'expected_user_111',
           }),
         })
-        // 2. Long token exchange succeeds
+        // 2. Long token exchange
         .mockResolvedValueOnce({
           status: 200,
-          headers: {},
+          headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
             access_token: 'long_token_abc',
-            token_type: 'bearer',
             expires_in: 5184000,
           }),
         })
-        // 3. Profile lookup fails with 500
+        // 3. Profile lookup returns a DIFFERENT id!
+        .mockResolvedValueOnce({
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            id: 'different_user_222',
+            username: 'imposter',
+          }),
+        }),
+    };
+
+    const adapter = new ThreadsSocialAuthAdapter({
+      ...defaultOptions,
+      transport: mockTransport,
+    });
+
+    await expect(
+      adapter.exchangeCode({
+        platform: 'threads',
+        code: 'valid_auth_code_123',
+        redirectUri: 'http://127.0.0.1:3000/api/v1/social-connections/threads/callback',
+      }),
+    ).rejects.toThrow(SocialAuthExchangeError);
+  });
+
+  it('does not fabricate threads_content_publish when permissions inspection fails or omits it', async () => {
+    const mockTransport: HttpTransport = {
+      fetch: vi
+        .fn()
+        // 1. Short token
+        .mockResolvedValueOnce({
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ access_token: 'short_tok', user_id: 'user_123' }),
+        })
+        // 2. Long token
+        .mockResolvedValueOnce({
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ access_token: 'long_tok', expires_in: 5184000 }),
+        })
+        // 3. Profile
+        .mockResolvedValueOnce({
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ id: 'user_123', username: 'real_user' }),
+        })
+        // 4. Permissions lookup returns 500 error
         .mockResolvedValueOnce({
           status: 500,
-          headers: {},
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ error: { message: 'Permissions service unavailable' } }),
+        }),
+    };
+
+    const adapter = new ThreadsSocialAuthAdapter({
+      ...defaultOptions,
+      transport: mockTransport,
+    });
+
+    const result = await adapter.exchangeCode({
+      platform: 'threads',
+      code: 'valid_code',
+      redirectUri: 'http://127.0.0.1:3000/callback',
+    });
+
+    expect(result.grantedScopes).not.toContain('threads_content_publish');
+    expect(result.capabilities.canPublishText).toBe(false);
+    expect(result.isRecoverablePartial).toBe(true);
+    expect(result.stage).not.toBe('completed');
+  });
+
+  it('returns recoverable partial result without fabricated display name when profile lookup fails', async () => {
+    const mockTransport: HttpTransport = {
+      fetch: vi
+        .fn()
+        .mockResolvedValueOnce({
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ access_token: 'short_token_xyz', user_id: 'threads_user_999' }),
+        })
+        .mockResolvedValueOnce({
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ access_token: 'long_token_abc', expires_in: 5184000 }),
+        })
+        .mockResolvedValueOnce({
+          status: 500,
+          headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ error: { message: 'Internal profile server error' } }),
         }),
     };
@@ -150,7 +259,8 @@ describe('ThreadsSocialAuthAdapter', () => {
     expect(result.isRecoverablePartial).toBe(true);
     expect(result.providerAccountId).toBe('threads_user_999');
     expect(result.accessToken).toBe('long_token_abc');
-    expect(result.displayName).toBe('Threads User threads_user_999');
+    expect(result.displayName).toBe('threads_user_999'); // Not fabricated "Threads User ..."
+    expect(result.stage).toBe('long_token_exchanged');
   });
 
   it('throws SocialAuthOutcomeUnknownError on pre-token timeout', async () => {
@@ -176,7 +286,7 @@ describe('ThreadsSocialAuthAdapter', () => {
     const mockTransport: HttpTransport = {
       fetch: vi.fn().mockResolvedValueOnce({
         status: 429,
-        headers: {},
+        headers: { 'retry-after': '120', 'content-type': 'application/json' },
         body: JSON.stringify({
           error: { message: 'Rate limit reached', code: 4 },
         }),
@@ -201,7 +311,7 @@ describe('ThreadsSocialAuthAdapter', () => {
     const mockTransport: HttpTransport = {
       fetch: vi.fn().mockResolvedValueOnce({
         status: 200,
-        headers: {},
+        headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           access_token: 'new_refreshed_long_token',
           token_type: 'bearer',
@@ -235,7 +345,7 @@ describe('ThreadsSocialAuthAdapter', () => {
     const mockTransport: HttpTransport = {
       fetch: vi.fn().mockResolvedValueOnce({
         status: 400,
-        headers: {},
+        headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           error: {
             message: `Invalid client_secret super-secret-threads-key-456 or token short_token_xyz`,

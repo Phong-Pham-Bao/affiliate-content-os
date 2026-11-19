@@ -61,6 +61,9 @@ function validateProviderUrl(
     if (parsed.search || parsed.hash) {
       issues.push({ field, message: 'Must not include query or fragment in base URL' });
     }
+    if (parsed.pathname !== '' && parsed.pathname !== '/') {
+      issues.push({ field, message: 'Must not include path prefix in base URL' });
+    }
     if (nodeEnv === 'production') {
       if (parsed.protocol !== 'https:') {
         issues.push({ field, message: 'Must use https protocol in production' });
@@ -143,7 +146,7 @@ export function validateThreadsConfig(
     rawEnv['THREADS_AUTH_BASE_URL'],
     'THREADS_AUTH_BASE_URL',
     DEFAULT_THREADS_AUTH_BASE_URL,
-    'threads.net',
+    'www.threads.com',
     nodeEnv,
     issues,
   );
@@ -152,7 +155,7 @@ export function validateThreadsConfig(
     rawEnv['THREADS_API_BASE_URL'],
     'THREADS_API_BASE_URL',
     DEFAULT_THREADS_API_BASE_URL,
-    'graph.threads.net',
+    'graph.threads.com',
     nodeEnv,
     issues,
   );

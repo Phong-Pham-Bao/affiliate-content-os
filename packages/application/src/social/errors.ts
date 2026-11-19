@@ -78,6 +78,19 @@ export class SocialAuthExchangeError extends Error {
   }
 }
 
+export class SocialAuthTerminalError extends Error {
+  public override readonly name = 'SocialAuthTerminalError';
+  public readonly reason: 'token_expired' | 'token_revoked' | 'invalid_grant';
+  constructor(
+    message = 'Provider token is expired, revoked, or invalid (terminal).',
+    reason: 'token_expired' | 'token_revoked' | 'invalid_grant' = 'token_expired',
+  ) {
+    super(message);
+    this.reason = reason;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
 export class SocialAuthRateLimitError extends Error {
   public override readonly name = 'SocialAuthRateLimitError';
   public readonly retryAfterSeconds?: number | undefined;

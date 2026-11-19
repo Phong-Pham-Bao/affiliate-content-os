@@ -10,6 +10,7 @@ import {
   OAuthTransactionReplayedError,
   SocialAccountNotFoundError,
   SocialAccountVersionMismatchError,
+  type ClaimNextDueSocialAccountParams,
   type ClaimOAuthTransactionParams,
   type ClaimSocialAccountForRefreshParams,
   type ClaimedOAuthTransaction,
@@ -22,9 +23,11 @@ import {
   type EncryptedSocialCredentials,
   type RecordFailedOAuthCallbackParams,
   type RecordFailedSocialAccountRefreshParams,
+  type ReleaseSocialAccountRefreshLeaseParams,
   type SaveOAuthTransactionParams,
   type SaveOAuthTransactionWithIdempotencyParams,
   type SaveOAuthTransactionWithIdempotencyResult,
+  type SocialIdempotencyInput,
   type SocialPersistencePort,
 } from '@affiliate-content-os/application';
 import {
@@ -233,7 +236,8 @@ export class InMemorySocialPersistence implements SocialPersistencePort {
       providerAccountId: params.providerAccountId,
       displayName: params.displayName,
       handle: params.handle,
-      status: 'active',
+      status: params.derivedStatus ?? 'active',
+      statusReason: params.statusReason ?? null,
       grantedScopes: Object.freeze([...params.grantedScopes]),
       capabilities: Object.freeze({ ...params.capabilities }),
       capabilitiesCheckedAt: params.capabilitiesCheckedAt,
@@ -253,11 +257,11 @@ export class InMemorySocialPersistence implements SocialPersistencePort {
       transactionId: parseOAuthTransactionId(params.transactionId),
       initiatedByUserId: parseUserId(params.actorUserId),
       resultKeyHash: Buffer.from(params.resultKeyHash),
-      status: 'success',
+      status: params.callbackStatus ?? 'success',
       platform: params.platform,
       socialAccountId: account.id,
-      errorCode: null,
-      errorDescription: null,
+      errorCode: params.callbackErrorCode ?? null,
+      errorDescription: params.callbackErrorDescription ?? null,
       consumedAt: null,
       createdAt: params.now,
       expiresAt: params.resultExpiresAt,
@@ -375,6 +379,13 @@ export class InMemorySocialPersistence implements SocialPersistencePort {
     return this.findSocialAccountById(params);
   }
 
+  public async findEncryptedCredentials(params: {
+    readonly workspaceId: string;
+    readonly accountId: string;
+  }): Promise<EncryptedSocialCredentials | null> {
+    return this.credentials.get(params.accountId) ?? null;
+  }
+
   public async claimSocialAccountForRefresh(
     params: ClaimSocialAccountForRefreshParams,
   ): Promise<ClaimedSocialAccountRefresh | null> {
@@ -397,7 +408,32 @@ export class InMemorySocialPersistence implements SocialPersistencePort {
       encryptedCredentials,
       claimedAccountVersion: acc.version,
       claimedCredentialVersion: 1,
+      refreshLeaseToken: params.claimToken ?? generateUuidV7(),
     };
+  }
+
+  public async claimNextDueSocialAccountForRefresh(
+    params: ClaimNextDueSocialAccountParams,
+  ): Promise<ClaimedSocialAccountRefresh | null> {
+    for (const acc of this.accounts.values()) {
+      if (acc.status === 'active' || acc.status === 'degraded') {
+        return this.claimSocialAccountForRefresh({
+          workspaceId: acc.workspaceId,
+          accountId: acc.id,
+          now: params.now,
+          workerId: params.workerId,
+          leaseDurationSeconds: params.leaseDurationSeconds,
+          claimToken: params.claimToken,
+        });
+      }
+    }
+    return null;
+  }
+
+  public async releaseSocialAccountRefreshLeaseAtomic(
+    _params: ReleaseSocialAccountRefreshLeaseParams,
+  ): Promise<void> {
+    // No-op in memory
   }
 
   public async completeSocialAccountRefreshAtomic(
@@ -468,5 +504,49 @@ export class InMemorySocialPersistence implements SocialPersistencePort {
     };
     this.accounts.set(updated.id, updated);
     return updated;
+  }
+
+  public async executeMutationWithIdempotency(params: {
+    readonly workspaceId: string;
+    readonly accountId: string;
+    readonly actorUserId: string;
+    readonly idempotency: SocialIdempotencyInput;
+    readonly now: string;
+    readonly executeMutation: () => Promise<SocialAccountSnapshot>;
+  }): Promise<{ readonly replayed: boolean; readonly account: SocialAccountSnapshot }> {
+    const idempKey = `${params.workspaceId}:${params.actorUserId}:${params.idempotency.routeKey}:${Buffer.from(params.idempotency.keyHash).toString('hex')}`;
+    const existing = this.idempotencyKeys.get(idempKey);
+
+    if (existing) {
+      if (new Date(existing.expiresAt).getTime() <= new Date(params.now).getTime()) {
+        this.idempotencyKeys.delete(idempKey);
+      } else {
+        if (
+          !Buffer.from(existing.requestHash).equals(Buffer.from(params.idempotency.requestHash))
+        ) {
+          throw new IdempotencyKeyReusedError();
+        }
+        return {
+          replayed: true,
+          account: existing.response as SocialAccountSnapshot,
+        };
+      }
+    }
+
+    const account = await params.executeMutation();
+    const expiresAt = new Date(Date.parse(params.now) + 86400 * 1000).toISOString();
+    this.idempotencyKeys.set(idempKey, {
+      principalId: params.actorUserId,
+      routeKey: params.idempotency.routeKey,
+      keyHash: params.idempotency.keyHash,
+      requestHash: params.idempotency.requestHash,
+      response: account,
+      expiresAt,
+    });
+
+    return {
+      replayed: false,
+      account,
+    };
   }
 }

@@ -37,6 +37,7 @@ export interface DeriveAccountLifecycleInput {
   };
   readonly disconnectedAt?: string | null | undefined;
   readonly now: Date;
+  readonly capabilityFreshnessMaxAgeMs?: number | undefined;
 }
 
 export interface DerivedAccountLifecycle {
@@ -53,19 +54,17 @@ export interface DerivedAccountLifecycle {
 
 const DEFAULT_DAYS_BEFORE_EXPIRY_REFRESH = 7;
 const DEFAULT_REFRESH_INTERVAL_DAYS = 30;
+export const DEFAULT_CAPABILITY_FRESHNESS_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 function computeNextRefresh(
   tokenExpiresAt: string | null,
   now: Date,
   status: SocialAccountStatus,
 ): string | null {
-  if (status !== 'active' && status !== 'review_gated') {
-    return null;
-  }
+  if (status !== 'active' && status !== 'review_gated') return null;
   if (tokenExpiresAt) {
-    const expiresMs = new Date(tokenExpiresAt).getTime();
-    const candidateMs = expiresMs - DEFAULT_DAYS_BEFORE_EXPIRY_REFRESH * 24 * 60 * 60 * 1000;
-    // If candidate time is already in the past, schedule for 1 hour from now
+    const candidateMs =
+      new Date(tokenExpiresAt).getTime() - DEFAULT_DAYS_BEFORE_EXPIRY_REFRESH * 24 * 60 * 60 * 1000;
     if (candidateMs <= now.getTime()) {
       return new Date(now.getTime() + 60 * 60 * 1000).toISOString();
     }
@@ -76,65 +75,73 @@ function computeNextRefresh(
   ).toISOString();
 }
 
+function isFreshEvidence(
+  checkedAtStr: string | null,
+  now: Date,
+  maxAgeMs: number = DEFAULT_CAPABILITY_FRESHNESS_MAX_AGE_MS,
+): boolean {
+  if (!checkedAtStr) return false;
+  const checkedMs = new Date(checkedAtStr).getTime();
+  if (Number.isNaN(checkedMs)) return false;
+  if (checkedMs > now.getTime() + 60_000) return false; // future-skewed
+  return now.getTime() - checkedMs <= maxAgeMs;
+}
+
 export function deriveAccountLifecycle(
   input: DeriveAccountLifecycleInput,
 ): DerivedAccountLifecycle {
   const { now } = input;
+  const noPub = Object.freeze({ canPublishText: false, canPublishMedia: false });
 
-  // 1. Disconnected state: permanently inactive until explicit reconnect
   if (input.disconnectedAt || input.previousStatus === 'disconnected') {
     return Object.freeze({
       status: 'disconnected',
       statusReason: 'disconnected_by_user',
-      capabilities: Object.freeze({ canPublishText: false, canPublishMedia: false }),
+      capabilities: noPub,
       allowedActions: Object.freeze(['reconnect'] as const),
       nextRefreshAt: null,
       reauthRequiredAt: null,
     });
   }
 
-  // 2. Kill switch active: fail-closed to degraded state
   if (input.killSwitches.globalKillSwitch || input.killSwitches.connectionKillSwitch) {
     return Object.freeze({
       status: 'degraded',
       statusReason: 'kill_switched',
-      capabilities: Object.freeze({ canPublishText: false, canPublishMedia: false }),
+      capabilities: noPub,
       allowedActions: Object.freeze(['reconnect', 'disconnect'] as const),
       nextRefreshAt: null,
       reauthRequiredAt: null,
     });
   }
 
-  // 3. Credential missing or invalidated
   if (!input.hasValidCredential) {
     return Object.freeze({
       status: 'reauth_required',
       statusReason: 'reauth_required',
-      capabilities: Object.freeze({ canPublishText: false, canPublishMedia: false }),
+      capabilities: noPub,
       allowedActions: Object.freeze(['reconnect', 'disconnect'] as const),
       nextRefreshAt: null,
       reauthRequiredAt: now.toISOString(),
     });
   }
 
-  // 4. Token expired
   if (input.tokenExpiresAt && new Date(input.tokenExpiresAt).getTime() <= now.getTime()) {
     return Object.freeze({
       status: 'reauth_required',
       statusReason: 'token_expired',
-      capabilities: Object.freeze({ canPublishText: false, canPublishMedia: false }),
+      capabilities: noPub,
       allowedActions: Object.freeze(['reconnect', 'disconnect'] as const),
       nextRefreshAt: null,
       reauthRequiredAt: now.toISOString(),
     });
   }
 
-  // 5. Terminal provider auth errors
   if (input.lastInspectionErrorClass === 'token_expired') {
     return Object.freeze({
       status: 'reauth_required',
       statusReason: 'token_expired',
-      capabilities: Object.freeze({ canPublishText: false, canPublishMedia: false }),
+      capabilities: noPub,
       allowedActions: Object.freeze(['reconnect', 'disconnect'] as const),
       nextRefreshAt: null,
       reauthRequiredAt: now.toISOString(),
@@ -147,29 +154,29 @@ export function deriveAccountLifecycle(
     return Object.freeze({
       status: 'reauth_required',
       statusReason: 'grant_revoked',
-      capabilities: Object.freeze({ canPublishText: false, canPublishMedia: false }),
+      capabilities: noPub,
       allowedActions: Object.freeze(['reconnect', 'disconnect'] as const),
       nextRefreshAt: null,
       reauthRequiredAt: now.toISOString(),
     });
   }
 
-  // 6. Partial exchange or transient / rate-limited failures
   if (input.exchangeStage !== 'completed') {
     return Object.freeze({
       status: 'degraded',
       statusReason: 'transient_failure',
-      capabilities: Object.freeze({ canPublishText: false, canPublishMedia: false }),
+      capabilities: noPub,
       allowedActions: Object.freeze(['refresh', 'reconnect', 'disconnect'] as const),
       nextRefreshAt: new Date(now.getTime() + 15 * 60 * 1000).toISOString(),
       reauthRequiredAt: null,
     });
   }
+
   if (input.lastInspectionErrorClass === 'rate_limited') {
     return Object.freeze({
       status: 'degraded',
       statusReason: 'rate_limited',
-      capabilities: Object.freeze({ canPublishText: false, canPublishMedia: false }),
+      capabilities: noPub,
       allowedActions: Object.freeze(['refresh', 'reconnect', 'disconnect'] as const),
       nextRefreshAt: new Date(now.getTime() + 30 * 60 * 1000).toISOString(),
       reauthRequiredAt: null,
@@ -184,48 +191,81 @@ export function deriveAccountLifecycle(
     return Object.freeze({
       status: 'degraded',
       statusReason: 'transient_failure',
-      capabilities: Object.freeze({ canPublishText: false, canPublishMedia: false }),
+      capabilities: noPub,
       allowedActions: Object.freeze(['refresh', 'reconnect', 'disconnect'] as const),
       nextRefreshAt: new Date(now.getTime() + 15 * 60 * 1000).toISOString(),
       reauthRequiredAt: null,
     });
   }
 
-  // 7. Identity verification check
-  if (!input.verifiedIdentity || !input.verifiedIdentity.providerAccountId) {
+  if (
+    !input.verifiedIdentity ||
+    !input.verifiedIdentity.providerAccountId ||
+    !input.verifiedIdentity.displayName
+  ) {
     return Object.freeze({
       status: 'degraded',
       statusReason: 'transient_failure',
-      capabilities: Object.freeze({ canPublishText: false, canPublishMedia: false }),
+      capabilities: noPub,
       allowedActions: Object.freeze(['reconnect', 'disconnect'] as const),
       nextRefreshAt: null,
       reauthRequiredAt: null,
     });
   }
 
-  // 8. App review gating check
+  // Capability freshness enforcement: missing, invalid, future-skewed, or stale
+  if (!isFreshEvidence(input.capabilitiesCheckedAt, now, input.capabilityFreshnessMaxAgeMs)) {
+    return Object.freeze({
+      status: 'degraded',
+      statusReason: 'capability_stale',
+      capabilities: noPub,
+      allowedActions: Object.freeze(['refresh', 'reconnect', 'disconnect'] as const),
+      nextRefreshAt: new Date(now.getTime() + 15 * 60 * 1000).toISOString(),
+      reauthRequiredAt: null,
+    });
+  }
+
+  // Required grants enforcement: threads_basic and threads_content_publish
+  const hasBasic = input.grantedScopes.includes('threads_basic');
+  const hasPublish = input.grantedScopes.includes('threads_content_publish');
+
+  if (!hasBasic) {
+    return Object.freeze({
+      status: 'reauth_required',
+      statusReason: 'grant_revoked',
+      capabilities: noPub,
+      allowedActions: Object.freeze(['reconnect', 'disconnect'] as const),
+      nextRefreshAt: null,
+      reauthRequiredAt: now.toISOString(),
+    });
+  }
+
+  if (!hasPublish) {
+    return Object.freeze({
+      status: 'degraded',
+      statusReason: 'missing_grants',
+      capabilities: noPub,
+      allowedActions: Object.freeze(['reconnect', 'refresh', 'disconnect'] as const),
+      nextRefreshAt: new Date(now.getTime() + 15 * 60 * 1000).toISOString(),
+      reauthRequiredAt: null,
+    });
+  }
+
   if (input.appReviewStatus !== 'approved') {
     return Object.freeze({
       status: 'review_gated',
       statusReason: 'review_pending',
-      capabilities: Object.freeze({ canPublishText: false, canPublishMedia: false }),
+      capabilities: noPub,
       allowedActions: Object.freeze(['refresh', 'reconnect', 'disconnect'] as const),
       nextRefreshAt: computeNextRefresh(input.tokenExpiresAt, now, 'review_gated'),
       reauthRequiredAt: null,
     });
   }
 
-  // 9. Fully active state
-  const hasBasic = input.grantedScopes.includes('threads_basic');
-  const hasPublish = input.grantedScopes.includes('threads_content_publish');
-
-  const canPublishText = hasBasic && hasPublish;
-  const canPublishMedia = false; // Intentionally gated until TASK-019
-
   return Object.freeze({
     status: 'active',
     statusReason: 'initial_exchange_complete',
-    capabilities: Object.freeze({ canPublishText, canPublishMedia }),
+    capabilities: Object.freeze({ canPublishText: true, canPublishMedia: false }),
     allowedActions: Object.freeze(['refresh', 'reconnect', 'disconnect'] as const),
     nextRefreshAt: computeNextRefresh(input.tokenExpiresAt, now, 'active'),
     reauthRequiredAt: null,

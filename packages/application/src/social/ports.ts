@@ -17,11 +17,14 @@ export type {
 } from './ports-crypto.js';
 
 export type {
+  ClaimNextDueSocialAccountParams,
   ClaimSocialAccountForRefreshParams,
   ClaimedSocialAccountRefresh,
   CompleteSocialAccountRefreshParams,
   DisconnectSocialAccountParams,
   RecordFailedSocialAccountRefreshParams,
+  ReleaseSocialAccountRefreshLeaseParams,
+  SocialIdempotencyInput,
 } from './ports-lifecycle-params.js';
 
 export type {

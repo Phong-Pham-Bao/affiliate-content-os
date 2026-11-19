@@ -269,6 +269,7 @@ describe('Social Account Lifecycle PostgreSQL Integration', () => {
       accountId,
       expectedAccountVersion: 1,
       expectedCredentialVersion: 1,
+      expectedLeaseToken: claimed!.refreshLeaseToken,
       encryptedCredentials: newEncrypted,
       tokenExpiresAt: new Date(now.getTime() + 5184000000).toISOString(),
       nextRefreshAt: new Date(now.getTime() + 2592000000).toISOString(),
@@ -288,6 +289,7 @@ describe('Social Account Lifecycle PostgreSQL Integration', () => {
         accountId,
         expectedAccountVersion: 1, // Stale!
         expectedCredentialVersion: 1,
+        expectedLeaseToken: claimed!.refreshLeaseToken,
         encryptedCredentials: newEncrypted,
         tokenExpiresAt: null,
         nextRefreshAt: null,

@@ -19,6 +19,7 @@ export async function appendCallbackAuditEvent(
   const action = params.reconnectAccountId
     ? 'social_connection.reconnected'
     : 'social_connection.completed';
+  const isPartial = params.callbackStatus === 'partial';
   await auditAdapter.appendAuditEvent({
     id: parseAuditEventId(generateUuidV7()),
     workspaceId: parseWorkspaceId(params.workspaceId),
@@ -27,8 +28,8 @@ export async function appendCallbackAuditEvent(
     action,
     resourceType: 'social_account',
     resourceId: accountId,
-    result: 'succeeded',
-    reasonCode: null,
+    result: isPartial ? 'failed' : 'succeeded',
+    reasonCode: isPartial ? (params.callbackErrorCode ?? 'partial_exchange') : null,
     changes: {
       platform: { before: null, after: params.platform },
       status: { before: null, after: params.derivedStatus ?? 'active' },

@@ -7,7 +7,12 @@ import {
 import { authorizeWorkspaceAction } from '../authorize-workspace-action.js';
 import type { WorkspaceAuthorizationPort } from '../ports.js';
 import { SocialAccountNotFoundError, SocialAccountVersionMismatchError } from './errors.js';
-import type { SocialAuditContext, SocialAuthAdapter, SocialPersistencePort } from './ports.js';
+import type {
+  SocialAuditContext,
+  SocialAuthAdapter,
+  SocialCredentialProtectorPort,
+  SocialPersistencePort,
+} from './ports.js';
 
 export interface DisconnectSocialAccountCommand {
   readonly workspaceId: string;
@@ -20,6 +25,7 @@ export interface DisconnectSocialAccountCommand {
 export interface DisconnectSocialAccountDependencies {
   readonly persistence: SocialPersistencePort;
   readonly workspaceAuthorization?: WorkspaceAuthorizationPort | undefined;
+  readonly protector?: SocialCredentialProtectorPort | undefined;
   readonly adapters: ReadonlyMap<SocialPlatform, SocialAuthAdapter>;
   readonly clock: { now(): Date };
 }
@@ -71,11 +77,23 @@ export async function disconnectSocialAccount(
     : 'unsupported';
   let revocationAttempted = false;
 
-  if (supportsRevocation && adapter?.revokeToken) {
-    revocationAttempted = true;
+  if (supportsRevocation && adapter?.revokeToken && deps.protector) {
     try {
-      const res = await adapter.revokeToken('');
-      revocationResult = res.revoked ? 'succeeded' : 'failed';
+      const encryptedCreds = await deps.persistence.findEncryptedCredentials({
+        workspaceId: command.workspaceId,
+        accountId: command.accountId,
+      });
+      if (encryptedCreds) {
+        const decrypted = deps.protector.decrypt({
+          workspaceId: command.workspaceId,
+          socialAccountId: command.accountId,
+          platform: existing.platform,
+          credentials: encryptedCreds,
+        });
+        revocationAttempted = true;
+        const res = await adapter.revokeToken(decrypted.accessToken);
+        revocationResult = res.revoked ? 'succeeded' : 'failed';
+      }
     } catch {
       revocationResult = 'failed';
     }

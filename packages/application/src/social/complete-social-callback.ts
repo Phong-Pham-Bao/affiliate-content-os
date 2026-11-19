@@ -154,15 +154,22 @@ export async function completeSocialCallback(
     exchangeResult.stage ??
     (exchangeResult.isRecoverablePartial ? 'short_token_exchanged' : 'completed');
 
+  const isProfileVerified =
+    exchangeResult.stage === 'profile_inspected' || exchangeResult.stage === 'completed';
+
+  const verifiedIdentity = isProfileVerified
+    ? {
+        providerAccountId: exchangeResult.providerAccountId,
+        displayName: exchangeResult.displayName,
+      }
+    : null;
+
   const lifecycle = deriveAccountLifecycle({
     platform,
     exchangeStage,
     hasValidCredential: true,
     tokenExpiresAt,
-    verifiedIdentity: {
-      providerAccountId: exchangeResult.providerAccountId,
-      displayName: exchangeResult.displayName,
-    },
+    verifiedIdentity,
     grantedScopes: exchangeResult.grantedScopes,
     capabilitiesCheckedAt: now.toISOString(),
     appReviewStatus: deps.appReviewStatus ?? 'development',
@@ -172,6 +179,12 @@ export async function completeSocialCallback(
     },
     now,
   });
+
+  const callbackStatus = exchangeResult.isRecoverablePartial ? 'partial' : 'success';
+  const callbackErrorCode = exchangeResult.isRecoverablePartial ? 'partial_exchange' : null;
+  const callbackErrorDescription = exchangeResult.isRecoverablePartial
+    ? 'Account connected with limited capabilities. Re-authentication or review may be required.'
+    : null;
 
   await deps.persistence.completeOAuthCallbackAtomic({
     transactionId: claimedTx.id,
@@ -191,6 +204,9 @@ export async function completeSocialCallback(
     exchangeStage,
     statusReason: lifecycle.statusReason,
     derivedStatus: lifecycle.status,
+    callbackStatus,
+    callbackErrorCode,
+    callbackErrorDescription,
     encryptCredentials: (authoritativeAccountId: string) =>
       deps.protector.encrypt({
         workspaceId: claimedTx.workspaceId,

@@ -13745,7 +13745,7 @@
                     },
                     "status": {
                       "type": "string",
-                      "enum": ["success", "failed"]
+                      "enum": ["success", "failed", "partial"]
                     },
                     "platform": {
                       "type": "string",

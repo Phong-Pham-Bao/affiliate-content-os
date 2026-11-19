@@ -24,6 +24,8 @@ export const SOCIAL_ACCOUNT_STATUS_REASONS = [
   'reauth_required',
   'disconnected_by_user',
   'reconnect_required',
+  'capability_stale',
+  'missing_grants',
 ] as const;
 export type SocialAccountStatusReason = (typeof SOCIAL_ACCOUNT_STATUS_REASONS)[number];
 
@@ -54,7 +56,7 @@ export const OAUTH_TRANSACTION_STATUSES = [
 ] as const;
 export type OAuthTransactionStatus = (typeof OAUTH_TRANSACTION_STATUSES)[number];
 
-export const OAUTH_CALLBACK_RESULT_STATUSES = ['success', 'failed'] as const;
+export const OAUTH_CALLBACK_RESULT_STATUSES = ['success', 'failed', 'partial'] as const;
 export type OAuthCallbackResultStatus = (typeof OAUTH_CALLBACK_RESULT_STATUSES)[number];
 
 const PLATFORM_SET = new Set<string>(SOCIAL_PLATFORMS);

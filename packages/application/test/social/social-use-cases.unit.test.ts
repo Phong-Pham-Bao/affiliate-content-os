@@ -111,9 +111,12 @@ describe('Social Application Use Cases', () => {
     listSocialAccounts: vi.fn(),
     findSocialAccountById: vi.fn(),
     findSocialAccountForUpdate: vi.fn(),
+    findEncryptedCredentials: vi.fn(),
     claimSocialAccountForRefresh: vi.fn(),
+    claimNextDueSocialAccountForRefresh: vi.fn(),
     completeSocialAccountRefreshAtomic: vi.fn(),
     recordFailedSocialAccountRefreshAtomic: vi.fn(),
+    releaseSocialAccountRefreshLeaseAtomic: vi.fn(),
     disconnectSocialAccountAtomic: vi.fn(),
   });
 

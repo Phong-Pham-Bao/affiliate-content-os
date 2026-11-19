@@ -48,7 +48,7 @@ export interface SocialAuthorizeResponseDTO {
 
 export interface SocialCallbackResultDTO {
   readonly id: string;
-  readonly status: 'success' | 'failed';
+  readonly status: 'success' | 'failed' | 'partial';
   readonly platform: SocialPlatform;
   readonly socialAccountId: string | null;
   readonly errorCode: string | null;

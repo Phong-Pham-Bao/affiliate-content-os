@@ -48,6 +48,13 @@ export {
 } from './disconnect-social-account.js';
 
 export {
+  maintainDueSocialAccounts,
+  type MaintainDueSocialAccountsCommand,
+  type MaintainDueSocialAccountsDependencies,
+  type MaintainDueSocialAccountsResult,
+} from './maintain-social-accounts.js';
+
+export {
   CallbackResultForbiddenError,
   CallbackResultGoneError,
   CallbackResultNotFoundError,
@@ -63,6 +70,7 @@ export {
   SocialAuthNotConfiguredError,
   SocialAuthOutcomeUnknownError,
   SocialAuthRateLimitError,
+  SocialAuthTerminalError,
   SocialCredentialEncryptionError,
   SocialKillSwitchActiveError,
   SocialPlatformUnsupportedError,
@@ -70,6 +78,7 @@ export {
 
 export {
   type AuthorizeResponseData,
+  type ClaimNextDueSocialAccountParams,
   type ClaimOAuthTransactionParams,
   type ClaimSocialAccountForRefreshParams,
   type ClaimedOAuthTransaction,
@@ -90,6 +99,7 @@ export {
   type RecordFailedSocialAccountRefreshParams,
   type RefreshTokenInput,
   type RefreshTokenResult,
+  type ReleaseSocialAccountRefreshLeaseParams,
   type RevokeTokenResult,
   type SaveOAuthTransactionParams,
   type SaveOAuthTransactionWithIdempotencyParams,
@@ -97,5 +107,6 @@ export {
   type SocialAuditContext,
   type SocialAuthAdapter,
   type SocialCredentialProtectorPort,
+  type SocialIdempotencyInput,
   type SocialPersistencePort,
 } from './ports.js';

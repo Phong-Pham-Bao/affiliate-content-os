@@ -137,6 +137,56 @@ describe('Social Account Lifecycle API Routes', () => {
       expect(json.version).toBe(2);
       expect(json.lastRefreshedAt).toBeDefined();
     });
+
+    it('replays identical refresh request with same Idempotency-Key', async () => {
+      const { deps, persistence } = createTestSocialDeps();
+      persistence.accounts.set(initialAccount.id, initialAccount);
+      const app = createApp({ auth: deps.auth, social: deps });
+
+      const res1 = await app.inject({
+        method: 'POST',
+        url: `/api/v1/workspaces/${TEST_WORKSPACE_ID}/social-accounts/${testAccountId}/refresh`,
+        cookies: { [COOKIE_SESSION]: validSessionCookie },
+        headers: { origin: validOrigin, 'idempotency-key': 'refresh-replay-key' },
+      });
+      expect(res1.statusCode).toBe(200);
+
+      const res2 = await app.inject({
+        method: 'POST',
+        url: `/api/v1/workspaces/${TEST_WORKSPACE_ID}/social-accounts/${testAccountId}/refresh`,
+        cookies: { [COOKIE_SESSION]: validSessionCookie },
+        headers: { origin: validOrigin, 'idempotency-key': 'refresh-replay-key' },
+      });
+      expect(res2.statusCode).toBe(200);
+      expect(res2.json().version).toBe(res1.json().version);
+    });
+
+    it('returns 409 IDEMPOTENCY_KEY_REUSED when refresh key is reused with different account', async () => {
+      const { deps, persistence } = createTestSocialDeps();
+      persistence.accounts.set(initialAccount.id, initialAccount);
+      persistence.accounts.set('018f6c5b-21a4-789a-8def-000000000020', {
+        ...initialAccount,
+        id: '018f6c5b-21a4-789a-8def-000000000020',
+      });
+      const app = createApp({ auth: deps.auth, social: deps });
+
+      const res1 = await app.inject({
+        method: 'POST',
+        url: `/api/v1/workspaces/${TEST_WORKSPACE_ID}/social-accounts/${testAccountId}/refresh`,
+        cookies: { [COOKIE_SESSION]: validSessionCookie },
+        headers: { origin: validOrigin, 'idempotency-key': 'refresh-conflict-key' },
+      });
+      expect(res1.statusCode).toBe(200);
+
+      const res2 = await app.inject({
+        method: 'POST',
+        url: `/api/v1/workspaces/${TEST_WORKSPACE_ID}/social-accounts/018f6c5b-21a4-789a-8def-000000000020/refresh`,
+        cookies: { [COOKIE_SESSION]: validSessionCookie },
+        headers: { origin: validOrigin, 'idempotency-key': 'refresh-conflict-key' },
+      });
+      expect(res2.statusCode).toBe(409);
+      expect(res2.json().code).toBe('IDEMPOTENCY_KEY_REUSED');
+    });
   });
 
   describe('DELETE /api/v1/workspaces/:workspaceId/social-accounts/:accountId', () => {
@@ -181,6 +231,68 @@ describe('Social Account Lifecycle API Routes', () => {
       expect(json.status).toBe('disconnected');
       expect(json.version).toBe(2);
       expect(json.externalRevocationResult).toBe('unsupported');
+    });
+
+    it('replays identical disconnect request with same Idempotency-Key', async () => {
+      const { deps, persistence } = createTestSocialDeps();
+      persistence.accounts.set(initialAccount.id, initialAccount);
+      const app = createApp({ auth: deps.auth, social: deps });
+
+      const res1 = await app.inject({
+        method: 'DELETE',
+        url: `/api/v1/workspaces/${TEST_WORKSPACE_ID}/social-accounts/${testAccountId}`,
+        cookies: { [COOKIE_SESSION]: validSessionCookie },
+        headers: {
+          origin: validOrigin,
+          'idempotency-key': 'disconnect-replay-key',
+          'if-match': '"1"',
+        },
+      });
+      expect(res1.statusCode).toBe(200);
+
+      const res2 = await app.inject({
+        method: 'DELETE',
+        url: `/api/v1/workspaces/${TEST_WORKSPACE_ID}/social-accounts/${testAccountId}`,
+        cookies: { [COOKIE_SESSION]: validSessionCookie },
+        headers: {
+          origin: validOrigin,
+          'idempotency-key': 'disconnect-replay-key',
+          'if-match': '"1"',
+        },
+      });
+      expect(res2.statusCode).toBe(200);
+      expect(res2.json().status).toBe('disconnected');
+    });
+
+    it('returns 409 IDEMPOTENCY_KEY_REUSED when disconnect key is reused with different expectedVersion', async () => {
+      const { deps, persistence } = createTestSocialDeps();
+      persistence.accounts.set(initialAccount.id, initialAccount);
+      const app = createApp({ auth: deps.auth, social: deps });
+
+      const res1 = await app.inject({
+        method: 'DELETE',
+        url: `/api/v1/workspaces/${TEST_WORKSPACE_ID}/social-accounts/${testAccountId}`,
+        cookies: { [COOKIE_SESSION]: validSessionCookie },
+        headers: {
+          origin: validOrigin,
+          'idempotency-key': 'disconnect-conflict-key',
+          'if-match': '"1"',
+        },
+      });
+      expect(res1.statusCode).toBe(200);
+
+      const res2 = await app.inject({
+        method: 'DELETE',
+        url: `/api/v1/workspaces/${TEST_WORKSPACE_ID}/social-accounts/${testAccountId}`,
+        cookies: { [COOKIE_SESSION]: validSessionCookie },
+        headers: {
+          origin: validOrigin,
+          'idempotency-key': 'disconnect-conflict-key',
+          'if-match': '"2"',
+        },
+      });
+      expect(res2.statusCode).toBe(409);
+      expect(res2.json().code).toBe('IDEMPOTENCY_KEY_REUSED');
     });
   });
 });

@@ -18,6 +18,13 @@ export interface HttpTransport {
 
 const MAX_RESPONSE_BYTES = 65536; // 64KB safe bound for JSON responses
 
+export function redactProviderUrlSecrets(text: string): string {
+  return text.replace(
+    /([?&](?:access_token|client_secret|code|state)=)[^&\s"']+/gi,
+    '$1[REDACTED]',
+  );
+}
+
 export class DefaultHttpTransport implements HttpTransport {
   constructor(private readonly defaultTimeoutMs = 10000) {}
 
@@ -53,9 +60,46 @@ export class DefaultHttpTransport implements HttpTransport {
         responseHeaders[k.toLowerCase()] = v;
       });
 
-      const text = await res.text();
-      if (text.length > MAX_RESPONSE_BYTES) {
-        throw new Error('Provider response exceeded maximum allowed payload size');
+      const contentType = responseHeaders['content-type'] ?? '';
+      if (!contentType.includes('application/json') && !contentType.includes('text/javascript')) {
+        throw new Error(`Provider returned invalid content type: ${contentType || 'none'}`);
+      }
+
+      const cl = responseHeaders['content-length'];
+      if (cl) {
+        const bytes = Number(cl);
+        if (Number.isFinite(bytes) && bytes > MAX_RESPONSE_BYTES) {
+          throw new Error('Provider response exceeded maximum allowed payload size');
+        }
+      }
+
+      let text: string;
+      if (res.body && typeof res.body.getReader === 'function') {
+        const reader = res.body.getReader();
+        const chunks: Uint8Array[] = [];
+        let totalBytes = 0;
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (value) {
+              totalBytes += value.byteLength;
+              if (totalBytes > MAX_RESPONSE_BYTES) {
+                await reader.cancel();
+                throw new Error('Provider response exceeded maximum allowed payload size');
+              }
+              chunks.push(value);
+            }
+          }
+        } finally {
+          reader.releaseLock();
+        }
+        text = Buffer.concat(chunks).toString('utf8');
+      } else {
+        text = await res.text();
+        if (Buffer.byteLength(text, 'utf8') > MAX_RESPONSE_BYTES) {
+          throw new Error('Provider response exceeded maximum allowed payload size');
+        }
       }
 
       return {
@@ -64,14 +108,19 @@ export class DefaultHttpTransport implements HttpTransport {
         body: text,
       };
     } catch (err: unknown) {
-      if (err instanceof Error && (err.name === 'AbortError' || err.message.includes('timeout'))) {
-        throw new Error('HTTP request to provider timed out', { cause: err });
+      if (
+        err instanceof Error &&
+        (err.name === 'AbortError' ||
+          err.message.includes('timeout') ||
+          err.message.includes('timed out'))
+      ) {
+        // eslint-disable-next-line preserve-caught-error -- provider error cause must not leak secret URLs
+        throw new Error('HTTP request to provider timed out');
       }
-      const safeMsg =
-        err instanceof Error
-          ? err.message.replace(/([?&]access_token=)[^&]+/g, '$1[REDACTED]')
-          : 'Network error';
-      throw new Error(safeMsg, { cause: err });
+      const rawMsg = err instanceof Error ? err.message : 'Network error';
+      const safeMsg = redactProviderUrlSecrets(rawMsg);
+      // eslint-disable-next-line preserve-caught-error -- provider error cause must not leak secret URLs
+      throw new Error(safeMsg);
     } finally {
       clearTimeout(timer);
     }

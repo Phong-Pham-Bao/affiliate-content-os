@@ -63,6 +63,11 @@ export function ConnectionsPanel({ workspaceId, userRole }: ConnectionsPanelProp
               status: 'success',
               message: `Kết nối tài khoản ${result.platform.toUpperCase()} thành công!`,
             });
+          } else if (result.status === 'partial') {
+            setCallbackBanner({
+              status: 'partial',
+              message: `Kết nối tài khoản ${result.platform.toUpperCase()} với quyền hạn giới hạn. Cần xác thực thêm để mở khóa toàn bộ tính năng.`,
+            });
           } else {
             setCallbackBanner({
               status: 'failed',

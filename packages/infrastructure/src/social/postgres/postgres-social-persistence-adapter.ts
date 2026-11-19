@@ -15,6 +15,7 @@ import {
   OAuthTransactionExpiredError,
   OAuthTransactionNotFoundError,
   OAuthTransactionReplayedError,
+  type ClaimNextDueSocialAccountParams,
   type ClaimOAuthTransactionParams,
   type ClaimSocialAccountForRefreshParams,
   type ClaimedOAuthTransaction,
@@ -24,11 +25,14 @@ import {
   type CompleteSocialAccountRefreshParams,
   type ConsumeCallbackResultParams,
   type DisconnectSocialAccountParams,
+  type EncryptedSocialCredentials,
   type RecordFailedOAuthCallbackParams,
   type RecordFailedSocialAccountRefreshParams,
+  type ReleaseSocialAccountRefreshLeaseParams,
   type SaveOAuthTransactionParams,
   type SaveOAuthTransactionWithIdempotencyParams,
   type SaveOAuthTransactionWithIdempotencyResult,
+  type SocialIdempotencyInput,
   type SocialPersistencePort,
 } from '@affiliate-content-os/application';
 import {
@@ -57,11 +61,15 @@ import { executeCompleteOAuthCallbackTransaction } from './social-callback-trans
 import { executeRecordFailedOAuthCallbackTransaction } from './social-callback-failed-transaction.js';
 import { executeSaveOAuthTransactionWithIdempotency } from './social-authorize-idempotency-transaction.js';
 import {
+  executeClaimNextDueSocialAccountForRefresh,
   executeClaimSocialAccountForRefresh,
   executeCompleteSocialAccountRefresh,
   executeRecordFailedSocialAccountRefresh,
+  executeReleaseSocialAccountRefreshLease,
 } from './social-refresh-transactions.js';
 import { executeDisconnectSocialAccount } from './social-disconnect-transaction.js';
+import { executeSocialAccountMutationWithIdempotency } from './social-mutation-idempotency.js';
+import { SQL_FIND_CREDENTIALS_FOR_REFRESH } from './postgres-social-lifecycle-statements.js';
 
 export class PostgresSocialPersistenceAdapter implements SocialPersistencePort {
   public constructor(private readonly database: Database) {}
@@ -345,10 +353,46 @@ export class PostgresSocialPersistenceAdapter implements SocialPersistencePort {
     return mapSocialAccountRow(res.rows[0]!);
   }
 
+  public async findEncryptedCredentials(params: {
+    readonly workspaceId: string;
+    readonly accountId: string;
+  }): Promise<EncryptedSocialCredentials | null> {
+    const res = await this.database.query<{
+      access_token_ciphertext: Buffer;
+      access_token_iv: Buffer;
+      access_token_auth_tag: Buffer;
+      refresh_token_ciphertext: Buffer | null;
+      refresh_token_iv: Buffer | null;
+      refresh_token_auth_tag: Buffer | null;
+      encryption_key_version: string;
+    }>(SQL_FIND_CREDENTIALS_FOR_REFRESH, [params.workspaceId, params.accountId]);
+    if (res.rows.length === 0) return null;
+    const credRow = res.rows[0]!;
+    return {
+      accessTokenCiphertext: new Uint8Array(credRow.access_token_ciphertext),
+      accessTokenIv: new Uint8Array(credRow.access_token_iv),
+      accessTokenAuthTag: new Uint8Array(credRow.access_token_auth_tag),
+      refreshTokenCiphertext: credRow.refresh_token_ciphertext
+        ? new Uint8Array(credRow.refresh_token_ciphertext)
+        : null,
+      refreshTokenIv: credRow.refresh_token_iv ? new Uint8Array(credRow.refresh_token_iv) : null,
+      refreshTokenAuthTag: credRow.refresh_token_auth_tag
+        ? new Uint8Array(credRow.refresh_token_auth_tag)
+        : null,
+      keyVersion: credRow.encryption_key_version,
+    };
+  }
+
   public async claimSocialAccountForRefresh(
     params: ClaimSocialAccountForRefreshParams,
   ): Promise<ClaimedSocialAccountRefresh | null> {
     return executeClaimSocialAccountForRefresh(this.database, params);
+  }
+
+  public async claimNextDueSocialAccountForRefresh(
+    params: ClaimNextDueSocialAccountParams,
+  ): Promise<ClaimedSocialAccountRefresh | null> {
+    return executeClaimNextDueSocialAccountForRefresh(this.database, params);
   }
 
   public async completeSocialAccountRefreshAtomic(
@@ -363,9 +407,26 @@ export class PostgresSocialPersistenceAdapter implements SocialPersistencePort {
     return executeRecordFailedSocialAccountRefresh(this.database, params);
   }
 
+  public async releaseSocialAccountRefreshLeaseAtomic(
+    params: ReleaseSocialAccountRefreshLeaseParams,
+  ): Promise<void> {
+    return executeReleaseSocialAccountRefreshLease(this.database, params);
+  }
+
   public async disconnectSocialAccountAtomic(
     params: DisconnectSocialAccountParams,
   ): Promise<SocialAccountSnapshot> {
     return executeDisconnectSocialAccount(this.database, params);
+  }
+
+  public async executeMutationWithIdempotency(params: {
+    readonly workspaceId: string;
+    readonly accountId: string;
+    readonly actorUserId: string;
+    readonly idempotency: SocialIdempotencyInput;
+    readonly now: string;
+    readonly executeMutation: () => Promise<SocialAccountSnapshot>;
+  }): Promise<{ readonly replayed: boolean; readonly account: SocialAccountSnapshot }> {
+    return executeSocialAccountMutationWithIdempotency(this.database, params);
   }
 }

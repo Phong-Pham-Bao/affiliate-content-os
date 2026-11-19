@@ -2,6 +2,7 @@ import {
   SocialAuthExchangeError,
   SocialAuthOutcomeUnknownError,
   SocialAuthRateLimitError,
+  SocialAuthTerminalError,
 } from '@affiliate-content-os/application';
 
 export interface ProviderErrorPayload {
@@ -16,7 +17,12 @@ export interface ProviderErrorPayload {
   };
 }
 
-export function classifyThreadsError(status: number, body: string, isPreToken: boolean): Error {
+export function classifyThreadsError(
+  status: number,
+  body: string,
+  isPreToken: boolean,
+  headers?: Readonly<Record<string, string>> | undefined,
+): Error {
   let parsed: ProviderErrorPayload | undefined;
   try {
     parsed = JSON.parse(body) as ProviderErrorPayload;
@@ -30,12 +36,26 @@ export function classifyThreadsError(status: number, body: string, isPreToken: b
 
   // Rate limiting (status 429, or Meta codes 4, 17, 32, 613)
   if (status === 429 || code === 4 || code === 17 || code === 32 || code === 613) {
-    return new SocialAuthRateLimitError('Rate limit exceeded for Threads API', 300);
+    let retryAfter = 300;
+    const retryHeader = headers?.['retry-after'];
+    if (retryHeader) {
+      const parsedHeader = Number(retryHeader);
+      if (Number.isFinite(parsedHeader) && parsedHeader > 0) {
+        retryAfter = Math.min(Math.max(parsedHeader, 1), 86400);
+      }
+    }
+    return new SocialAuthRateLimitError('Rate limit exceeded for Threads API', retryAfter);
   }
 
   // Token expired / revoked (subcode 463: expired, 467: invalid, 458: app deauthorized, 190: auth exception)
-  if (subcode === 463 || subcode === 467 || subcode === 458 || code === 190) {
-    return new Error('Provider token is expired or revoked (auth terminal)');
+  if (subcode === 463) {
+    return new SocialAuthTerminalError('Provider token is expired (subcode 463)', 'token_expired');
+  }
+  if (subcode === 467 || subcode === 458 || code === 190) {
+    return new SocialAuthTerminalError(
+      'Provider token or grant is revoked or invalid',
+      'token_revoked',
+    );
   }
 
   // Pre-token stage network or timeout errors

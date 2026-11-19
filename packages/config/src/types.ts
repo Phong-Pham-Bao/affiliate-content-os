@@ -153,10 +153,11 @@ export const DEFAULT_SOCIAL_CALLBACK_RESULT_TTL_SECONDS = 300;
 export const ALLOWED_SOCIAL_KEY_PROVIDERS = ['local', 'kms'] as const;
 export type SocialKeyProvider = (typeof ALLOWED_SOCIAL_KEY_PROVIDERS)[number];
 
-export const DEFAULT_THREADS_AUTH_BASE_URL = 'https://threads.net';
-export const DEFAULT_THREADS_API_BASE_URL = 'https://graph.threads.net';
+export const DEFAULT_THREADS_AUTH_BASE_URL = 'https://www.threads.com';
+export const DEFAULT_THREADS_API_BASE_URL = 'https://graph.threads.com';
 export const DEFAULT_THREADS_API_VERSION = 'v1.0';
 export const DEFAULT_THREADS_HTTP_TIMEOUT_MS = 10000;
+export const DEFAULT_CAPABILITY_FRESHNESS_MAX_AGE_SECONDS = 7 * 24 * 3600;
 export const ALLOWED_THREADS_APP_REVIEW_STATUSES = ['development', 'approved'] as const;
 export type ThreadsAppReviewStatus = (typeof ALLOWED_THREADS_APP_REVIEW_STATUSES)[number];
 

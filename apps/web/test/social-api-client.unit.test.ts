@@ -130,14 +130,14 @@ describe('Social API Client', () => {
       ok: true,
       headers: new Headers({ 'content-type': 'application/json' }),
       json: async () => ({
-        authorizationUrl: 'https://threads.net/oauth/authorize?client_id=123',
+        authorizationUrl: 'https://www.threads.com/oauth/authorize?client_id=123',
         transactionId: '018f6c5b-21a4-789a-8def-000000000030',
         expiresAt: '2026-11-18T10:10:00.000Z',
       }),
     } as unknown as Response);
 
     const result = await beginSocialAuthorize(workspaceId, 'threads');
-    expect(result.authorizationUrl).toBe('https://threads.net/oauth/authorize?client_id=123');
+    expect(result.authorizationUrl).toBe('https://www.threads.com/oauth/authorize?client_id=123');
   });
 
   it('fetchCallbackResult retrieves callback result status', async () => {

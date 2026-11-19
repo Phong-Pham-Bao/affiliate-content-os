@@ -1,7 +1,7 @@
 import type { ReactElement } from 'react';
 
 export interface CallbackBannerState {
-  readonly status: 'success' | 'failed';
+  readonly status: 'success' | 'failed' | 'partial';
   readonly message: string;
 }
 
@@ -22,13 +22,23 @@ export function ConnectionsBanner({
     <>
       {banner && (
         <div
-          role={banner.status === 'success' ? 'status' : 'alert'}
+          role={banner.status === 'success' || banner.status === 'partial' ? 'status' : 'alert'}
           style={{
             padding: '0.75rem 1rem',
             borderRadius: '6px',
             marginBottom: '1rem',
-            backgroundColor: banner.status === 'success' ? '#dcfce7' : '#fee2e2',
-            color: banner.status === 'success' ? '#166534' : '#991b1b',
+            backgroundColor:
+              banner.status === 'success'
+                ? '#dcfce7'
+                : banner.status === 'partial'
+                  ? '#fef3c7'
+                  : '#fee2e2',
+            color:
+              banner.status === 'success'
+                ? '#166534'
+                : banner.status === 'partial'
+                  ? '#92400e'
+                  : '#991b1b',
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'center',

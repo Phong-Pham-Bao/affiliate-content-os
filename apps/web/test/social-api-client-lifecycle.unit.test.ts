@@ -45,7 +45,7 @@ describe('Social API Client - Lifecycle Operations', () => {
   });
 
   it('beginSocialReconnect sends POST with Idempotency-Key and returns authorizationUrl', async () => {
-    const validUrl = 'https://threads.net/oauth/authorize?client_id=123';
+    const validUrl = 'https://www.threads.com/oauth/authorize?client_id=123';
     vi.mocked(fetch).mockResolvedValueOnce({
       ok: true,
       headers: new Headers({ 'content-type': 'application/json' }),

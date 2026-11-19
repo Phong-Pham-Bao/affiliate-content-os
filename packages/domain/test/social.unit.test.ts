@@ -59,6 +59,7 @@ describe('Social domain types and guards', () => {
   it('validates OAuth callback result statuses', () => {
     expect(isOAuthCallbackResultStatus('success')).toBe(true);
     expect(isOAuthCallbackResultStatus('failed')).toBe(true);
+    expect(isOAuthCallbackResultStatus('partial')).toBe(true);
     expect(isOAuthCallbackResultStatus('pending')).toBe(false);
   });
 });

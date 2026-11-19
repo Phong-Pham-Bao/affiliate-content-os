@@ -162,8 +162,8 @@ describe('validate-social configuration', () => {
       'https://example.com/api/v1/social-connections/threads/callback',
     );
     expect(config.threadsAppReviewStatus).toBe('approved');
-    expect(config.threadsAuthBaseUrl).toBe('https://threads.net');
-    expect(config.threadsApiBaseUrl).toBe('https://graph.threads.net');
+    expect(config.threadsAuthBaseUrl).toBe('https://www.threads.com');
+    expect(config.threadsApiBaseUrl).toBe('https://graph.threads.com');
 
     const redacted = getRedactedSocialConfigMetadata(config);
     expect(redacted.threadsRealAdapterEnabled).toBe(true);
@@ -198,12 +198,40 @@ describe('validate-social configuration', () => {
         'production',
       ),
     ).toThrow(ConfigurationError);
+
+    // Rejects legacy .net host in production
+    expect(() =>
+      loadSocialConfig(
+        {
+          SOCIAL_AUTH_ENABLED: 'false',
+          THREADS_AUTH_BASE_URL: 'https://threads.net',
+        },
+        'production',
+      ),
+    ).toThrow(ConfigurationError);
+  });
+
+  it('rejects path prefix tricks and custom ports in provider URLs', () => {
+    expect(() =>
+      loadSocialConfig({
+        THREADS_AUTH_BASE_URL: 'https://www.threads.com/some/path',
+      }),
+    ).toThrow(ConfigurationError);
+
+    expect(() =>
+      loadSocialConfig(
+        {
+          THREADS_AUTH_BASE_URL: 'https://www.threads.com:8443',
+        },
+        'production',
+      ),
+    ).toThrow(ConfigurationError);
   });
 
   it('rejects credentials in Threads provider URL', () => {
     expect(() =>
       loadSocialConfig({
-        THREADS_AUTH_BASE_URL: 'https://user:pass@threads.net',
+        THREADS_AUTH_BASE_URL: 'https://user:pass@www.threads.com',
       }),
     ).toThrow(ConfigurationError);
   });

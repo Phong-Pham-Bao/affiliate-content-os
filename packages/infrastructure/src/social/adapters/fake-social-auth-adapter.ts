@@ -122,6 +122,7 @@ export class FakeSocialAuthAdapter implements SocialAuthAdapter {
       grantedScopes,
       capabilities,
       environment: this.environment,
+      stage: 'completed',
     };
   }
 

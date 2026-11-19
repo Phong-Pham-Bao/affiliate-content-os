@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import {
   deriveAccountLifecycle,
   parseUserId,
@@ -11,6 +12,8 @@ import {
   SocialAccountNotFoundError,
   SocialAuthNotConfiguredError,
   SocialAuthRateLimitError,
+  SocialAuthTerminalError,
+  SocialCredentialEncryptionError,
   SocialKillSwitchActiveError,
   SocialPlatformUnsupportedError,
 } from './errors.js';
@@ -66,12 +69,14 @@ export async function refreshSocialAccount(
   }
 
   const now = deps.clock.now();
+  const claimToken = crypto.randomUUID();
 
-  // 1. Claim account for refresh (short DB transaction / advisory lock lease)
+  // 1. Claim account for refresh (atomic exclusive claim)
   const claimed = await deps.persistence.claimSocialAccountForRefresh({
     workspaceId: command.workspaceId,
     accountId: command.accountId,
     leaseDurationSeconds: 60,
+    claimToken,
     now: now.toISOString(),
   });
 
@@ -86,18 +91,49 @@ export async function refreshSocialAccount(
 
   const account = claimed.account;
   const adapter = deps.adapters.get(account.platform);
-  if (!adapter) throw new SocialPlatformUnsupportedError(account.platform);
+  if (!adapter) {
+    await deps.persistence.releaseSocialAccountRefreshLeaseAtomic({
+      workspaceId: command.workspaceId,
+      accountId: command.accountId,
+      leaseToken: claimed.refreshLeaseToken,
+      now: now.toISOString(),
+    });
+    throw new SocialPlatformUnsupportedError(account.platform);
+  }
 
   // 2. Decrypt credentials narrowly outside DB transaction
-  const decrypted = deps.protector.decrypt({
-    workspaceId: command.workspaceId,
-    socialAccountId: command.accountId,
-    platform: account.platform,
-    credentials: claimed.encryptedCredentials,
-  });
+  let decrypted;
+  try {
+    decrypted = deps.protector.decrypt({
+      workspaceId: command.workspaceId,
+      socialAccountId: command.accountId,
+      platform: account.platform,
+      credentials: claimed.encryptedCredentials,
+    });
+  } catch {
+    const updated = await deps.persistence.recordFailedSocialAccountRefreshAtomic({
+      workspaceId: command.workspaceId,
+      accountId: command.accountId,
+      expectedAccountVersion: claimed.claimedAccountVersion,
+      expectedLeaseToken: claimed.refreshLeaseToken,
+      derivedStatus: 'reauth_required',
+      statusReason: 'reauth_required',
+      nextRefreshAt: null,
+      reauthRequiredAt: now.toISOString(),
+      now: now.toISOString(),
+      actorUserId: command.actorUserId,
+      auditContext: command.auditContext,
+    });
+    return { account: updated, refreshed: false };
+  }
 
   if (!adapter.supportsRefresh || !adapter.refreshToken) {
-    // Adapter does not support refresh; record verified check
+    await deps.persistence.releaseSocialAccountRefreshLeaseAtomic({
+      workspaceId: command.workspaceId,
+      accountId: command.accountId,
+      leaseToken: claimed.refreshLeaseToken,
+      now: now.toISOString(),
+    });
     return { account, refreshed: false };
   }
 
@@ -110,18 +146,19 @@ export async function refreshSocialAccount(
     tokenExpiresInSeconds = refreshRes.tokenExpiresInSeconds;
   } catch (err: unknown) {
     const isRateLimit = err instanceof SocialAuthRateLimitError;
-    const isAuthTerminal =
-      err instanceof Error &&
-      (err.message.includes('expired') ||
-        err.message.includes('revoked') ||
-        err.message.includes('invalid_token'));
+    const isAuthTerminal = err instanceof SocialAuthTerminalError;
 
     const derivedStatus = isAuthTerminal ? 'reauth_required' : 'degraded';
-    const statusReason = isAuthTerminal
-      ? 'token_expired'
-      : isRateLimit
-        ? 'rate_limited'
-        : 'transient_failure';
+    let statusReason: 'token_expired' | 'grant_revoked' | 'rate_limited' | 'transient_failure' =
+      'transient_failure';
+    if (isAuthTerminal) {
+      statusReason =
+        (err as SocialAuthTerminalError).reason === 'invalid_grant'
+          ? 'grant_revoked'
+          : 'token_expired';
+    } else if (isRateLimit) {
+      statusReason = 'rate_limited';
+    }
 
     const retrySec = isRateLimit
       ? ((err as SocialAuthRateLimitError).retryAfterSeconds ?? 1800)
@@ -134,6 +171,7 @@ export async function refreshSocialAccount(
       workspaceId: command.workspaceId,
       accountId: command.accountId,
       expectedAccountVersion: claimed.claimedAccountVersion,
+      expectedLeaseToken: claimed.refreshLeaseToken,
       derivedStatus,
       statusReason,
       nextRefreshAt,
@@ -147,13 +185,24 @@ export async function refreshSocialAccount(
   }
 
   // 4. Encrypt new replacement token with fresh nonce and bound AAD
-  const encrypted = deps.protector.encrypt({
-    workspaceId: command.workspaceId,
-    socialAccountId: command.accountId,
-    platform: account.platform,
-    accessToken: newAccessToken,
-    refreshToken: decrypted.refreshToken,
-  });
+  let encrypted;
+  try {
+    encrypted = deps.protector.encrypt({
+      workspaceId: command.workspaceId,
+      socialAccountId: command.accountId,
+      platform: account.platform,
+      accessToken: newAccessToken,
+      refreshToken: decrypted.refreshToken,
+    });
+  } catch {
+    await deps.persistence.releaseSocialAccountRefreshLeaseAtomic({
+      workspaceId: command.workspaceId,
+      accountId: command.accountId,
+      leaseToken: claimed.refreshLeaseToken,
+      now: now.toISOString(),
+    });
+    throw new SocialCredentialEncryptionError('Failed to encrypt rotated credentials');
+  }
 
   const tokenExpiresAt =
     tokenExpiresInSeconds && tokenExpiresInSeconds > 0
@@ -179,12 +228,13 @@ export async function refreshSocialAccount(
     now,
   });
 
-  // 5. Atomically rotate credential and update account under CAS
+  // 5. Atomically rotate credential and update account under CAS and claim fencing
   const updatedAccount = await deps.persistence.completeSocialAccountRefreshAtomic({
     workspaceId: command.workspaceId,
     accountId: command.accountId,
     expectedAccountVersion: claimed.claimedAccountVersion,
     expectedCredentialVersion: claimed.claimedCredentialVersion,
+    expectedLeaseToken: claimed.refreshLeaseToken,
     encryptedCredentials: encrypted,
     tokenExpiresAt,
     nextRefreshAt: lifecycle.nextRefreshAt,

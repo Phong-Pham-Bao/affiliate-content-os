@@ -161,7 +161,7 @@ export const getCallbackResultRouteSchema: FastifySchema = {
       type: 'object',
       properties: {
         id: { type: 'string', format: 'uuid' },
-        status: { type: 'string', enum: ['success', 'failed'] },
+        status: { type: 'string', enum: ['success', 'failed', 'partial'] },
         platform: { type: 'string', enum: ['threads', 'tiktok'] },
         socialAccountId: { type: ['string', 'null'] },
         errorCode: { type: ['string', 'null'] },

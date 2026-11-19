@@ -10,10 +10,12 @@ import {
   generateUuidV7,
   SocialAccountVersionMismatchError,
   type ClaimedSocialAccountRefresh,
+  type ClaimNextDueSocialAccountParams,
   type ClaimSocialAccountForRefreshParams,
   type CompleteSocialAccountRefreshParams,
   type EncryptedSocialCredentials,
   type RecordFailedSocialAccountRefreshParams,
+  type ReleaseSocialAccountRefreshLeaseParams,
 } from '@affiliate-content-os/application';
 import { createTransactionScopedPostgresAuditAdapter } from '../../audit/index.js';
 import type { Database } from '../../database/types.js';
@@ -22,9 +24,10 @@ import {
   SQL_CLAIM_REFRESH_LEASE,
   SQL_COMPLETE_ACCOUNT_REFRESH,
   SQL_COMPLETE_CREDENTIALS_REFRESH,
-  SQL_FIND_ACCOUNT_FOR_REFRESH_CLAIM,
   SQL_FIND_CREDENTIALS_FOR_REFRESH,
+  SQL_FIND_DUE_ACCOUNT_FOR_REFRESH_CLAIM,
   SQL_RECORD_FAILED_ACCOUNT_REFRESH,
+  SQL_RELEASE_REFRESH_LEASE,
 } from './postgres-social-lifecycle-statements.js';
 
 export function computeSocialAccountRefreshAdvisoryLockKey(accountId: string): string {
@@ -49,29 +52,33 @@ export async function executeClaimSocialAccountForRefresh(
   database: Database,
   params: ClaimSocialAccountForRefreshParams,
 ): Promise<ClaimedSocialAccountRefresh | null> {
+  const claimToken = params.claimToken ?? generateUuidV7();
   return database.withTransaction(async (tx) => {
-    const accRes = await tx.query<SocialAccountRow>(SQL_FIND_ACCOUNT_FOR_REFRESH_CLAIM, [
-      params.workspaceId,
-      params.accountId,
-    ]);
-    if (accRes.rows.length === 0) return null;
-    const accRow = accRes.rows[0]!;
-
-    const credRes = await tx.query<CredentialRow>(SQL_FIND_CREDENTIALS_FOR_REFRESH, [
-      params.workspaceId,
-      params.accountId,
-    ]);
-    if (credRes.rows.length === 0) return null;
-    const credRow = credRes.rows[0]!;
-
     const leaseRes = await tx.query<SocialAccountRow>(SQL_CLAIM_REFRESH_LEASE, [
       params.workspaceId,
       params.accountId,
       params.now,
       params.leaseDurationSeconds,
       params.workerId ?? 'manual_refresh',
+      claimToken,
     ]);
-    const claimedAccRow = leaseRes.rows[0] ?? accRow;
+    if (leaseRes.rows.length === 0) return null;
+    const claimedAccRow = leaseRes.rows[0]!;
+
+    const credRes = await tx.query<CredentialRow>(SQL_FIND_CREDENTIALS_FOR_REFRESH, [
+      params.workspaceId,
+      params.accountId,
+    ]);
+    if (credRes.rows.length === 0) {
+      await tx.query(SQL_RELEASE_REFRESH_LEASE, [
+        params.workspaceId,
+        params.accountId,
+        params.now,
+        claimToken,
+      ]);
+      return null;
+    }
+    const credRow = credRes.rows[0]!;
 
     const encryptedCredentials: EncryptedSocialCredentials = {
       accessTokenCiphertext: new Uint8Array(credRow.access_token_ciphertext),
@@ -90,8 +97,9 @@ export async function executeClaimSocialAccountForRefresh(
     return {
       account: mapSocialAccountRow(claimedAccRow),
       encryptedCredentials,
-      claimedAccountVersion: Number(accRow.version),
+      claimedAccountVersion: Number(claimedAccRow.version),
       claimedCredentialVersion: Number(credRow.version),
+      refreshLeaseToken: claimToken,
     };
   });
 }
@@ -110,11 +118,12 @@ export async function executeCompleteSocialAccountRefresh(
       params.nextRefreshAt,
       params.now,
       params.expectedAccountVersion,
+      params.expectedLeaseToken,
     ]);
 
     if (accRes.rows.length === 0) {
       throw new SocialAccountVersionMismatchError(
-        'Account version mismatch during refresh rotation',
+        'Account version mismatch or lease expired during refresh rotation',
       );
     }
 
@@ -181,6 +190,7 @@ export async function executeRecordFailedSocialAccountRefresh(
       params.reauthRequiredAt ?? null,
       params.now,
       params.expectedAccountVersion,
+      params.expectedLeaseToken ?? null,
     ]);
 
     if (accRes.rows.length === 0) {
@@ -190,5 +200,79 @@ export async function executeRecordFailedSocialAccountRefresh(
     }
 
     return mapSocialAccountRow(accRes.rows[0]!);
+  });
+}
+
+export async function executeReleaseSocialAccountRefreshLease(
+  database: Database,
+  params: ReleaseSocialAccountRefreshLeaseParams,
+): Promise<void> {
+  await database.query(SQL_RELEASE_REFRESH_LEASE, [
+    params.workspaceId,
+    params.accountId,
+    params.now,
+    params.leaseToken,
+  ]);
+}
+
+export async function executeClaimNextDueSocialAccountForRefresh(
+  database: Database,
+  params: ClaimNextDueSocialAccountParams,
+): Promise<ClaimedSocialAccountRefresh | null> {
+  return database.withTransaction(async (tx) => {
+    const dueRes = await tx.query<{ id: string; workspace_id: string }>(
+      SQL_FIND_DUE_ACCOUNT_FOR_REFRESH_CLAIM,
+      [params.now],
+    );
+    if (dueRes.rows.length === 0) return null;
+    const { id: accountId, workspace_id: workspaceId } = dueRes.rows[0]!;
+
+    const leaseRes = await tx.query<SocialAccountRow>(SQL_CLAIM_REFRESH_LEASE, [
+      workspaceId,
+      accountId,
+      params.now,
+      params.leaseDurationSeconds,
+      params.workerId,
+      params.claimToken,
+    ]);
+    if (leaseRes.rows.length === 0) return null;
+    const claimedAccRow = leaseRes.rows[0]!;
+
+    const credRes = await tx.query<CredentialRow>(SQL_FIND_CREDENTIALS_FOR_REFRESH, [
+      workspaceId,
+      accountId,
+    ]);
+    if (credRes.rows.length === 0) {
+      await tx.query(SQL_RELEASE_REFRESH_LEASE, [
+        workspaceId,
+        accountId,
+        params.now,
+        params.claimToken,
+      ]);
+      return null;
+    }
+    const credRow = credRes.rows[0]!;
+
+    const encryptedCredentials: EncryptedSocialCredentials = {
+      accessTokenCiphertext: new Uint8Array(credRow.access_token_ciphertext),
+      accessTokenIv: new Uint8Array(credRow.access_token_iv),
+      accessTokenAuthTag: new Uint8Array(credRow.access_token_auth_tag),
+      refreshTokenCiphertext: credRow.refresh_token_ciphertext
+        ? new Uint8Array(credRow.refresh_token_ciphertext)
+        : null,
+      refreshTokenIv: credRow.refresh_token_iv ? new Uint8Array(credRow.refresh_token_iv) : null,
+      refreshTokenAuthTag: credRow.refresh_token_auth_tag
+        ? new Uint8Array(credRow.refresh_token_auth_tag)
+        : null,
+      keyVersion: credRow.encryption_key_version,
+    };
+
+    return {
+      account: mapSocialAccountRow(claimedAccRow),
+      encryptedCredentials,
+      claimedAccountVersion: Number(claimedAccRow.version),
+      claimedCredentialVersion: Number(credRow.version),
+      refreshLeaseToken: params.claimToken,
+    };
   });
 }

@@ -15,7 +15,7 @@ export const SQL_FIND_ACCOUNT_FOR_REFRESH_CLAIM = `
          status, status_reason, exchange_stage, granted_scopes, capabilities_json,
          capabilities_checked_at, token_expires_at, reauth_required_at,
          last_refreshed_at, next_refresh_at, connected_by_user_id, disconnected_at,
-         environment, created_at, updated_at, version
+         environment, created_at, updated_at, version, refresh_lease_expires_at
   FROM social_accounts
   WHERE workspace_id = $1 AND id = $2 AND status <> 'disconnected'
   FOR UPDATE;
@@ -26,9 +26,26 @@ export const SQL_CLAIM_REFRESH_LEASE = `
   SET refresh_lease_claimed_at = $3,
       refresh_lease_expires_at = ($3::timestamptz + ($4 * interval '1 second')),
       refresh_lease_worker_id = $5,
+      refresh_lease_token = $6,
       updated_at = $3
-  WHERE workspace_id = $1 AND id = $2
+  WHERE workspace_id = $1
+    AND id = $2
+    AND status <> 'disconnected'
+    AND (refresh_lease_expires_at IS NULL OR refresh_lease_expires_at <= $3::timestamptz)
   RETURNING *;
+`;
+
+export const SQL_RELEASE_REFRESH_LEASE = `
+  UPDATE social_accounts
+  SET refresh_lease_claimed_at = NULL,
+      refresh_lease_expires_at = NULL,
+      refresh_lease_worker_id = NULL,
+      refresh_lease_token = NULL,
+      updated_at = $3
+  WHERE workspace_id = $1
+    AND id = $2
+    AND refresh_lease_token = $4
+    AND status <> 'disconnected';
 `;
 
 export const SQL_FIND_CREDENTIALS_FOR_REFRESH = `
@@ -50,10 +67,15 @@ export const SQL_COMPLETE_ACCOUNT_REFRESH = `
       refresh_lease_claimed_at = NULL,
       refresh_lease_expires_at = NULL,
       refresh_lease_worker_id = NULL,
+      refresh_lease_token = NULL,
       refresh_consecutive_failures = 0,
       updated_at = $7,
       version = version + 1
-  WHERE workspace_id = $1 AND id = $2 AND version = $8 AND status <> 'disconnected'
+  WHERE workspace_id = $1
+    AND id = $2
+    AND version = $8
+    AND refresh_lease_token = $9
+    AND status <> 'disconnected'
   RETURNING *;
 `;
 
@@ -69,6 +91,9 @@ export const SQL_COMPLETE_CREDENTIALS_REFRESH = `
       access_expires_at = $10,
       last_refreshed_at = $11,
       rotated_at = $11,
+      token_kind = 'long_lived',
+      refresh_attempt_count = refresh_attempt_count + 1,
+      earliest_refresh_at = ($11::timestamptz + interval '24 hours'),
       updated_at = $11,
       version = version + 1
   WHERE workspace_id = $1 AND social_account_id = $2 AND version = $12;
@@ -83,11 +108,30 @@ export const SQL_RECORD_FAILED_ACCOUNT_REFRESH = `
       refresh_lease_claimed_at = NULL,
       refresh_lease_expires_at = NULL,
       refresh_lease_worker_id = NULL,
+      refresh_lease_token = NULL,
       refresh_consecutive_failures = refresh_consecutive_failures + 1,
       updated_at = $7,
       version = version + 1
-  WHERE workspace_id = $1 AND id = $2 AND version = $8 AND status <> 'disconnected'
+  WHERE workspace_id = $1
+    AND id = $2
+    AND version = $8
+    AND (refresh_lease_token IS NULL OR refresh_lease_token = $9)
+    AND status <> 'disconnected'
   RETURNING *;
+`;
+
+export const SQL_FIND_DUE_ACCOUNT_FOR_REFRESH_CLAIM = `
+  SELECT s.id, s.workspace_id, s.version
+  FROM social_accounts s
+  JOIN workspaces w ON w.id = s.workspace_id
+  WHERE s.status IN ('active', 'degraded')
+    AND (
+      (s.next_refresh_at IS NOT NULL AND s.next_refresh_at <= $1::timestamptz AND (s.refresh_lease_expires_at IS NULL OR s.refresh_lease_expires_at <= $1::timestamptz))
+      OR (s.refresh_lease_expires_at IS NOT NULL AND s.refresh_lease_expires_at <= $1::timestamptz)
+    )
+  ORDER BY s.next_refresh_at ASC NULLS LAST, s.id ASC
+  LIMIT 1
+  FOR UPDATE OF s SKIP LOCKED;
 `;
 
 export const SQL_DISCONNECT_SOCIAL_ACCOUNT = `
@@ -102,6 +146,8 @@ export const SQL_DISCONNECT_SOCIAL_ACCOUNT = `
       next_refresh_at = NULL,
       refresh_lease_claimed_at = NULL,
       refresh_lease_expires_at = NULL,
+      refresh_lease_worker_id = NULL,
+      refresh_lease_token = NULL,
       external_revocation_attempted = $5,
       external_revocation_supported = $6,
       external_revocation_result = $7,

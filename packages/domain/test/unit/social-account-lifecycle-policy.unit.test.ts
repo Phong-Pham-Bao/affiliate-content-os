@@ -178,7 +178,7 @@ describe('Social Account Lifecycle Policy', () => {
     expect(result.allowedActions).toContain('disconnect');
   });
 
-  it('does not enable canPublishText if threads_content_publish scope is missing', () => {
+  it('derives degraded with missing_grants if threads_content_publish scope is missing', () => {
     const result = deriveAccountLifecycle({
       platform: 'threads',
       exchangeStage: 'completed',
@@ -192,7 +192,83 @@ describe('Social Account Lifecycle Policy', () => {
       now: baseNow,
     });
 
-    expect(result.status).toBe('active');
+    expect(result.status).toBe('degraded');
+    expect(result.statusReason).toBe('missing_grants');
     expect(result.capabilities.canPublishText).toBe(false);
+    expect(result.allowedActions).toContain('reconnect');
+  });
+
+  it('derives reauth_required if threads_basic scope is missing', () => {
+    const result = deriveAccountLifecycle({
+      platform: 'threads',
+      exchangeStage: 'completed',
+      hasValidCredential: true,
+      tokenExpiresAt: futureExpiry,
+      verifiedIdentity: { providerAccountId: 'th_123', displayName: 'Creator' },
+      grantedScopes: ['threads_content_publish'], // Missing threads_basic!
+      capabilitiesCheckedAt: baseNow.toISOString(),
+      appReviewStatus: 'approved',
+      killSwitches: {},
+      now: baseNow,
+    });
+
+    expect(result.status).toBe('reauth_required');
+    expect(result.statusReason).toBe('grant_revoked');
+    expect(result.capabilities.canPublishText).toBe(false);
+  });
+
+  it('derives degraded with capability_stale when capability check evidence is missing, stale, or future-skewed', () => {
+    // Missing capabilitiesCheckedAt
+    const missingEvidence = deriveAccountLifecycle({
+      platform: 'threads',
+      exchangeStage: 'completed',
+      hasValidCredential: true,
+      tokenExpiresAt: futureExpiry,
+      verifiedIdentity: { providerAccountId: 'th_123', displayName: 'Creator' },
+      grantedScopes: ['threads_basic', 'threads_content_publish'],
+      capabilitiesCheckedAt: null,
+      appReviewStatus: 'approved',
+      killSwitches: {},
+      now: baseNow,
+    });
+    expect(missingEvidence.status).toBe('degraded');
+    expect(missingEvidence.statusReason).toBe('capability_stale');
+    expect(missingEvidence.capabilities.canPublishText).toBe(false);
+
+    // Stale capabilitiesCheckedAt (8 days ago > 7 days max age)
+    const eightDaysAgo = new Date(baseNow.getTime() - 8 * 24 * 60 * 60 * 1000).toISOString();
+    const staleEvidence = deriveAccountLifecycle({
+      platform: 'threads',
+      exchangeStage: 'completed',
+      hasValidCredential: true,
+      tokenExpiresAt: futureExpiry,
+      verifiedIdentity: { providerAccountId: 'th_123', displayName: 'Creator' },
+      grantedScopes: ['threads_basic', 'threads_content_publish'],
+      capabilitiesCheckedAt: eightDaysAgo,
+      appReviewStatus: 'approved',
+      killSwitches: {},
+      now: baseNow,
+    });
+    expect(staleEvidence.status).toBe('degraded');
+    expect(staleEvidence.statusReason).toBe('capability_stale');
+    expect(staleEvidence.capabilities.canPublishText).toBe(false);
+
+    // Future-skewed capabilitiesCheckedAt (10 minutes in the future)
+    const futureSkewed = new Date(baseNow.getTime() + 10 * 60 * 1000).toISOString();
+    const futureEvidence = deriveAccountLifecycle({
+      platform: 'threads',
+      exchangeStage: 'completed',
+      hasValidCredential: true,
+      tokenExpiresAt: futureExpiry,
+      verifiedIdentity: { providerAccountId: 'th_123', displayName: 'Creator' },
+      grantedScopes: ['threads_basic', 'threads_content_publish'],
+      capabilitiesCheckedAt: futureSkewed,
+      appReviewStatus: 'approved',
+      killSwitches: {},
+      now: baseNow,
+    });
+    expect(futureEvidence.status).toBe('degraded');
+    expect(futureEvidence.statusReason).toBe('capability_stale');
+    expect(futureEvidence.capabilities.canPublishText).toBe(false);
   });
 });

@@ -52,10 +52,7 @@ export function isAllowedAuthorizationUrl(rawUrl: string, windowOrigin: string):
     if (url.origin === windowOrigin && url.pathname === '/fake-social-auth') {
       return true;
     }
-    if (
-      (url.origin === 'https://threads.net' || url.origin === 'https://www.threads.net') &&
-      url.pathname === '/oauth/authorize'
-    ) {
+    if (url.origin === 'https://www.threads.com' && url.pathname === '/oauth/authorize') {
       return true;
     }
     if (

@@ -140,7 +140,7 @@ export function createTestSocialDeps(options?: {
     threadsAuthBaseUrl: 'https://threads.net',
     threadsApiBaseUrl: 'https://graph.threads.net',
     threadsApiVersion: 'v1.0',
-    threadsAppReviewStatus: 'development',
+    threadsAppReviewStatus: 'approved',
     threadsHttpTimeoutMs: 10000,
     socialKillSwitchActive: false,
     threadsConnectionKillSwitchActive: false,
