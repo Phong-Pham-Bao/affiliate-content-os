@@ -8,6 +8,7 @@ import {
   type SocialConfig,
   type SocialKeyProvider,
 } from './types.js';
+import { validateThreadsConfig } from './validate-threads.js';
 
 function parseBoundedInteger(
   value: string | undefined,
@@ -167,6 +168,8 @@ export function loadSocialConfig(rawEnv: RawEnvironment, nodeEnv?: NodeEnv): Soc
     issues,
   );
 
+  const threadsConfig = validateThreadsConfig(rawEnv, nodeEnv, enabled, issues);
+
   if (issues.length > 0) {
     throw new ConfigurationError(issues);
   }
@@ -179,5 +182,6 @@ export function loadSocialConfig(rawEnv: RawEnvironment, nodeEnv?: NodeEnv): Soc
     credentialKeyVersion,
     transactionTtlSeconds,
     callbackResultTtlSeconds,
+    ...threadsConfig,
   });
 }

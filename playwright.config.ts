@@ -65,6 +65,7 @@ export default defineConfig({
         SOCIAL_KEY_PROVIDER: 'local',
         SOCIAL_CREDENTIAL_ENCRYPTION_KEY: 'MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE',
         SOCIAL_CREDENTIAL_KEY_VERSION: 'v1',
+        THREADS_APP_REVIEW_STATUS: 'approved',
         API_PORT: '3001',
         API_HOST: '127.0.0.1',
       },

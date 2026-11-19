@@ -86,6 +86,9 @@ export async function executeSaveOAuthTransactionWithIdempotency(
       params.redirectUri,
       params.returnTo,
       JSON.stringify(params.requestedScopes),
+      params.reconnectAccountId ?? null,
+      params.expectedProviderAccountId ?? null,
+      params.exchangeStage ?? 'code_received',
       params.createdAt,
       params.expiresAt,
     ]);

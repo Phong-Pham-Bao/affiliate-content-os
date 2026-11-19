@@ -110,10 +110,17 @@ describe('Social Application Use Cases', () => {
     consumeCallbackResult: vi.fn(),
     listSocialAccounts: vi.fn(),
     findSocialAccountById: vi.fn(),
+    findSocialAccountForUpdate: vi.fn(),
+    claimSocialAccountForRefresh: vi.fn(),
+    completeSocialAccountRefreshAtomic: vi.fn(),
+    recordFailedSocialAccountRefreshAtomic: vi.fn(),
+    disconnectSocialAccountAtomic: vi.fn(),
   });
 
   const createMockAdapter = (): SocialAuthAdapter => ({
     platform: 'threads',
+    supportsRefresh: true,
+    supportsRevocation: false,
     createAuthorizationUrl: vi.fn(async () => ({
       authorizationUrl: 'https://threads.net/oauth/authorize?test=1',
     })),
@@ -201,6 +208,8 @@ describe('Social Application Use Cases', () => {
       const protector = createMockProtector();
       const adapter: SocialAuthAdapter = {
         platform: 'threads',
+        supportsRefresh: true,
+        supportsRevocation: false,
         createAuthorizationUrl: vi.fn(async () => ({
           authorizationUrl: 'https://threads.net/oauth/authorize?test=pkce',
           codeVerifier: 'plain_code_verifier_12345',

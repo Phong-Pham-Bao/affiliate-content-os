@@ -133,6 +133,18 @@ export function createTestSocialDeps(options?: {
     credentialKeyVersion: 'v1',
     transactionTtlSeconds: 600,
     callbackResultTtlSeconds: 300,
+    threadsRealAdapterEnabled: false,
+    threadsAppId: null,
+    threadsAppSecret: null,
+    threadsRedirectUri: null,
+    threadsAuthBaseUrl: 'https://threads.net',
+    threadsApiBaseUrl: 'https://graph.threads.net',
+    threadsApiVersion: 'v1.0',
+    threadsAppReviewStatus: 'development',
+    threadsHttpTimeoutMs: 10000,
+    socialKillSwitchActive: false,
+    threadsConnectionKillSwitchActive: false,
+    threadsRefreshKillSwitchActive: false,
     ...options?.socialConfigOverrides,
   };
 

@@ -7,14 +7,62 @@ import {
   OAuthTransactionExpiredError,
   OAuthTransactionNotFoundError,
   OAuthTransactionReplayedError,
+  SocialAccountDisconnectedError,
+  SocialAccountMismatchError,
+  SocialAccountNotFoundError,
+  SocialAccountVersionMismatchError,
   SocialAuthExchangeError,
   SocialAuthNotConfiguredError,
+  SocialAuthOutcomeUnknownError,
   SocialAuthRateLimitError,
   SocialCredentialEncryptionError,
+  SocialKillSwitchActiveError,
   SocialPlatformUnsupportedError,
 } from '@affiliate-content-os/application';
 
 export const SOCIAL_PROBLEM_SPECS: Record<string, ProblemSpec> = {
+  SOCIAL_ACCOUNT_NOT_FOUND: {
+    status: 404,
+    code: 'NOT_FOUND',
+    type: 'https://affiliate-content-os.example/problems/not-found',
+    title: 'Not Found',
+    detail: 'Social account not found in workspace.',
+  },
+  SOCIAL_ACCOUNT_DISCONNECTED: {
+    status: 409,
+    code: 'SOCIAL_ACCOUNT_DISCONNECTED',
+    type: 'https://affiliate-content-os.example/problems/conflict',
+    title: 'Conflict',
+    detail: 'The social account has already been disconnected.',
+  },
+  SOCIAL_ACCOUNT_VERSION_MISMATCH: {
+    status: 412,
+    code: 'PRECONDITION_FAILED',
+    type: 'https://affiliate-content-os.example/problems/precondition-failed',
+    title: 'Precondition Failed',
+    detail: 'Account version has changed or precondition failed.',
+  },
+  SOCIAL_ACCOUNT_MISMATCH: {
+    status: 409,
+    code: 'ACCOUNT_MISMATCH',
+    type: 'https://affiliate-content-os.example/problems/account-mismatch',
+    title: 'Account Mismatch',
+    detail: 'The reconnected social account does not match the bound provider account.',
+  },
+  SOCIAL_KILL_SWITCH_ACTIVE: {
+    status: 503,
+    code: 'SERVICE_UNAVAILABLE',
+    type: 'https://affiliate-content-os.example/problems/service-unavailable',
+    title: 'Service Unavailable',
+    detail: 'This social platform or feature is temporarily disabled by administrative policy.',
+  },
+  SOCIAL_AUTH_OUTCOME_UNKNOWN: {
+    status: 504,
+    code: 'GATEWAY_TIMEOUT',
+    type: 'https://affiliate-content-os.example/problems/gateway-timeout',
+    title: 'Gateway Timeout',
+    detail: 'Provider request timed out before outcome could be verified safely.',
+  },
   SOCIAL_CALLBACK_RESULT_FORBIDDEN: {
     status: 403,
     code: 'FORBIDDEN',
@@ -98,6 +146,30 @@ export function resolveSocialProblemSpec(error: unknown): ProblemSpec | null {
   if (typeof error !== 'object' || error === null) return null;
   const name = (error as { name?: string }).name;
 
+  if (error instanceof SocialAccountNotFoundError || name === 'SocialAccountNotFoundError') {
+    return SOCIAL_PROBLEM_SPECS['SOCIAL_ACCOUNT_NOT_FOUND']!;
+  }
+  if (
+    error instanceof SocialAccountDisconnectedError ||
+    name === 'SocialAccountDisconnectedError'
+  ) {
+    return SOCIAL_PROBLEM_SPECS['SOCIAL_ACCOUNT_DISCONNECTED']!;
+  }
+  if (
+    error instanceof SocialAccountVersionMismatchError ||
+    name === 'SocialAccountVersionMismatchError'
+  ) {
+    return SOCIAL_PROBLEM_SPECS['SOCIAL_ACCOUNT_VERSION_MISMATCH']!;
+  }
+  if (error instanceof SocialAccountMismatchError || name === 'SocialAccountMismatchError') {
+    return SOCIAL_PROBLEM_SPECS['SOCIAL_ACCOUNT_MISMATCH']!;
+  }
+  if (error instanceof SocialKillSwitchActiveError || name === 'SocialKillSwitchActiveError') {
+    return SOCIAL_PROBLEM_SPECS['SOCIAL_KILL_SWITCH_ACTIVE']!;
+  }
+  if (error instanceof SocialAuthOutcomeUnknownError || name === 'SocialAuthOutcomeUnknownError') {
+    return SOCIAL_PROBLEM_SPECS['SOCIAL_AUTH_OUTCOME_UNKNOWN']!;
+  }
   if (error instanceof SocialAuthNotConfiguredError || name === 'SocialAuthNotConfiguredError') {
     return SOCIAL_PROBLEM_SPECS['SOCIAL_AUTH_NOT_CONFIGURED']!;
   }

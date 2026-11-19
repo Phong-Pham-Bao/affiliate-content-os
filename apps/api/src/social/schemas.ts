@@ -13,6 +13,7 @@ export const socialAccountSchema = {
       type: 'string',
       enum: ['connecting', 'active', 'degraded', 'reauth_required', 'review_gated', 'disconnected'],
     },
+    statusReason: { type: ['string', 'null'] },
     grantedScopes: { type: 'array', items: { type: 'string' } },
     capabilities: {
       type: 'object',
@@ -25,6 +26,15 @@ export const socialAccountSchema = {
     },
     capabilitiesCheckedAt: { type: ['string', 'null'], format: 'date-time' },
     tokenExpiresAt: { type: ['string', 'null'], format: 'date-time' },
+    reauthRequiredAt: { type: ['string', 'null'], format: 'date-time' },
+    lastRefreshedAt: { type: ['string', 'null'], format: 'date-time' },
+    nextRefreshAt: { type: ['string', 'null'], format: 'date-time' },
+    allowedActions: {
+      type: 'array',
+      items: { type: 'string', enum: ['reconnect', 'refresh', 'disconnect'] },
+    },
+    externalRevocationSupported: { type: 'boolean' },
+    externalRevocationResult: { type: ['string', 'null'] },
     connectedByUserId: { type: 'string', format: 'uuid' },
     environment: { type: 'string' },
     createdAt: { type: 'string', format: 'date-time' },

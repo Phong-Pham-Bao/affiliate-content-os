@@ -1,19 +1,13 @@
 import crypto from 'node:crypto';
 import {
-  parseAuditEventId,
-  parseCorrelationId,
-  parseIsoTimestamp,
-  parseUserId,
-  parseWorkspaceId,
-} from '@affiliate-content-os/domain';
-import {
   generateUuidV7,
   OAuthTransactionExpiredError,
   OAuthTransactionReplayedError,
+  SocialAccountMismatchError,
   type CompleteOAuthCallbackAtomicParams,
   type CompleteOAuthCallbackAtomicResult,
 } from '@affiliate-content-os/application';
-import { createTransactionScopedPostgresAuditAdapter } from '../../audit/index.js';
+import { appendCallbackAuditEvent } from './social-callback-audit.js';
 import type { Database } from '../../database/types.js';
 import {
   mapOAuthCallbackResultRow,
@@ -30,7 +24,7 @@ import {
   SQL_INSERT_SOCIAL_CREDENTIALS,
   SQL_LOCK_TRANSACTION_FOR_UPDATE,
   SQL_UPDATE_SOCIAL_ACCOUNT,
-  SQL_UPDATE_SOCIAL_CREDENTIALS,
+  SQL_UPSERT_SOCIAL_CREDENTIALS,
 } from './postgres-social-statements.js';
 
 export function computeSocialAccountUpsertAdvisoryLockKey(
@@ -84,19 +78,43 @@ export async function executeCompleteOAuthCallbackTransaction(
     await tx.query('SELECT pg_advisory_xact_lock($1::bigint)', [accountLockKey]);
 
     // 3. Resolve authoritative target account ID before encryption
-    const existingRes = await tx.query<SocialAccountRow>(SQL_FIND_ACTIVE_ACCOUNT_FOR_UPDATE, [
-      params.workspaceId,
-      params.platform,
-      params.providerAccountId,
-    ]);
+    let isExisting = false;
+    let targetAccountId = generateUuidV7();
+
+    if (params.reconnectAccountId) {
+      const recRes = await tx.query<SocialAccountRow>(
+        'SELECT id, version, provider_account_id FROM social_accounts WHERE workspace_id = $1 AND id = $2 FOR UPDATE;',
+        [params.workspaceId, params.reconnectAccountId],
+      );
+      if (recRes.rows.length === 0) {
+        throw new OAuthTransactionExpiredError('Reconnect account not found or workspace mismatch');
+      }
+      if (recRes.rows[0]!.provider_account_id !== params.providerAccountId) {
+        throw new SocialAccountMismatchError(
+          'Reconnect transaction is bound to a different provider account',
+        );
+      }
+      targetAccountId = params.reconnectAccountId;
+      isExisting = true;
+    } else {
+      const existingRes = await tx.query<SocialAccountRow>(SQL_FIND_ACTIVE_ACCOUNT_FOR_UPDATE, [
+        params.workspaceId,
+        params.platform,
+        params.providerAccountId,
+      ]);
+      if (existingRes.rows.length > 0) {
+        targetAccountId = existingRes.rows[0]!.id;
+        isExisting = true;
+      }
+    }
+
+    // 4. Encrypt credentials bound authoritatively to targetAccountId
+    const encrypted = params.encryptCredentials(targetAccountId);
+    const derivedStatus = params.derivedStatus ?? 'active';
+    const statusReason = params.statusReason ?? 'initial_exchange_complete';
+    const exchangeStage = params.exchangeStage ?? 'completed';
 
     let accountRow: SocialAccountRow;
-    const isExisting = existingRes.rows.length > 0;
-    const targetAccountId = isExisting ? existingRes.rows[0]!.id : generateUuidV7();
-
-    // 3. Encrypt credentials bound authoritatively to targetAccountId
-    const encrypted = params.encryptCredentials(targetAccountId);
-
     if (isExisting) {
       const updateRes = await tx.query<SocialAccountRow>(SQL_UPDATE_SOCIAL_ACCOUNT, [
         targetAccountId,
@@ -106,13 +124,16 @@ export async function executeCompleteOAuthCallbackTransaction(
         JSON.stringify(params.capabilities),
         params.capabilitiesCheckedAt,
         params.tokenExpiresAt,
+        derivedStatus,
+        statusReason,
+        exchangeStage,
         params.now,
       ]);
       accountRow = updateRes.rows[0]!;
 
-      await tx.query(SQL_UPDATE_SOCIAL_CREDENTIALS, [
-        params.workspaceId,
+      await tx.query(SQL_UPSERT_SOCIAL_CREDENTIALS, [
         targetAccountId,
+        params.workspaceId,
         Buffer.from(encrypted.accessTokenCiphertext),
         Buffer.from(encrypted.accessTokenIv),
         Buffer.from(encrypted.accessTokenAuthTag),
@@ -132,6 +153,9 @@ export async function executeCompleteOAuthCallbackTransaction(
         params.providerAccountId,
         params.displayName,
         params.handle,
+        derivedStatus,
+        statusReason,
+        exchangeStage,
         JSON.stringify(params.grantedScopes),
         JSON.stringify(params.capabilities),
         params.capabilitiesCheckedAt,
@@ -182,29 +206,7 @@ export async function executeCompleteOAuthCallbackTransaction(
     ]);
 
     // 6. Append audit event
-    const auditAdapter = createTransactionScopedPostgresAuditAdapter(tx);
-    await auditAdapter.appendAuditEvent({
-      id: parseAuditEventId(generateUuidV7()),
-      workspaceId: parseWorkspaceId(params.workspaceId),
-      actorType: 'user',
-      actorUserId: parseUserId(params.actorUserId),
-      action: 'social_connection.completed',
-      resourceType: 'social_account',
-      resourceId: accountRow.id,
-      result: 'succeeded',
-      reasonCode: null,
-      changes: {
-        platform: { before: null, after: params.platform },
-        status: { before: null, after: 'active' },
-      },
-      ipHash: params.auditContext?.ipHash ?? null,
-      userAgentSummary: params.auditContext?.userAgentSummary ?? null,
-      correlationId: params.auditContext?.correlationId
-        ? parseCorrelationId(params.auditContext.correlationId)
-        : null,
-      occurredAt: parseIsoTimestamp(params.now),
-      createdAt: parseIsoTimestamp(params.now),
-    });
+    await appendCallbackAuditEvent(tx, params, accountRow.id);
 
     return {
       account: mapSocialAccountRow(accountRow),

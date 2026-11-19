@@ -1,250 +1,40 @@
-import type {
-  OAuthCallbackResultSnapshot,
-  OAuthTransactionSnapshot,
-  SocialAccountEnvironment,
-  SocialAccountSnapshot,
-  SocialPlatform,
-} from '@affiliate-content-os/domain';
+export type {
+  CreateAuthorizationUrlInput,
+  CreateAuthorizationUrlResult,
+  ExchangeCodeInput,
+  ExchangeCodeResult,
+  RefreshTokenInput,
+  RefreshTokenResult,
+  RevokeTokenResult,
+  SocialAuthAdapter,
+} from './ports-adapter.js';
 
-export interface CreateAuthorizationUrlInput {
-  readonly workspaceId: string;
-  readonly platform: SocialPlatform;
-  readonly state: string;
-  readonly redirectUri: string;
-  readonly scopes: readonly string[];
-}
+export type {
+  DecryptedSocialCredentials,
+  EncryptedOAuthVerifier,
+  EncryptedSocialCredentials,
+  SocialCredentialProtectorPort,
+} from './ports-crypto.js';
 
-export interface CreateAuthorizationUrlResult {
-  readonly authorizationUrl: string;
-  readonly codeVerifier?: string | undefined;
-}
+export type {
+  ClaimSocialAccountForRefreshParams,
+  ClaimedSocialAccountRefresh,
+  CompleteSocialAccountRefreshParams,
+  DisconnectSocialAccountParams,
+  RecordFailedSocialAccountRefreshParams,
+} from './ports-lifecycle-params.js';
 
-export interface ExchangeCodeInput {
-  readonly platform: SocialPlatform;
-  readonly code: string;
-  readonly redirectUri: string;
-  readonly codeVerifier?: string | undefined;
-}
-
-export interface ExchangeCodeResult {
-  readonly providerAccountId: string;
-  readonly displayName: string;
-  readonly handle: string | null;
-  readonly accessToken: string;
-  readonly refreshToken?: string | null | undefined;
-  readonly tokenExpiresInSeconds?: number | null | undefined;
-  readonly grantedScopes: readonly string[];
-  readonly capabilities: Record<string, boolean>;
-  readonly environment: SocialAccountEnvironment;
-}
-
-export interface SocialAuthAdapter {
-  readonly platform: SocialPlatform;
-  createAuthorizationUrl(input: CreateAuthorizationUrlInput): Promise<CreateAuthorizationUrlResult>;
-  exchangeCode(input: ExchangeCodeInput): Promise<ExchangeCodeResult>;
-  revoke?(accessToken: string): Promise<void>;
-}
-
-export interface EncryptedSocialCredentials {
-  readonly accessTokenCiphertext: Uint8Array;
-  readonly accessTokenIv: Uint8Array;
-  readonly accessTokenAuthTag: Uint8Array;
-  readonly refreshTokenCiphertext: Uint8Array | null;
-  readonly refreshTokenIv: Uint8Array | null;
-  readonly refreshTokenAuthTag: Uint8Array | null;
-  readonly keyVersion: string;
-}
-
-export interface EncryptedOAuthVerifier {
-  readonly ciphertext: Uint8Array;
-  readonly iv: Uint8Array;
-  readonly authTag: Uint8Array;
-  readonly keyVersion: string;
-}
-
-export interface DecryptedSocialCredentials {
-  readonly accessToken: string;
-  readonly refreshToken: string | null;
-}
-
-export interface SocialCredentialProtectorPort {
-  encrypt(params: {
-    readonly workspaceId: string;
-    readonly socialAccountId: string;
-    readonly platform: SocialPlatform;
-    readonly accessToken: string;
-    readonly refreshToken?: string | null | undefined;
-  }): EncryptedSocialCredentials;
-  decrypt(params: {
-    readonly workspaceId: string;
-    readonly socialAccountId: string;
-    readonly platform: SocialPlatform;
-    readonly credentials: EncryptedSocialCredentials;
-  }): DecryptedSocialCredentials;
-  encryptOAuthVerifier(params: {
-    readonly workspaceId: string;
-    readonly transactionId: string;
-    readonly platform: SocialPlatform;
-    readonly codeVerifier: string;
-  }): EncryptedOAuthVerifier;
-  decryptOAuthVerifier(params: {
-    readonly workspaceId: string;
-    readonly transactionId: string;
-    readonly platform: SocialPlatform;
-    readonly encryptedVerifier: EncryptedOAuthVerifier;
-  }): string;
-}
-
-export interface SocialAuditContext {
-  readonly ipHash?: string | null | undefined;
-  readonly userAgentSummary?: string | null | undefined;
-  readonly correlationId?: string | null | undefined;
-}
-
-export interface AuthorizeResponseData {
-  readonly authorizationUrl: string;
-  readonly transactionId: string;
-  readonly expiresAt: string;
-}
-
-export interface SaveOAuthTransactionWithIdempotencyParams {
-  readonly id: string;
-  readonly workspaceId: string;
-  readonly platform: SocialPlatform;
-  readonly initiatedByUserId: string;
-  readonly stateHash: Uint8Array;
-  readonly pkceVerifierCiphertext?: Uint8Array | null | undefined;
-  readonly pkceVerifierIv?: Uint8Array | null | undefined;
-  readonly pkceVerifierAuthTag?: Uint8Array | null | undefined;
-  readonly encryptionKeyVersion?: string | null | undefined;
-  readonly redirectUri: string;
-  readonly returnTo: string;
-  readonly requestedScopes: readonly string[];
-  readonly createdAt: string;
-  readonly expiresAt: string;
-  readonly idempotencyKey: string;
-  readonly keyHash: Uint8Array;
-  readonly requestHash: Uint8Array;
-  readonly routeKey: string;
-  readonly responseData: AuthorizeResponseData;
-  readonly auditContext?: SocialAuditContext | undefined;
-}
-
-export interface SaveOAuthTransactionWithIdempotencyResult {
-  readonly replayed: boolean;
-  readonly response: AuthorizeResponseData;
-}
-
-export interface SaveOAuthTransactionParams {
-  readonly id: string;
-  readonly workspaceId: string;
-  readonly platform: SocialPlatform;
-  readonly initiatedByUserId: string;
-  readonly stateHash: Uint8Array;
-  readonly pkceVerifierCiphertext?: Uint8Array | null | undefined;
-  readonly pkceVerifierIv?: Uint8Array | null | undefined;
-  readonly pkceVerifierAuthTag?: Uint8Array | null | undefined;
-  readonly encryptionKeyVersion?: string | null | undefined;
-  readonly redirectUri: string;
-  readonly returnTo: string;
-  readonly requestedScopes: readonly string[];
-  readonly expiresAt: string;
-  readonly createdAt: string;
-}
-
-export interface ClaimOAuthTransactionParams {
-  readonly stateHash: Uint8Array;
-  readonly platform: SocialPlatform;
-  readonly now: string;
-  readonly claimTtlSeconds: number;
-  readonly auditContext?: SocialAuditContext | undefined;
-}
-
-export interface ClaimedOAuthTransaction {
-  readonly id: string;
-  readonly workspaceId: string;
-  readonly platform: SocialPlatform;
-  readonly initiatedByUserId: string;
-  readonly redirectUri: string;
-  readonly returnTo: string;
-  readonly requestedScopes: readonly string[];
-  readonly encryptedVerifier?: EncryptedOAuthVerifier | undefined;
-  readonly createdAt: string;
-  readonly expiresAt: string;
-  readonly claimedAt: string;
-  readonly version: number;
-}
-
-export interface CompleteOAuthCallbackAtomicParams {
-  readonly transactionId: string;
-  readonly stateHash: Uint8Array;
-  readonly workspaceId: string;
-  readonly platform: SocialPlatform;
-  readonly actorUserId: string;
-  readonly providerAccountId: string;
-  readonly displayName: string;
-  readonly handle: string | null;
-  readonly grantedScopes: readonly string[];
-  readonly capabilities: Record<string, boolean>;
-  readonly capabilitiesCheckedAt: string;
-  readonly tokenExpiresAt: string | null;
-  readonly environment: SocialAccountEnvironment;
-  readonly encryptCredentials: (accountId: string) => EncryptedSocialCredentials;
-  readonly resultKeyHash: Uint8Array;
-  readonly resultExpiresAt: string;
-  readonly now: string;
-  readonly auditContext?: SocialAuditContext | undefined;
-}
-
-export interface CompleteOAuthCallbackAtomicResult {
-  readonly account: SocialAccountSnapshot;
-  readonly callbackResult: OAuthCallbackResultSnapshot;
-}
-
-export interface RecordFailedOAuthCallbackParams {
-  readonly transactionId: string;
-  readonly stateHash: Uint8Array;
-  readonly workspaceId: string;
-  readonly platform: SocialPlatform;
-  readonly actorUserId: string;
-  readonly errorCode: string;
-  readonly errorDescription: string;
-  readonly resultKeyHash: Uint8Array;
-  readonly resultExpiresAt: string;
-  readonly now: string;
-  readonly auditContext?: SocialAuditContext | undefined;
-}
-
-export interface ConsumeCallbackResultParams {
-  readonly workspaceId: string;
-  readonly actorUserId: string;
-  readonly resultKeyHash: Uint8Array;
-  readonly now: string;
-}
-
-export interface SocialPersistencePort {
-  saveOAuthTransaction(params: SaveOAuthTransactionParams): Promise<OAuthTransactionSnapshot>;
-  saveOAuthTransactionWithIdempotency(
-    params: SaveOAuthTransactionWithIdempotencyParams,
-  ): Promise<SaveOAuthTransactionWithIdempotencyResult>;
-  claimOAuthTransaction(params: ClaimOAuthTransactionParams): Promise<ClaimedOAuthTransaction>;
-  findPendingTransactionByStateHash(
-    stateHash: Uint8Array,
-  ): Promise<OAuthTransactionSnapshot | null>;
-  completeOAuthCallbackAtomic(
-    params: CompleteOAuthCallbackAtomicParams,
-  ): Promise<CompleteOAuthCallbackAtomicResult>;
-  recordFailedOAuthCallbackAtomic(
-    params: RecordFailedOAuthCallbackParams,
-  ): Promise<OAuthCallbackResultSnapshot>;
-  consumeCallbackResult(
-    params: ConsumeCallbackResultParams,
-  ): Promise<OAuthCallbackResultSnapshot | null>;
-  listSocialAccounts(params: {
-    readonly workspaceId: string;
-  }): Promise<readonly SocialAccountSnapshot[]>;
-  findSocialAccountById(params: {
-    readonly workspaceId: string;
-    readonly accountId: string;
-  }): Promise<SocialAccountSnapshot | null>;
-}
+export type {
+  AuthorizeResponseData,
+  ClaimOAuthTransactionParams,
+  ClaimedOAuthTransaction,
+  CompleteOAuthCallbackAtomicParams,
+  CompleteOAuthCallbackAtomicResult,
+  ConsumeCallbackResultParams,
+  RecordFailedOAuthCallbackParams,
+  SaveOAuthTransactionParams,
+  SaveOAuthTransactionWithIdempotencyParams,
+  SaveOAuthTransactionWithIdempotencyResult,
+  SocialAuditContext,
+  SocialPersistencePort,
+} from './ports-persistence.js';

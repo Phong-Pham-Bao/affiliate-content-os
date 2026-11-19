@@ -1,23 +1,42 @@
 export {
+  EXTERNAL_REVOCATION_RESULTS,
   OAUTH_CALLBACK_RESULT_STATUSES,
+  OAUTH_EXCHANGE_STAGES,
   OAUTH_TRANSACTION_STATUSES,
+  SOCIAL_ACCOUNT_ACTIONS,
   SOCIAL_ACCOUNT_ENVIRONMENTS,
   SOCIAL_ACCOUNT_STATUSES,
+  SOCIAL_ACCOUNT_STATUS_REASONS,
   SOCIAL_PLATFORMS,
+  isExternalRevocationResult,
   isOAuthCallbackResultStatus,
+  isOAuthExchangeStage,
   isOAuthTransactionStatus,
+  isSocialAccountAction,
   isSocialAccountEnvironment,
   isSocialAccountStatus,
+  isSocialAccountStatusReason,
   isSocialPlatform,
+  type ExternalRevocationResult,
   type OAuthCallbackResultSnapshot,
   type OAuthCallbackResultStatus,
+  type OAuthExchangeStage,
   type OAuthTransactionSnapshot,
   type OAuthTransactionStatus,
+  type SocialAccountAction,
   type SocialAccountEnvironment,
   type SocialAccountSnapshot,
   type SocialAccountStatus,
+  type SocialAccountStatusReason,
   type SocialPlatform,
 } from './types.js';
+
+export {
+  deriveAccountLifecycle,
+  type DeriveAccountLifecycleInput,
+  type DerivedAccountLifecycle,
+  type InspectionErrorClass,
+} from './account-lifecycle-policy.js';
 
 export {
   isCallbackResultId,

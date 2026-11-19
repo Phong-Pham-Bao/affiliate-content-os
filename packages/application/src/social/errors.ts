@@ -98,3 +98,53 @@ export class SocialCredentialEncryptionError extends Error {
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }
+
+export class SocialAccountNotFoundError extends Error {
+  public override readonly name = 'SocialAccountNotFoundError';
+  constructor(message = 'Social account was not found in this workspace.') {
+    super(message);
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export class SocialAccountDisconnectedError extends Error {
+  public override readonly name = 'SocialAccountDisconnectedError';
+  constructor(message = 'Social account is disconnected.') {
+    super(message);
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export class SocialAccountVersionMismatchError extends Error {
+  public override readonly name = 'SocialAccountVersionMismatchError';
+  constructor(message = 'Social account version mismatch. State has been updated concurrently.') {
+    super(message);
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export class SocialAccountMismatchError extends Error {
+  public override readonly name = 'SocialAccountMismatchError';
+  constructor(message = 'Provider account returned does not match the reconnected account.') {
+    super(message);
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export class SocialKillSwitchActiveError extends Error {
+  public override readonly name = 'SocialKillSwitchActiveError';
+  constructor(
+    message = 'Social connection operations are temporarily disabled by platform kill switch.',
+  ) {
+    super(message);
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export class SocialAuthOutcomeUnknownError extends Error {
+  public override readonly name = 'SocialAuthOutcomeUnknownError';
+  constructor(message = 'Network timeout occurred and provider issuance outcome is unknown.') {
+    super(message);
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}

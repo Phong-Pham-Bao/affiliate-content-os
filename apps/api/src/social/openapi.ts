@@ -1,4 +1,5 @@
 import { commonHeaders, problemDetailsContent } from '../auth/openapi-auth-paths.js';
+import { buildOpenApiSocialLifecyclePaths } from './openapi-lifecycle.js';
 import {
   authorizeSocialConnectionRouteSchema,
   getCallbackResultRouteSchema,
@@ -7,6 +8,7 @@ import {
 
 export function buildOpenApiSocialPaths(): Record<string, unknown> {
   return {
+    ...buildOpenApiSocialLifecyclePaths(),
     '/api/v1/workspaces/{workspaceId}/social-accounts': {
       get: {
         tags: ['Social Accounts'],

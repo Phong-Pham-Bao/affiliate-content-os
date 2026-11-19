@@ -12358,6 +12358,781 @@
         }
       }
     },
+    "/api/v1/workspaces/{workspaceId}/social-accounts/{accountId}/reconnect": {
+      "post": {
+        "tags": ["Social Accounts"],
+        "summary": "Reconnect existing social account",
+        "description": "Initiates OAuth reconnect flow bound to existing provider account ID. Owner only.",
+        "parameters": [
+          {
+            "name": "workspaceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "accountId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[!-~]{1,128}$"
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "acos_session",
+            "in": "cookie",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": ["object", "null"],
+                "properties": {
+                  "returnTo": {
+                    "type": "string",
+                    "maxLength": 512
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Reconnect authorization URL generated.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-store"
+                },
+                "description": "Disables caching for sensitive authentication responses."
+              },
+              "Pragma": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-cache"
+                },
+                "description": "Legacy HTTP 1.0 cache prevention."
+              },
+              "Referrer-Policy": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-referrer"
+                },
+                "description": "Prevents token leakage in Referer headers."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "authorizationUrl": {
+                      "type": "string"
+                    },
+                    "transactionId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "expiresAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  },
+                  "required": ["authorizationUrl", "transactionId", "expiresAt"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request or unsupported platform.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Owner capability required.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Social account not found.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Account mismatch or conflict.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Social auth or platform disabled.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspaceId}/social-accounts/{accountId}/refresh": {
+      "post": {
+        "tags": ["Social Accounts"],
+        "summary": "Refresh social account token and capabilities",
+        "description": "Performs token refresh and health synchronization. Owner only.",
+        "parameters": [
+          {
+            "name": "workspaceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "accountId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[!-~]{1,128}$"
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "acos_session",
+            "in": "cookie",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Social account refreshed successfully.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-store"
+                },
+                "description": "Disables caching for sensitive authentication responses."
+              },
+              "Pragma": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-cache"
+                },
+                "description": "Legacy HTTP 1.0 cache prevention."
+              },
+              "Referrer-Policy": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-referrer"
+                },
+                "description": "Prevents token leakage in Referer headers."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "workspaceId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "platform": {
+                      "type": "string",
+                      "enum": ["threads", "tiktok"]
+                    },
+                    "providerAccountId": {
+                      "type": "string"
+                    },
+                    "displayName": {
+                      "type": "string"
+                    },
+                    "handle": {
+                      "type": ["string", "null"]
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "connecting",
+                        "active",
+                        "degraded",
+                        "reauth_required",
+                        "review_gated",
+                        "disconnected"
+                      ]
+                    },
+                    "statusReason": {
+                      "type": ["string", "null"]
+                    },
+                    "grantedScopes": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "capabilities": {
+                      "type": "object",
+                      "properties": {
+                        "canPublishText": {
+                          "type": "boolean"
+                        },
+                        "canPublishMedia": {
+                          "type": "boolean"
+                        },
+                        "isBusinessAccount": {
+                          "type": "boolean"
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "capabilitiesCheckedAt": {
+                      "type": ["string", "null"],
+                      "format": "date-time"
+                    },
+                    "tokenExpiresAt": {
+                      "type": ["string", "null"],
+                      "format": "date-time"
+                    },
+                    "reauthRequiredAt": {
+                      "type": ["string", "null"],
+                      "format": "date-time"
+                    },
+                    "lastRefreshedAt": {
+                      "type": ["string", "null"],
+                      "format": "date-time"
+                    },
+                    "nextRefreshAt": {
+                      "type": ["string", "null"],
+                      "format": "date-time"
+                    },
+                    "allowedActions": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": ["reconnect", "refresh", "disconnect"]
+                      }
+                    },
+                    "externalRevocationSupported": {
+                      "type": "boolean"
+                    },
+                    "externalRevocationResult": {
+                      "type": ["string", "null"]
+                    },
+                    "connectedByUserId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "environment": {
+                      "type": "string"
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "updatedAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "version": {
+                      "type": "integer",
+                      "minimum": 1
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "workspaceId",
+                    "platform",
+                    "providerAccountId",
+                    "displayName",
+                    "handle",
+                    "status",
+                    "grantedScopes",
+                    "capabilities",
+                    "capabilitiesCheckedAt",
+                    "connectedByUserId",
+                    "environment",
+                    "createdAt",
+                    "updatedAt",
+                    "version"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Owner capability required.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Social account not found.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Account disconnected or conflict.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Provider rate limit exceeded.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service or refresh disabled.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspaceId}/social-accounts/{accountId}": {
+      "delete": {
+        "tags": ["Social Accounts"],
+        "summary": "Disconnect social account",
+        "description": "Safely disconnects account and cryptographically erases credentials. Owner only.",
+        "parameters": [
+          {
+            "name": "workspaceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "accountId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 32
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[!-~]{1,128}$"
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "acos_session",
+            "in": "cookie",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": ["object", "null"],
+                "properties": {
+                  "expectedVersion": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Social account disconnected successfully.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-store"
+                },
+                "description": "Disables caching for sensitive authentication responses."
+              },
+              "Pragma": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-cache"
+                },
+                "description": "Legacy HTTP 1.0 cache prevention."
+              },
+              "Referrer-Policy": {
+                "schema": {
+                  "type": "string",
+                  "example": "no-referrer"
+                },
+                "description": "Prevents token leakage in Referer headers."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "workspaceId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "platform": {
+                      "type": "string",
+                      "enum": ["threads", "tiktok"]
+                    },
+                    "providerAccountId": {
+                      "type": "string"
+                    },
+                    "displayName": {
+                      "type": "string"
+                    },
+                    "handle": {
+                      "type": ["string", "null"]
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "connecting",
+                        "active",
+                        "degraded",
+                        "reauth_required",
+                        "review_gated",
+                        "disconnected"
+                      ]
+                    },
+                    "statusReason": {
+                      "type": ["string", "null"]
+                    },
+                    "grantedScopes": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "capabilities": {
+                      "type": "object",
+                      "properties": {
+                        "canPublishText": {
+                          "type": "boolean"
+                        },
+                        "canPublishMedia": {
+                          "type": "boolean"
+                        },
+                        "isBusinessAccount": {
+                          "type": "boolean"
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "capabilitiesCheckedAt": {
+                      "type": ["string", "null"],
+                      "format": "date-time"
+                    },
+                    "tokenExpiresAt": {
+                      "type": ["string", "null"],
+                      "format": "date-time"
+                    },
+                    "reauthRequiredAt": {
+                      "type": ["string", "null"],
+                      "format": "date-time"
+                    },
+                    "lastRefreshedAt": {
+                      "type": ["string", "null"],
+                      "format": "date-time"
+                    },
+                    "nextRefreshAt": {
+                      "type": ["string", "null"],
+                      "format": "date-time"
+                    },
+                    "allowedActions": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": ["reconnect", "refresh", "disconnect"]
+                      }
+                    },
+                    "externalRevocationSupported": {
+                      "type": "boolean"
+                    },
+                    "externalRevocationResult": {
+                      "type": ["string", "null"]
+                    },
+                    "connectedByUserId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "environment": {
+                      "type": "string"
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "updatedAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "version": {
+                      "type": "integer",
+                      "minimum": 1
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "workspaceId",
+                    "platform",
+                    "providerAccountId",
+                    "displayName",
+                    "handle",
+                    "status",
+                    "grantedScopes",
+                    "capabilities",
+                    "capabilitiesCheckedAt",
+                    "connectedByUserId",
+                    "environment",
+                    "createdAt",
+                    "updatedAt",
+                    "version"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Owner capability required.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Social account not found.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Account conflict.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Precondition failed (version mismatch).",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/workspaces/{workspaceId}/social-accounts": {
       "get": {
         "tags": ["Social Accounts"],
@@ -12450,6 +13225,9 @@
                               "disconnected"
                             ]
                           },
+                          "statusReason": {
+                            "type": ["string", "null"]
+                          },
                           "grantedScopes": {
                             "type": "array",
                             "items": {
@@ -12478,6 +13256,31 @@
                           "tokenExpiresAt": {
                             "type": ["string", "null"],
                             "format": "date-time"
+                          },
+                          "reauthRequiredAt": {
+                            "type": ["string", "null"],
+                            "format": "date-time"
+                          },
+                          "lastRefreshedAt": {
+                            "type": ["string", "null"],
+                            "format": "date-time"
+                          },
+                          "nextRefreshAt": {
+                            "type": ["string", "null"],
+                            "format": "date-time"
+                          },
+                          "allowedActions": {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "enum": ["reconnect", "refresh", "disconnect"]
+                            }
+                          },
+                          "externalRevocationSupported": {
+                            "type": "boolean"
+                          },
+                          "externalRevocationResult": {
+                            "type": ["string", "null"]
                           },
                           "connectedByUserId": {
                             "type": "string",

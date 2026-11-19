@@ -23,6 +23,7 @@ import { PostgresWorkforceAdapter } from '@affiliate-content-os/infrastructure/w
 import {
   LocalSocialCredentialProtector,
   FakeSocialAuthAdapter,
+  ThreadsSocialAuthAdapter,
   PostgresSocialPersistenceAdapter,
 } from '@affiliate-content-os/infrastructure/social';
 import type { SocialPlatform } from '@affiliate-content-os/domain';
@@ -72,21 +73,43 @@ async function main(): Promise<void> {
       : undefined;
 
   const socialAdapters = new Map<SocialPlatform, SocialAuthAdapter>();
-  if (socialConfig.enabled && socialConfig.fakeAdapterEnabled && config.nodeEnv !== 'production') {
-    socialAdapters.set(
-      'threads',
-      new FakeSocialAuthAdapter({
-        platform: 'threads',
-        authBaseUrl: config.appBaseUrl,
-      }),
-    );
-    socialAdapters.set(
-      'tiktok',
-      new FakeSocialAuthAdapter({
-        platform: 'tiktok',
-        authBaseUrl: config.appBaseUrl,
-      }),
-    );
+  if (socialConfig.enabled) {
+    if (
+      socialConfig.threadsRealAdapterEnabled &&
+      socialConfig.threadsAppId &&
+      socialConfig.threadsAppSecret
+    ) {
+      socialAdapters.set(
+        'threads',
+        new ThreadsSocialAuthAdapter({
+          appId: socialConfig.threadsAppId,
+          appSecret: socialConfig.threadsAppSecret,
+          authBaseUrl: socialConfig.threadsAuthBaseUrl,
+          apiBaseUrl: socialConfig.threadsApiBaseUrl,
+          apiVersion: socialConfig.threadsApiVersion,
+          timeoutMs: socialConfig.threadsHttpTimeoutMs,
+          environment: config.nodeEnv === 'production' ? 'production' : 'local',
+        }),
+      );
+    } else if (socialConfig.fakeAdapterEnabled && config.nodeEnv !== 'production') {
+      socialAdapters.set(
+        'threads',
+        new FakeSocialAuthAdapter({
+          platform: 'threads',
+          authBaseUrl: config.appBaseUrl,
+        }),
+      );
+    }
+
+    if (socialConfig.fakeAdapterEnabled && config.nodeEnv !== 'production') {
+      socialAdapters.set(
+        'tiktok',
+        new FakeSocialAuthAdapter({
+          platform: 'tiktok',
+          authBaseUrl: config.appBaseUrl,
+        }),
+      );
+    }
   }
 
   const clock = new SystemClock();

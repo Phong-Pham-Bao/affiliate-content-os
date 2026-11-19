@@ -8,12 +8,20 @@ import {
   OAuthTransactionExpiredError,
   OAuthTransactionNotFoundError,
   OAuthTransactionReplayedError,
+  SocialAccountNotFoundError,
+  SocialAccountVersionMismatchError,
   type ClaimOAuthTransactionParams,
+  type ClaimSocialAccountForRefreshParams,
   type ClaimedOAuthTransaction,
+  type ClaimedSocialAccountRefresh,
   type CompleteOAuthCallbackAtomicParams,
   type CompleteOAuthCallbackAtomicResult,
+  type CompleteSocialAccountRefreshParams,
   type ConsumeCallbackResultParams,
+  type DisconnectSocialAccountParams,
+  type EncryptedSocialCredentials,
   type RecordFailedOAuthCallbackParams,
+  type RecordFailedSocialAccountRefreshParams,
   type SaveOAuthTransactionParams,
   type SaveOAuthTransactionWithIdempotencyParams,
   type SaveOAuthTransactionWithIdempotencyResult,
@@ -30,9 +38,16 @@ import {
   type SocialAccountSnapshot,
 } from '@affiliate-content-os/domain';
 
+import { LocalSocialCredentialProtector } from '@affiliate-content-os/infrastructure/social';
+
 export class InMemorySocialPersistence implements SocialPersistencePort {
+  private readonly defaultProtector = new LocalSocialCredentialProtector(
+    'MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE',
+    'v1',
+  );
   public transactions = new Map<string, OAuthTransactionSnapshot>();
   public accounts = new Map<string, SocialAccountSnapshot>();
+  public credentials = new Map<string, EncryptedSocialCredentials>();
   public callbackResults = new Map<string, OAuthCallbackResultSnapshot>();
   public idempotencyKeys = new Map<
     string,
@@ -351,5 +366,107 @@ export class InMemorySocialPersistence implements SocialPersistencePort {
       return acc;
     }
     return null;
+  }
+
+  public async findSocialAccountForUpdate(params: {
+    readonly workspaceId: string;
+    readonly accountId: string;
+  }): Promise<SocialAccountSnapshot | null> {
+    return this.findSocialAccountById(params);
+  }
+
+  public async claimSocialAccountForRefresh(
+    params: ClaimSocialAccountForRefreshParams,
+  ): Promise<ClaimedSocialAccountRefresh | null> {
+    const acc = await this.findSocialAccountById(params);
+    if (!acc) return null;
+
+    let encryptedCredentials = this.credentials.get(acc.id);
+    if (!encryptedCredentials) {
+      encryptedCredentials = this.defaultProtector.encrypt({
+        workspaceId: params.workspaceId,
+        socialAccountId: acc.id,
+        platform: acc.platform,
+        accessToken: 'fake_access_token_123',
+      });
+      this.credentials.set(acc.id, encryptedCredentials);
+    }
+
+    return {
+      account: acc,
+      encryptedCredentials,
+      claimedAccountVersion: acc.version,
+      claimedCredentialVersion: 1,
+    };
+  }
+
+  public async completeSocialAccountRefreshAtomic(
+    params: CompleteSocialAccountRefreshParams,
+  ): Promise<SocialAccountSnapshot> {
+    const acc = await this.findSocialAccountById(params);
+    if (!acc) throw new SocialAccountNotFoundError();
+    if (acc.version !== params.expectedAccountVersion) {
+      throw new SocialAccountVersionMismatchError();
+    }
+
+    const updated: SocialAccountSnapshot = {
+      ...acc,
+      status: params.derivedStatus,
+      statusReason: params.statusReason,
+      capabilitiesCheckedAt: params.now,
+      lastRefreshedAt: params.now,
+      nextRefreshAt: params.nextRefreshAt,
+      allowedActions: Object.freeze(['reconnect', 'refresh', 'disconnect']),
+      version: acc.version + 1,
+      updatedAt: params.now,
+    };
+    this.accounts.set(updated.id, updated);
+    return updated;
+  }
+
+  public async recordFailedSocialAccountRefreshAtomic(
+    params: RecordFailedSocialAccountRefreshParams,
+  ): Promise<SocialAccountSnapshot> {
+    const acc = await this.findSocialAccountById(params);
+    if (!acc) throw new SocialAccountNotFoundError();
+
+    const updated: SocialAccountSnapshot = {
+      ...acc,
+      status: params.derivedStatus,
+      statusReason: params.statusReason,
+      reauthRequiredAt: params.reauthRequiredAt ?? acc.reauthRequiredAt,
+      allowedActions: Object.freeze(
+        params.derivedStatus === 'reauth_required'
+          ? ['reconnect', 'disconnect']
+          : ['reconnect', 'refresh', 'disconnect'],
+      ),
+      version: acc.version + 1,
+      updatedAt: params.now,
+    };
+    this.accounts.set(updated.id, updated);
+    return updated;
+  }
+
+  public async disconnectSocialAccountAtomic(
+    params: DisconnectSocialAccountParams,
+  ): Promise<SocialAccountSnapshot> {
+    const acc = await this.findSocialAccountById(params);
+    if (!acc) throw new SocialAccountNotFoundError();
+    if (acc.version !== params.expectedVersion) {
+      throw new SocialAccountVersionMismatchError();
+    }
+
+    const updated: SocialAccountSnapshot = {
+      ...acc,
+      status: 'disconnected',
+      statusReason: 'disconnected_by_user',
+      externalRevocationResult: params.externalRevocationResult,
+      externalRevocationSupported: params.externalRevocationSupported,
+      allowedActions: Object.freeze(['reconnect']),
+      version: acc.version + 1,
+      updatedAt: params.now,
+    };
+    this.accounts.set(updated.id, updated);
+    return updated;
   }
 }

@@ -138,4 +138,84 @@ describe('validate-social configuration', () => {
     ).toBeUndefined();
     expect(JSON.stringify(redacted)).not.toContain(validKey);
   });
+
+  it('validates Threads real adapter configuration when enabled', () => {
+    const config = loadSocialConfig(
+      {
+        SOCIAL_AUTH_ENABLED: 'true',
+        SOCIAL_KEY_PROVIDER: 'local',
+        SOCIAL_CREDENTIAL_ENCRYPTION_KEY: validKey,
+        SOCIAL_CREDENTIAL_KEY_VERSION: 'v1',
+        THREADS_REAL_ADAPTER_ENABLED: 'true',
+        THREADS_APP_ID: '1234567890',
+        THREADS_APP_SECRET: 'threads_secret_abc123',
+        THREADS_REDIRECT_URI: 'https://example.com/api/v1/social-connections/threads/callback',
+        THREADS_APP_REVIEW_STATUS: 'approved',
+      },
+      'development',
+    );
+
+    expect(config.threadsRealAdapterEnabled).toBe(true);
+    expect(config.threadsAppId).toBe('1234567890');
+    expect(config.threadsAppSecret).toBe('threads_secret_abc123');
+    expect(config.threadsRedirectUri).toBe(
+      'https://example.com/api/v1/social-connections/threads/callback',
+    );
+    expect(config.threadsAppReviewStatus).toBe('approved');
+    expect(config.threadsAuthBaseUrl).toBe('https://threads.net');
+    expect(config.threadsApiBaseUrl).toBe('https://graph.threads.net');
+
+    const redacted = getRedactedSocialConfigMetadata(config);
+    expect(redacted.threadsRealAdapterEnabled).toBe(true);
+    expect(redacted.hasThreadsAppId).toBe(true);
+    expect(redacted.hasThreadsAppSecret).toBe(true);
+    expect(redacted.threadsAppReviewStatus).toBe('approved');
+    expect(JSON.stringify(redacted)).not.toContain('threads_secret_abc123');
+  });
+
+  it('rejects Threads real adapter if app secret or id is missing', () => {
+    expect(() =>
+      loadSocialConfig(
+        {
+          SOCIAL_AUTH_ENABLED: 'true',
+          SOCIAL_KEY_PROVIDER: 'local',
+          SOCIAL_CREDENTIAL_ENCRYPTION_KEY: validKey,
+          SOCIAL_CREDENTIAL_KEY_VERSION: 'v1',
+          THREADS_REAL_ADAPTER_ENABLED: 'true',
+        },
+        'development',
+      ),
+    ).toThrow(ConfigurationError);
+  });
+
+  it('rejects unapproved host for Threads in production', () => {
+    expect(() =>
+      loadSocialConfig(
+        {
+          SOCIAL_AUTH_ENABLED: 'false',
+          THREADS_API_BASE_URL: 'https://attacker.example.com',
+        },
+        'production',
+      ),
+    ).toThrow(ConfigurationError);
+  });
+
+  it('rejects credentials in Threads provider URL', () => {
+    expect(() =>
+      loadSocialConfig({
+        THREADS_AUTH_BASE_URL: 'https://user:pass@threads.net',
+      }),
+    ).toThrow(ConfigurationError);
+  });
+
+  it('loads kill switch flags correctly', () => {
+    const config = loadSocialConfig({
+      SOCIAL_KILL_SWITCH_ACTIVE: 'true',
+      THREADS_CONNECTION_KILL_SWITCH_ACTIVE: 'true',
+      THREADS_REFRESH_KILL_SWITCH_ACTIVE: 'true',
+    });
+    expect(config.socialKillSwitchActive).toBe(true);
+    expect(config.threadsConnectionKillSwitchActive).toBe(true);
+    expect(config.threadsRefreshKillSwitchActive).toBe(true);
+  });
 });

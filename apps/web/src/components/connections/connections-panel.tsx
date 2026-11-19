@@ -4,10 +4,15 @@ import { useCallback, useEffect, useState, type ReactElement } from 'react';
 import type { SocialAccountDTO, SocialPlatform } from '../../types/social.js';
 import {
   beginSocialAuthorize,
+  beginSocialReconnect,
+  disconnectSocialAccount,
   fetchCallbackResult,
   fetchSocialAccounts,
+  refreshSocialAccount,
 } from '../../lib/social-api-client.js';
 import { ConnectionCard } from './connection-card.js';
+import { ConnectionsBanner, type CallbackBannerState } from './connections-banner.js';
+import { ConnectionsHeader } from './connections-header.js';
 
 interface ConnectionsPanelProps {
   readonly workspaceId: string;
@@ -21,10 +26,7 @@ export function ConnectionsPanel({ workspaceId, userRole }: ConnectionsPanelProp
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
-  const [callbackBanner, setCallbackBanner] = useState<{
-    readonly status: 'success' | 'failed';
-    readonly message: string;
-  } | null>(null);
+  const [callbackBanner, setCallbackBanner] = useState<CallbackBannerState | null>(null);
 
   const loadAccounts = useCallback(
     async (signal?: AbortSignal) => {
@@ -45,13 +47,11 @@ export function ConnectionsPanel({ workspaceId, userRole }: ConnectionsPanelProp
     [workspaceId],
   );
 
-  // 1. Process connection_result landing parameter if present in URL
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const resultKey = params.get('connection_result');
 
     if (resultKey) {
-      // Clear URL parameter immediately to prevent duplicate consumption
       const nextUrl = window.location.pathname;
       window.history.replaceState({}, document.title, nextUrl);
 
@@ -100,6 +100,52 @@ export function ConnectionsPanel({ workspaceId, userRole }: ConnectionsPanelProp
     }
   };
 
+  const handleReconnect = async (account: SocialAccountDTO) => {
+    if (!isOwner) return;
+    setError(null);
+    try {
+      const { authorizationUrl } = await beginSocialReconnect(
+        workspaceId,
+        account.id,
+        window.location.pathname,
+      );
+      window.location.href = authorizationUrl;
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Không thể bắt đầu kết nối lại.';
+      setError(msg);
+    }
+  };
+
+  const handleRefresh = async (account: SocialAccountDTO) => {
+    if (!isOwner) return;
+    try {
+      const updated = await refreshSocialAccount(workspaceId, account.id);
+      setAccounts((prev) => prev.map((a) => (a.id === updated.id ? updated : a)));
+      setCallbackBanner({
+        status: 'success',
+        message: `Đã làm mới thông tin tài khoản ${updated.displayName} thành công.`,
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Làm mới tài khoản thất bại.';
+      setError(msg);
+    }
+  };
+
+  const handleDisconnect = async (account: SocialAccountDTO) => {
+    if (!isOwner) return;
+    try {
+      const updated = await disconnectSocialAccount(workspaceId, account.id, account.version);
+      setAccounts((prev) => prev.map((a) => (a.id === updated.id ? updated : a)));
+      setCallbackBanner({
+        status: 'success',
+        message: `Đã ngắt kết nối tài khoản ${updated.displayName} khỏi hệ thống.`,
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Ngắt kết nối tài khoản thất bại.';
+      setError(msg);
+    }
+  };
+
   return (
     <section
       role="region"
@@ -113,136 +159,18 @@ export function ConnectionsPanel({ workspaceId, userRole }: ConnectionsPanelProp
         border: '1px solid #e5e7eb',
       }}
     >
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          flexWrap: 'wrap',
-          gap: '1rem',
-          marginBottom: '1rem',
-        }}
-      >
-        <div>
-          <h2 style={{ fontSize: '1.25rem', fontWeight: 600, margin: 0 }}>
-            Tài khoản mạng xã hội (Social Connections)
-          </h2>
-          <p style={{ fontSize: '0.875rem', color: '#6b7280', margin: '0.25rem 0 0 0' }}>
-            Kết nối các kênh phân phối để chuẩn bị xuất bản nội dung.
-          </p>
-        </div>
+      <ConnectionsHeader
+        isOwner={isOwner}
+        isConnecting={isConnecting}
+        onConnect={(p) => void handleConnect(p)}
+      />
 
-        {isOwner ? (
-          <div style={{ display: 'flex', gap: '0.5rem' }}>
-            <button
-              type="button"
-              disabled={isConnecting}
-              onClick={() => void handleConnect('threads')}
-              className="btn-connect-threads"
-              style={{
-                padding: '0.5rem 1rem',
-                borderRadius: '6px',
-                border: '1px solid #000000',
-                backgroundColor: '#000000',
-                color: '#ffffff',
-                cursor: isConnecting ? 'not-allowed' : 'pointer',
-                fontWeight: 500,
-                fontSize: '0.875rem',
-                opacity: isConnecting ? 0.7 : 1,
-              }}
-            >
-              + Kết nối Threads
-            </button>
-            <button
-              type="button"
-              disabled={isConnecting}
-              onClick={() => void handleConnect('tiktok')}
-              className="btn-connect-tiktok"
-              style={{
-                padding: '0.5rem 1rem',
-                borderRadius: '6px',
-                border: '1px solid #fe2c55',
-                backgroundColor: '#fe2c55',
-                color: '#ffffff',
-                cursor: isConnecting ? 'not-allowed' : 'pointer',
-                fontWeight: 500,
-                fontSize: '0.875rem',
-                opacity: isConnecting ? 0.7 : 1,
-              }}
-            >
-              + Kết nối TikTok
-            </button>
-          </div>
-        ) : (
-          <span style={{ fontSize: '0.8rem', color: '#9ca3af', fontStyle: 'italic' }}>
-            Chỉ Chủ sở hữu (Owner) mới có quyền kết nối tài khoản mới.
-          </span>
-        )}
-      </div>
-
-      {callbackBanner && (
-        <div
-          role={callbackBanner.status === 'success' ? 'status' : 'alert'}
-          style={{
-            padding: '0.75rem 1rem',
-            borderRadius: '6px',
-            marginBottom: '1rem',
-            backgroundColor: callbackBanner.status === 'success' ? '#dcfce7' : '#fee2e2',
-            color: callbackBanner.status === 'success' ? '#166534' : '#991b1b',
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-          }}
-        >
-          <span>{callbackBanner.message}</span>
-          <button
-            type="button"
-            onClick={() => setCallbackBanner(null)}
-            style={{
-              background: 'none',
-              border: 'none',
-              cursor: 'pointer',
-              color: 'inherit',
-              fontWeight: 700,
-            }}
-          >
-            ✕
-          </button>
-        </div>
-      )}
-
-      {error && (
-        <div
-          role="alert"
-          style={{
-            padding: '0.75rem 1rem',
-            borderRadius: '6px',
-            marginBottom: '1rem',
-            backgroundColor: '#fee2e2',
-            color: '#991b1b',
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-          }}
-        >
-          <span>{error}</span>
-          <button
-            type="button"
-            onClick={() => void loadAccounts()}
-            style={{
-              padding: '0.25rem 0.75rem',
-              borderRadius: '4px',
-              border: '1px solid #b91c1c',
-              backgroundColor: '#ffffff',
-              color: '#b91c1c',
-              cursor: 'pointer',
-              fontWeight: 500,
-            }}
-          >
-            Thử lại
-          </button>
-        </div>
-      )}
+      <ConnectionsBanner
+        banner={callbackBanner}
+        error={error}
+        onDismissBanner={() => setCallbackBanner(null)}
+        onRetry={() => void loadAccounts()}
+      />
 
       {isLoading ? (
         <div
@@ -281,7 +209,14 @@ export function ConnectionsPanel({ workspaceId, userRole }: ConnectionsPanelProp
           }}
         >
           {accounts.map((acc) => (
-            <ConnectionCard key={acc.id} account={acc} />
+            <ConnectionCard
+              key={acc.id}
+              account={acc}
+              isOwner={isOwner}
+              onReconnect={(a) => void handleReconnect(a)}
+              onRefresh={(a) => handleRefresh(a)}
+              onDisconnect={(a) => handleDisconnect(a)}
+            />
           ))}
         </div>
       )}

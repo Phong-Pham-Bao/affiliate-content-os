@@ -12,12 +12,20 @@ export interface SocialAccountRow {
   display_name: string;
   handle: string | null;
   status: string;
+  status_reason?: string | null;
+  exchange_stage?: string;
   granted_scopes: unknown;
   capabilities_json: unknown;
   capabilities_checked_at: Date | string | null;
   token_expires_at: Date | string | null;
+  reauth_required_at?: Date | string | null;
+  last_refreshed_at?: Date | string | null;
+  next_refresh_at?: Date | string | null;
   connected_by_user_id: string;
   disconnected_at: Date | string | null;
+  external_revocation_attempted?: boolean;
+  external_revocation_supported?: boolean;
+  external_revocation_result?: string | null;
   environment: string;
   created_at: Date | string;
   updated_at: Date | string;
@@ -33,6 +41,9 @@ export interface OAuthTransactionRow {
   redirect_uri: string;
   return_to: string;
   requested_scopes: unknown;
+  reconnect_account_id?: string | null;
+  expected_provider_account_id?: string | null;
+  exchange_stage?: string;
   status: string;
   claimed_at?: Date | string | null;
   claimed_expires_at?: Date | string | null;
@@ -73,6 +84,8 @@ export function mapSocialAccountRow(row: SocialAccountRow): SocialAccountSnapsho
     displayName: row.display_name,
     handle: row.handle,
     status: row.status as SocialAccountSnapshot['status'],
+    statusReason: (row.status_reason as SocialAccountSnapshot['statusReason']) ?? null,
+    exchangeStage: (row.exchange_stage as SocialAccountSnapshot['exchangeStage']) ?? 'completed',
     grantedScopes: Array.isArray(row.granted_scopes) ? row.granted_scopes : [],
     capabilities:
       typeof row.capabilities_json === 'object' && row.capabilities_json !== null
@@ -80,8 +93,15 @@ export function mapSocialAccountRow(row: SocialAccountRow): SocialAccountSnapsho
         : {},
     capabilitiesCheckedAt: toIsoString(row.capabilities_checked_at),
     tokenExpiresAt: toIsoString(row.token_expires_at),
+    reauthRequiredAt: toIsoString(row.reauth_required_at ?? null),
+    lastRefreshedAt: toIsoString(row.last_refreshed_at ?? null),
+    nextRefreshAt: toIsoString(row.next_refresh_at ?? null),
     connectedByUserId: row.connected_by_user_id,
     disconnectedAt: toIsoString(row.disconnected_at),
+    externalRevocationAttempted: Boolean(row.external_revocation_attempted),
+    externalRevocationSupported: Boolean(row.external_revocation_supported),
+    externalRevocationResult:
+      (row.external_revocation_result as SocialAccountSnapshot['externalRevocationResult']) ?? null,
     environment: row.environment as SocialAccountSnapshot['environment'],
     createdAt: toIsoString(row.created_at)!,
     updatedAt: toIsoString(row.updated_at)!,
@@ -103,6 +123,10 @@ export function mapOAuthTransactionRow(row: OAuthTransactionRow): OAuthTransacti
     redirectUri: row.redirect_uri,
     returnTo: row.return_to,
     requestedScopes: Array.isArray(row.requested_scopes) ? row.requested_scopes : [],
+    reconnectAccountId: row.reconnect_account_id ?? null,
+    expectedProviderAccountId: row.expected_provider_account_id ?? null,
+    exchangeStage:
+      (row.exchange_stage as OAuthTransactionSnapshot['exchangeStage']) ?? 'code_received',
     status: row.status as OAuthTransactionSnapshot['status'],
     claimedAt: toIsoString(row.claimed_at ?? null),
     claimedExpiresAt: toIsoString(row.claimed_expires_at ?? null),

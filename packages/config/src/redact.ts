@@ -119,6 +119,18 @@ export function getRedactedSocialConfigMetadata(
     credentialKeyVersion: config.credentialKeyVersion,
     transactionTtlSeconds: config.transactionTtlSeconds,
     callbackResultTtlSeconds: config.callbackResultTtlSeconds,
+    threadsRealAdapterEnabled: config.threadsRealAdapterEnabled,
+    hasThreadsAppId: Boolean(config.threadsAppId),
+    hasThreadsAppSecret: Boolean(config.threadsAppSecret),
+    hasThreadsRedirectUri: Boolean(config.threadsRedirectUri),
+    threadsAuthBaseUrl: config.threadsAuthBaseUrl,
+    threadsApiBaseUrl: config.threadsApiBaseUrl,
+    threadsApiVersion: config.threadsApiVersion,
+    threadsAppReviewStatus: config.threadsAppReviewStatus,
+    threadsHttpTimeoutMs: config.threadsHttpTimeoutMs,
+    socialKillSwitchActive: config.socialKillSwitchActive,
+    threadsConnectionKillSwitchActive: config.threadsConnectionKillSwitchActive,
+    threadsRefreshKillSwitchActive: config.threadsRefreshKillSwitchActive,
   };
 
   return Object.freeze(result);

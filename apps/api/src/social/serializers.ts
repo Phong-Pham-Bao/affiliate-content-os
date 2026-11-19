@@ -1,7 +1,10 @@
 import type {
+  ExternalRevocationResult,
   OAuthCallbackResultStatus,
+  SocialAccountAction,
   SocialAccountSnapshot,
   SocialAccountStatus,
+  SocialAccountStatusReason,
   SocialPlatform,
 } from '@affiliate-content-os/domain';
 import type {
@@ -17,6 +20,7 @@ export interface SocialAccountDto {
   readonly displayName: string;
   readonly handle: string | null;
   readonly status: SocialAccountStatus;
+  readonly statusReason: SocialAccountStatusReason | null;
   readonly grantedScopes: readonly string[];
   readonly capabilities: {
     readonly canPublishText?: boolean | undefined;
@@ -25,6 +29,12 @@ export interface SocialAccountDto {
   };
   readonly capabilitiesCheckedAt: string | null;
   readonly tokenExpiresAt: string | null;
+  readonly reauthRequiredAt: string | null;
+  readonly lastRefreshedAt: string | null;
+  readonly nextRefreshAt: string | null;
+  readonly allowedActions: readonly SocialAccountAction[];
+  readonly externalRevocationSupported: boolean;
+  readonly externalRevocationResult: ExternalRevocationResult | null;
   readonly connectedByUserId: string;
   readonly environment: string;
   readonly createdAt: string;
@@ -60,10 +70,17 @@ export function serializeSocialAccount(account: SocialAccountSnapshot): SocialAc
     displayName: account.displayName,
     handle: account.handle,
     status: account.status,
+    statusReason: account.statusReason ?? null,
     grantedScopes: Object.freeze([...account.grantedScopes]),
     capabilities: Object.freeze({ ...account.capabilities }),
     capabilitiesCheckedAt: account.capabilitiesCheckedAt,
     tokenExpiresAt: account.tokenExpiresAt,
+    reauthRequiredAt: account.reauthRequiredAt ?? null,
+    lastRefreshedAt: account.lastRefreshedAt ?? null,
+    nextRefreshAt: account.nextRefreshAt ?? null,
+    allowedActions: Object.freeze([...(account.allowedActions ?? [])]),
+    externalRevocationSupported: account.externalRevocationSupported ?? false,
+    externalRevocationResult: account.externalRevocationResult ?? null,
     connectedByUserId: account.connectedByUserId,
     environment: account.environment,
     createdAt: account.createdAt,

@@ -27,6 +27,27 @@ export {
 } from './list-social-accounts.js';
 
 export {
+  beginSocialReconnect,
+  type BeginSocialReconnectCommand,
+  type BeginSocialReconnectDependencies,
+  type BeginSocialReconnectResult,
+} from './begin-social-reconnect.js';
+
+export {
+  refreshSocialAccount,
+  type RefreshSocialAccountCommand,
+  type RefreshSocialAccountDependencies,
+  type RefreshSocialAccountResult,
+} from './refresh-social-account.js';
+
+export {
+  disconnectSocialAccount,
+  type DisconnectSocialAccountCommand,
+  type DisconnectSocialAccountDependencies,
+  type DisconnectSocialAccountResult,
+} from './disconnect-social-account.js';
+
+export {
   CallbackResultForbiddenError,
   CallbackResultGoneError,
   CallbackResultNotFoundError,
@@ -34,28 +55,42 @@ export {
   OAuthTransactionExpiredError,
   OAuthTransactionNotFoundError,
   OAuthTransactionReplayedError,
+  SocialAccountDisconnectedError,
+  SocialAccountMismatchError,
+  SocialAccountNotFoundError,
+  SocialAccountVersionMismatchError,
   SocialAuthExchangeError,
   SocialAuthNotConfiguredError,
+  SocialAuthOutcomeUnknownError,
   SocialAuthRateLimitError,
   SocialCredentialEncryptionError,
+  SocialKillSwitchActiveError,
   SocialPlatformUnsupportedError,
 } from './errors.js';
 
 export {
   type AuthorizeResponseData,
   type ClaimOAuthTransactionParams,
+  type ClaimSocialAccountForRefreshParams,
   type ClaimedOAuthTransaction,
+  type ClaimedSocialAccountRefresh,
   type CompleteOAuthCallbackAtomicParams,
   type CompleteOAuthCallbackAtomicResult,
+  type CompleteSocialAccountRefreshParams,
   type ConsumeCallbackResultParams,
   type CreateAuthorizationUrlInput,
   type CreateAuthorizationUrlResult,
   type DecryptedSocialCredentials,
+  type DisconnectSocialAccountParams,
   type EncryptedOAuthVerifier,
   type EncryptedSocialCredentials,
   type ExchangeCodeInput,
   type ExchangeCodeResult,
   type RecordFailedOAuthCallbackParams,
+  type RecordFailedSocialAccountRefreshParams,
+  type RefreshTokenInput,
+  type RefreshTokenResult,
+  type RevokeTokenResult,
   type SaveOAuthTransactionParams,
   type SaveOAuthTransactionWithIdempotencyParams,
   type SaveOAuthTransactionWithIdempotencyResult,

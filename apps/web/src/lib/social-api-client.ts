@@ -117,3 +117,74 @@ export async function fetchCallbackResult(
   );
   return handleApiResponse<SocialCallbackResultDTO>(res);
 }
+
+export async function beginSocialReconnect(
+  workspaceId: string,
+  accountId: string,
+  returnTo?: string,
+): Promise<SocialAuthorizeResponseDTO> {
+  const idempotencyKey = crypto.randomUUID();
+  const res = await fetch(
+    `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/social-accounts/${encodeURIComponent(accountId)}/reconnect`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        'Idempotency-Key': idempotencyKey,
+      },
+      body: JSON.stringify({ returnTo: returnTo ?? window.location.pathname }),
+    },
+  );
+  const data = await handleApiResponse<SocialAuthorizeResponseDTO>(res);
+
+  if (!isAllowedAuthorizationUrl(data.authorizationUrl, window.location.origin)) {
+    throw new SocialApiClientError(
+      'Server returned an untrusted or invalid authorization URL.',
+      500,
+      'INVALID_AUTHORIZATION_URL',
+    );
+  }
+
+  return data;
+}
+
+export async function refreshSocialAccount(
+  workspaceId: string,
+  accountId: string,
+): Promise<SocialAccountDTO> {
+  const idempotencyKey = crypto.randomUUID();
+  const res = await fetch(
+    `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/social-accounts/${encodeURIComponent(accountId)}/refresh`,
+    {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Idempotency-Key': idempotencyKey,
+      },
+    },
+  );
+  return handleApiResponse<SocialAccountDTO>(res);
+}
+
+export async function disconnectSocialAccount(
+  workspaceId: string,
+  accountId: string,
+  expectedVersion: number,
+): Promise<SocialAccountDTO> {
+  const idempotencyKey = crypto.randomUUID();
+  const res = await fetch(
+    `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/social-accounts/${encodeURIComponent(accountId)}`,
+    {
+      method: 'DELETE',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        'Idempotency-Key': idempotencyKey,
+        'If-Match': `"${expectedVersion}"`,
+      },
+      body: JSON.stringify({ expectedVersion }),
+    },
+  );
+  return handleApiResponse<SocialAccountDTO>(res);
+}

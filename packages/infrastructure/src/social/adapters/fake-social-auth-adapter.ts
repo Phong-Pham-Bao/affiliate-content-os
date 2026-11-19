@@ -7,6 +7,9 @@ import {
   type CreateAuthorizationUrlResult,
   type ExchangeCodeInput,
   type ExchangeCodeResult,
+  type RefreshTokenInput,
+  type RefreshTokenResult,
+  type RevokeTokenResult,
   type SocialAuthAdapter,
 } from '@affiliate-content-os/application';
 
@@ -18,6 +21,8 @@ export interface FakeSocialAuthAdapterOptions {
 
 export class FakeSocialAuthAdapter implements SocialAuthAdapter {
   public readonly platform: SocialPlatform;
+  public readonly supportsRefresh = true;
+  public readonly supportsRevocation = false;
   private readonly authBaseUrl: string;
   private readonly environment: SocialAccountEnvironment;
 
@@ -52,6 +57,26 @@ export class FakeSocialAuthAdapter implements SocialAuthAdapter {
 
     if (code.startsWith('fail_rate_limit')) {
       throw new SocialAuthRateLimitError('Simulated fake provider rate limit.', 60);
+    }
+
+    if (code.startsWith('fail_long_token')) {
+      const deterministicSuffix = crypto
+        .createHash('sha256')
+        .update(code, 'utf8')
+        .digest('hex')
+        .slice(0, 8);
+      return {
+        providerAccountId: `fake_${this.platform}_user_${deterministicSuffix}`,
+        displayName: `Fake ${this.platform === 'threads' ? 'Threads' : 'TikTok'} Creator`,
+        handle: `@fake_${this.platform}_${deterministicSuffix}`,
+        accessToken: `fake_short_token_${deterministicSuffix}`,
+        tokenExpiresInSeconds: 3600,
+        grantedScopes: ['threads_basic'],
+        capabilities: { canPublishText: false, canPublishMedia: false },
+        environment: this.environment,
+        stage: 'short_token_exchanged',
+        isRecoverablePartial: true,
+      };
     }
 
     const deterministicSuffix = crypto
@@ -98,6 +123,23 @@ export class FakeSocialAuthAdapter implements SocialAuthAdapter {
       capabilities,
       environment: this.environment,
     };
+  }
+
+  public async refreshToken(input: RefreshTokenInput): Promise<RefreshTokenResult> {
+    const refreshedToken = `fake_refreshed_${crypto
+      .createHash('sha256')
+      .update(input.accessToken, 'utf8')
+      .digest('hex')
+      .slice(0, 32)}`;
+    return {
+      accessToken: refreshedToken,
+      tokenExpiresInSeconds: 5184000,
+      tokenKind: 'long_lived',
+    };
+  }
+
+  public async revokeToken(_accessToken?: string): Promise<RevokeTokenResult> {
+    return { supported: false, revoked: false };
   }
 
   public async revoke(_accessToken: string): Promise<void> {

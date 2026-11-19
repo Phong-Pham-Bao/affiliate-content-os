@@ -153,6 +153,13 @@ export const DEFAULT_SOCIAL_CALLBACK_RESULT_TTL_SECONDS = 300;
 export const ALLOWED_SOCIAL_KEY_PROVIDERS = ['local', 'kms'] as const;
 export type SocialKeyProvider = (typeof ALLOWED_SOCIAL_KEY_PROVIDERS)[number];
 
+export const DEFAULT_THREADS_AUTH_BASE_URL = 'https://threads.net';
+export const DEFAULT_THREADS_API_BASE_URL = 'https://graph.threads.net';
+export const DEFAULT_THREADS_API_VERSION = 'v1.0';
+export const DEFAULT_THREADS_HTTP_TIMEOUT_MS = 10000;
+export const ALLOWED_THREADS_APP_REVIEW_STATUSES = ['development', 'approved'] as const;
+export type ThreadsAppReviewStatus = (typeof ALLOWED_THREADS_APP_REVIEW_STATUSES)[number];
+
 export interface SocialConfig {
   readonly enabled: boolean;
   readonly fakeAdapterEnabled: boolean;
@@ -161,6 +168,18 @@ export interface SocialConfig {
   readonly credentialKeyVersion: string | null;
   readonly transactionTtlSeconds: number;
   readonly callbackResultTtlSeconds: number;
+  readonly threadsRealAdapterEnabled: boolean;
+  readonly threadsAppId: string | null;
+  readonly threadsAppSecret: string | null;
+  readonly threadsRedirectUri: string | null;
+  readonly threadsAuthBaseUrl: string;
+  readonly threadsApiBaseUrl: string;
+  readonly threadsApiVersion: string;
+  readonly threadsAppReviewStatus: ThreadsAppReviewStatus;
+  readonly threadsHttpTimeoutMs: number;
+  readonly socialKillSwitchActive: boolean;
+  readonly threadsConnectionKillSwitchActive: boolean;
+  readonly threadsRefreshKillSwitchActive: boolean;
 }
 
 export interface RedactedSocialConfigMetadata {
@@ -171,6 +190,18 @@ export interface RedactedSocialConfigMetadata {
   readonly credentialKeyVersion: string | null;
   readonly transactionTtlSeconds: number;
   readonly callbackResultTtlSeconds: number;
+  readonly threadsRealAdapterEnabled: boolean;
+  readonly hasThreadsAppId: boolean;
+  readonly hasThreadsAppSecret: boolean;
+  readonly hasThreadsRedirectUri: boolean;
+  readonly threadsAuthBaseUrl: string;
+  readonly threadsApiBaseUrl: string;
+  readonly threadsApiVersion: string;
+  readonly threadsAppReviewStatus: ThreadsAppReviewStatus;
+  readonly threadsHttpTimeoutMs: number;
+  readonly socialKillSwitchActive: boolean;
+  readonly threadsConnectionKillSwitchActive: boolean;
+  readonly threadsRefreshKillSwitchActive: boolean;
 }
 
 export type RawEnvironment = Record<string, string | undefined>;

@@ -16,11 +16,16 @@ import {
   OAuthTransactionNotFoundError,
   OAuthTransactionReplayedError,
   type ClaimOAuthTransactionParams,
+  type ClaimSocialAccountForRefreshParams,
   type ClaimedOAuthTransaction,
+  type ClaimedSocialAccountRefresh,
   type CompleteOAuthCallbackAtomicParams,
   type CompleteOAuthCallbackAtomicResult,
+  type CompleteSocialAccountRefreshParams,
   type ConsumeCallbackResultParams,
+  type DisconnectSocialAccountParams,
   type RecordFailedOAuthCallbackParams,
+  type RecordFailedSocialAccountRefreshParams,
   type SaveOAuthTransactionParams,
   type SaveOAuthTransactionWithIdempotencyParams,
   type SaveOAuthTransactionWithIdempotencyResult,
@@ -51,6 +56,12 @@ import {
 import { executeCompleteOAuthCallbackTransaction } from './social-callback-transactions.js';
 import { executeRecordFailedOAuthCallbackTransaction } from './social-callback-failed-transaction.js';
 import { executeSaveOAuthTransactionWithIdempotency } from './social-authorize-idempotency-transaction.js';
+import {
+  executeClaimSocialAccountForRefresh,
+  executeCompleteSocialAccountRefresh,
+  executeRecordFailedSocialAccountRefresh,
+} from './social-refresh-transactions.js';
+import { executeDisconnectSocialAccount } from './social-disconnect-transaction.js';
 
 export class PostgresSocialPersistenceAdapter implements SocialPersistencePort {
   public constructor(private readonly database: Database) {}
@@ -71,6 +82,9 @@ export class PostgresSocialPersistenceAdapter implements SocialPersistencePort {
       params.redirectUri,
       params.returnTo,
       JSON.stringify(params.requestedScopes),
+      params.reconnectAccountId ?? null,
+      params.expectedProviderAccountId ?? null,
+      params.exchangeStage ?? 'code_received',
       params.createdAt,
       params.expiresAt,
     ]);
@@ -317,5 +331,41 @@ export class PostgresSocialPersistenceAdapter implements SocialPersistencePort {
     ]);
     if (res.rows.length === 0) return null;
     return mapSocialAccountRow(res.rows[0]!);
+  }
+
+  public async findSocialAccountForUpdate(params: {
+    workspaceId: string;
+    accountId: string;
+  }): Promise<SocialAccountSnapshot | null> {
+    const res = await this.database.query<SocialAccountRow>(
+      `${SQL_FIND_SOCIAL_ACCOUNT_BY_ID} FOR UPDATE;`,
+      [params.workspaceId, params.accountId],
+    );
+    if (res.rows.length === 0) return null;
+    return mapSocialAccountRow(res.rows[0]!);
+  }
+
+  public async claimSocialAccountForRefresh(
+    params: ClaimSocialAccountForRefreshParams,
+  ): Promise<ClaimedSocialAccountRefresh | null> {
+    return executeClaimSocialAccountForRefresh(this.database, params);
+  }
+
+  public async completeSocialAccountRefreshAtomic(
+    params: CompleteSocialAccountRefreshParams,
+  ): Promise<SocialAccountSnapshot> {
+    return executeCompleteSocialAccountRefresh(this.database, params);
+  }
+
+  public async recordFailedSocialAccountRefreshAtomic(
+    params: RecordFailedSocialAccountRefreshParams,
+  ): Promise<SocialAccountSnapshot> {
+    return executeRecordFailedSocialAccountRefresh(this.database, params);
+  }
+
+  public async disconnectSocialAccountAtomic(
+    params: DisconnectSocialAccountParams,
+  ): Promise<SocialAccountSnapshot> {
+    return executeDisconnectSocialAccount(this.database, params);
   }
 }

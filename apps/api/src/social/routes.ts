@@ -10,7 +10,17 @@ import {
   RATE_LIMIT_SOCIAL_READ_MAX,
   RATE_LIMIT_SOCIAL_READ_WINDOW_MS,
 } from './constants.js';
+import {
+  handleDisconnectSocialAccount,
+  handleReconnectSocialAccount,
+  handleRefreshSocialAccount,
+} from './lifecycle-handlers.js';
 import { handleGetCallbackResult, handleListSocialAccounts } from './read-handlers.js';
+import {
+  disconnectSocialAccountRouteSchema,
+  reconnectSocialAccountRouteSchema,
+  refreshSocialAccountRouteSchema,
+} from './schemas-lifecycle.js';
 import {
   authorizeSocialConnectionRouteSchema,
   getCallbackResultRouteSchema,
@@ -85,6 +95,33 @@ export function createSocialRoutes(deps: SocialRouteDependencies): FastifyPlugin
       { schema: getCallbackResultRouteSchema, config: readRateLimit },
       async (request, reply) => {
         await handleGetCallbackResult(request, reply, deps);
+      },
+    );
+
+    // 5. POST /api/v1/workspaces/:workspaceId/social-accounts/:accountId/reconnect
+    fastify.post(
+      '/api/v1/workspaces/:workspaceId/social-accounts/:accountId/reconnect',
+      { schema: reconnectSocialAccountRouteSchema, config: authorizeRateLimit },
+      async (request, reply) => {
+        await handleReconnectSocialAccount(request, reply, deps);
+      },
+    );
+
+    // 6. POST /api/v1/workspaces/:workspaceId/social-accounts/:accountId/refresh
+    fastify.post(
+      '/api/v1/workspaces/:workspaceId/social-accounts/:accountId/refresh',
+      { schema: refreshSocialAccountRouteSchema, config: authorizeRateLimit },
+      async (request, reply) => {
+        await handleRefreshSocialAccount(request, reply, deps);
+      },
+    );
+
+    // 7. DELETE /api/v1/workspaces/:workspaceId/social-accounts/:accountId
+    fastify.delete(
+      '/api/v1/workspaces/:workspaceId/social-accounts/:accountId',
+      { schema: disconnectSocialAccountRouteSchema, config: authorizeRateLimit },
+      async (request, reply) => {
+        await handleDisconnectSocialAccount(request, reply, deps);
       },
     );
   };
