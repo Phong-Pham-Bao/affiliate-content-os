@@ -41,13 +41,17 @@ export async function handleRefreshSocialAccount(
   const routeKey = `POST /api/v1/workspaces/:workspaceId/social-accounts/:accountId/refresh`;
   const now = (deps.clock?.now() ?? new Date()).toISOString();
 
-  const executeRefresh = async () => {
+  const executeRefresh = async (claimedOp?: {
+    readonly operationId: string;
+    readonly leaseToken: string;
+  }) => {
     const res = await refreshSocialAccount(
       {
         workspaceId,
         accountId,
         actorUserId: authContext.user.id,
         auditContext,
+        operationId: claimedOp?.operationId,
       },
       {
         persistence: deps.socialPersistence,
@@ -58,6 +62,7 @@ export async function handleRefreshSocialAccount(
         socialKillSwitchActive: deps.socialConfig.socialKillSwitchActive,
         threadsRefreshKillSwitchActive: deps.socialConfig.threadsRefreshKillSwitchActive,
         appReviewStatus: deps.socialConfig.threadsAppReviewStatus,
+        threadsHttpTimeoutMs: deps.socialConfig.threadsHttpTimeoutMs,
         clock: deps.clock ? deps.clock : { now: () => new Date() },
       },
     );
@@ -77,6 +82,7 @@ export async function handleRefreshSocialAccount(
         routeKey,
       },
       now,
+      operationType: 'refresh',
       executeMutation: executeRefresh,
     });
     account = idempResult.account;

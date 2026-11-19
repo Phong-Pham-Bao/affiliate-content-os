@@ -67,7 +67,10 @@ import {
   executeRecordFailedSocialAccountRefresh,
   executeReleaseSocialAccountRefreshLease,
 } from './social-refresh-transactions.js';
-import { executeDisconnectSocialAccount } from './social-disconnect-transaction.js';
+import {
+  executeDisconnectSocialAccount,
+  executeUpdateExternalRevocationResult,
+} from './social-disconnect-transaction.js';
 import { executeSocialAccountMutationWithIdempotency } from './social-mutation-idempotency.js';
 import { SQL_FIND_CREDENTIALS_FOR_REFRESH } from './postgres-social-lifecycle-statements.js';
 
@@ -419,13 +422,26 @@ export class PostgresSocialPersistenceAdapter implements SocialPersistencePort {
     return executeDisconnectSocialAccount(this.database, params);
   }
 
+  public async updateExternalRevocationResultAtomic(params: {
+    readonly workspaceId: string;
+    readonly accountId: string;
+    readonly externalRevocationResult: 'succeeded' | 'failed';
+    readonly now: string;
+  }): Promise<void> {
+    return executeUpdateExternalRevocationResult(this.database, params);
+  }
+
   public async executeMutationWithIdempotency(params: {
     readonly workspaceId: string;
     readonly accountId: string;
     readonly actorUserId: string;
     readonly idempotency: SocialIdempotencyInput;
     readonly now: string;
-    readonly executeMutation: () => Promise<SocialAccountSnapshot>;
+    readonly operationType?: 'refresh' | 'disconnect' | undefined;
+    readonly executeMutation: (claimedOp?: {
+      readonly operationId: string;
+      readonly leaseToken: string;
+    }) => Promise<SocialAccountSnapshot>;
   }): Promise<{ readonly replayed: boolean; readonly account: SocialAccountSnapshot }> {
     return executeSocialAccountMutationWithIdempotency(this.database, params);
   }

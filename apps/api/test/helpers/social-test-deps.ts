@@ -145,6 +145,7 @@ export function createTestSocialDeps(options?: {
     socialKillSwitchActive: false,
     threadsConnectionKillSwitchActive: false,
     threadsRefreshKillSwitchActive: false,
+    socialMaintenanceEnabled: false,
     ...options?.socialConfigOverrides,
   };
 

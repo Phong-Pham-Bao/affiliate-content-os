@@ -1,10 +1,16 @@
 import crypto from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import pg from 'pg';
+import type { SocialPlatform } from '@affiliate-content-os/domain';
 import {
   generateUuidV7,
   IdempotencyKeyReusedError,
   SocialAccountVersionMismatchError,
+  refreshSocialAccount,
+  maintainDueSocialAccounts,
+  disconnectSocialAccount,
+  SocialAuthExchangeError,
+  type SocialAuthAdapter,
 } from '@affiliate-content-os/application';
 import { createDatabase, type Database } from '../../src/database/index.js';
 import {
@@ -360,12 +366,26 @@ describe('Social Lifecycle Concurrency & Barriers Integration', () => {
     const now = new Date().toISOString();
 
     let mutationExecutionCount = 0;
-    const executeMutation = async () => {
+    const executeMutation = async (claimedOp?: { operationId: string; leaseToken: string }) => {
       mutationExecutionCount++;
-      return {
-        ...account,
-        version: account.version + 1,
-      };
+      // Real database mutation: update social_accounts version
+      await pool.query(
+        `UPDATE social_accounts SET version = version + 1, updated_at = NOW() WHERE id = $1`,
+        [account.id],
+      );
+      if (claimedOp) {
+        await pool.query(
+          `UPDATE social_account_operations
+           SET status = 'completed', resource_version = $2, completed_at = NOW()
+           WHERE id = $1`,
+          [claimedOp.operationId, account.version + 1],
+        );
+      }
+      const updated = await adapter.findSocialAccountById({
+        workspaceId: wsId,
+        accountId: account.id,
+      });
+      return updated!;
     };
 
     // First call: executes mutation
@@ -422,6 +442,383 @@ describe('Social Lifecycle Concurrency & Barriers Integration', () => {
         executeMutation,
       }),
     ).rejects.toThrow(IdempotencyKeyReusedError);
+  });
+
+  it('failure injection: crash after mutation commit before response completion reloads authoritative state on replay without re-mutating', async () => {
+    const account = await createTestAccount('threads_crash_test', 'Crash Tester');
+    const idempotencyKey = generateUuidV7();
+    const keyHash = crypto.createHash('sha256').update(idempotencyKey).digest();
+    const requestHash = crypto
+      .createHash('sha256')
+      .update(JSON.stringify({ action: 'crash_test' }))
+      .digest();
+    const routeKey = `POST /api/v1/workspaces/:workspaceId/social-accounts/:accountId/refresh`;
+    const now = new Date().toISOString();
+
+    let attempts = 0;
+    const executeMutation = async (claimedOp?: { operationId: string; leaseToken: string }) => {
+      attempts++;
+      // Real database mutation committing version increment and marking operation completed
+      await pool.query(
+        `UPDATE social_accounts SET version = version + 1, updated_at = NOW() WHERE id = $1`,
+        [account.id],
+      );
+      if (claimedOp) {
+        await pool.query(
+          `UPDATE social_account_operations
+           SET status = 'completed', resource_version = $2, completed_at = NOW()
+           WHERE id = $1`,
+          [claimedOp.operationId, account.version + 1],
+        );
+      }
+      // Simulate crash right after mutation commit
+      if (attempts === 1) {
+        throw new Error('SIMULATED_PROCESS_CRASH_AFTER_COMMIT');
+      }
+      const updated = await adapter.findSocialAccountById({
+        workspaceId: wsId,
+        accountId: account.id,
+      });
+      return updated!;
+    };
+
+    // First attempt crashes after mutation has committed to DB
+    await expect(
+      adapter.executeMutationWithIdempotency({
+        workspaceId: wsId,
+        accountId: account.id,
+        actorUserId: userId,
+        idempotency: {
+          idempotencyKey,
+          keyHash,
+          requestHash,
+          routeKey,
+        },
+        now,
+        executeMutation,
+      }),
+    ).rejects.toThrow('SIMULATED_PROCESS_CRASH_AFTER_COMMIT');
+
+    expect(attempts).toBe(1);
+
+    // Second attempt (replay) with same key: recovers authoritative state without re-running executeMutation
+    const replayed = await adapter.executeMutationWithIdempotency({
+      workspaceId: wsId,
+      accountId: account.id,
+      actorUserId: userId,
+      idempotency: {
+        idempotencyKey,
+        keyHash,
+        requestHash,
+        routeKey,
+      },
+      now,
+      executeMutation,
+    });
+
+    expect(replayed.replayed).toBe(true);
+    expect(replayed.account.version).toBe(account.version + 1);
+    expect(attempts).toBe(1); // executeMutation was NOT called again!
+  });
+
+  it('barrier evidence: two concurrent refresh use-case calls share one account -> assert provider call counter is exactly 1', async () => {
+    const account = await createTestAccount('threads_barrier_conc', 'Barrier Concurrent');
+    const past = new Date(Date.now() - 3600000).toISOString();
+    await pool.query(
+      `UPDATE social_credentials SET earliest_refresh_at = $1 WHERE social_account_id = $2`,
+      [past, account.id],
+    );
+    let providerCalls = 0;
+
+    const mockAdapter: SocialAuthAdapter = {
+      platform: 'threads',
+      supportsRefresh: true,
+      supportsRevocation: false,
+      createAuthorizationUrl: async () => ({ authorizationUrl: 'http://localhost' }),
+      exchangeCode: async () => {
+        throw new Error('Not implemented');
+      },
+      refreshToken: async () => {
+        providerCalls++;
+        await new Promise((resolve) => setTimeout(resolve, 80));
+        return {
+          accessToken: 'rotated_token_barrier_123',
+          tokenKind: 'long_lived' as const,
+          tokenExpiresInSeconds: 5184000,
+        };
+      },
+      inspectCurrentAccount: async () => ({
+        providerAccountId: account.providerAccountId,
+        handle: account.handle,
+        displayName: account.displayName,
+        grantedScopes: ['threads_basic', 'threads_content_publish'],
+        capabilities: { canPublishText: true },
+      }),
+    };
+
+    const deps = {
+      persistence: adapter,
+      protector,
+      adapters: new Map<SocialPlatform, SocialAuthAdapter>([['threads', mockAdapter]]),
+      enabled: true,
+      clock: { now: () => new Date() },
+    };
+
+    // Launch two simultaneous application-level refresh calls
+    const [resA, resB] = await Promise.all([
+      refreshSocialAccount({ workspaceId: wsId, accountId: account.id, actorUserId: userId }, deps),
+      refreshSocialAccount({ workspaceId: wsId, accountId: account.id, actorUserId: userId }, deps),
+    ]);
+
+    // Exactly one winner refreshed, exactly one loser received unrefreshed snapshot
+    const refreshedCount = (resA.refreshed ? 1 : 0) + (resB.refreshed ? 1 : 0);
+    expect(refreshedCount).toBe(1);
+
+    // CRITICAL BARRIER EVIDENCE: Exactly ONE provider call was made!
+    expect(providerCalls).toBe(1);
+  });
+
+  it('maintenance execution: due claim -> exactly one provider call -> fenced rotation; two workers do not double-call; failure records state; no due work returns zero', async () => {
+    // 1. Account is due for refresh
+    const dueAccount = await createTestAccount('threads_due_maint', 'Due Maintenance');
+    const past = new Date(Date.now() - 3600000).toISOString();
+    await pool.query(`UPDATE social_accounts SET next_refresh_at = $1 WHERE id = $2`, [
+      past,
+      dueAccount.id,
+    ]);
+    await pool.query(
+      `UPDATE social_credentials SET earliest_refresh_at = $1 WHERE social_account_id = $2`,
+      [past, dueAccount.id],
+    );
+
+    let providerCalls = 0;
+    const mockAdapter: SocialAuthAdapter = {
+      platform: 'threads',
+      supportsRefresh: true,
+      supportsRevocation: false,
+      createAuthorizationUrl: async () => ({ authorizationUrl: 'http://localhost' }),
+      exchangeCode: async () => {
+        throw new Error('Not implemented');
+      },
+      refreshToken: async () => {
+        providerCalls++;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        return {
+          accessToken: 'rotated_token_maint_456',
+          tokenKind: 'long_lived' as const,
+          tokenExpiresInSeconds: 5184000,
+        };
+      },
+      inspectCurrentAccount: async () => ({
+        providerAccountId: dueAccount.providerAccountId,
+        handle: dueAccount.handle,
+        displayName: dueAccount.displayName,
+        grantedScopes: ['threads_basic', 'threads_content_publish'],
+        capabilities: { canPublishText: true },
+      }),
+    };
+
+    const deps = {
+      persistence: adapter,
+      protector,
+      adapters: new Map<SocialPlatform, SocialAuthAdapter>([['threads', mockAdapter]]),
+      enabled: true,
+      clock: { now: () => new Date() },
+    };
+
+    // Two workers attempt to maintain due work simultaneously
+    const [resWorker1, resWorker2] = await Promise.all([
+      maintainDueSocialAccounts({ workerId: 'worker-1', maxBatchSize: 1 }, deps),
+      maintainDueSocialAccounts({ workerId: 'worker-2', maxBatchSize: 1 }, deps),
+    ]);
+
+    // Total processed across both workers must be 1, not 2
+    expect(resWorker1.processedCount + resWorker2.processedCount).toBe(1);
+    expect(resWorker1.claimedCount + resWorker2.claimedCount).toBe(1);
+    expect(resWorker1.refreshedCount + resWorker2.refreshedCount).toBe(1);
+    expect(providerCalls).toBe(1);
+
+    // 2. Failure records state and releases claim safely
+    const failAccount = await createTestAccount('threads_fail_maint', 'Fail Maintenance');
+    await pool.query(`UPDATE social_accounts SET next_refresh_at = $1 WHERE id = $2`, [
+      past,
+      failAccount.id,
+    ]);
+    await pool.query(
+      `UPDATE social_credentials SET earliest_refresh_at = $1 WHERE social_account_id = $2`,
+      [past, failAccount.id],
+    );
+
+    const failingAdapter: SocialAuthAdapter = {
+      platform: 'threads',
+      supportsRefresh: true,
+      supportsRevocation: false,
+      createAuthorizationUrl: async () => ({ authorizationUrl: 'http://localhost' }),
+      exchangeCode: async () => {
+        throw new Error('Not implemented');
+      },
+      refreshToken: async () => {
+        throw new SocialAuthExchangeError('Provider unavailable');
+      },
+    };
+
+    const failDeps = {
+      ...deps,
+      adapters: new Map<SocialPlatform, SocialAuthAdapter>([['threads', failingAdapter]]),
+    };
+
+    const failRes = await maintainDueSocialAccounts(
+      { workerId: 'worker-fail', maxBatchSize: 1 },
+      failDeps,
+    );
+
+    expect(failRes.processedCount).toBe(1);
+    expect(failRes.failedCount).toBe(1);
+
+    // 3. No due work returns zero
+    const emptyRes = await maintainDueSocialAccounts(
+      { workerId: 'worker-empty', maxBatchSize: 10 },
+      deps,
+    );
+    expect(emptyRes.processedCount).toBe(0);
+    expect(emptyRes.claimedCount).toBe(0);
+    expect(emptyRes.refreshedCount).toBe(0);
+    expect(emptyRes.failedCount).toBe(0);
+  });
+
+  it('disconnect barrier: remote revocation blocked on barrier proves account is already disconnected and credentials deleted; release updates result', async () => {
+    const account = await createTestAccount('threads_barrier_disc', 'Barrier Disconnect');
+
+    let barrierRelease: () => void = () => {};
+    const barrierPromise = new Promise<void>((resolve) => {
+      barrierRelease = resolve;
+    });
+
+    const mockAdapter: SocialAuthAdapter = {
+      platform: 'threads',
+      supportsRefresh: false,
+      supportsRevocation: true, // Supports revocation
+      createAuthorizationUrl: async () => ({ authorizationUrl: 'http://localhost' }),
+      exchangeCode: async () => {
+        throw new Error('Not implemented');
+      },
+      revokeToken: async () => {
+        // Block until test signals barrier
+        await barrierPromise;
+        return { supported: true, revoked: true };
+      },
+    };
+
+    const deps = {
+      persistence: adapter,
+      protector,
+      adapters: new Map<SocialPlatform, SocialAuthAdapter>([['threads', mockAdapter]]),
+      enabled: true,
+      clock: { now: () => new Date() },
+    };
+
+    // Start disconnect in background
+    const disconnectTask = disconnectSocialAccount(
+      {
+        workspaceId: wsId,
+        accountId: account.id,
+        actorUserId: userId,
+        expectedVersion: account.version,
+      },
+      deps,
+    );
+
+    // Wait a brief moment for the local transaction to commit while remote call is blocked
+    await new Promise((r) => setTimeout(r, 100));
+
+    // CHECK INVARIANTS WHILE BLOCKED ON BARRIER:
+    // 1. Account status is ALREADY disconnected
+    const midAccount = await adapter.findSocialAccountById({
+      workspaceId: wsId,
+      accountId: account.id,
+    });
+    expect(midAccount?.status).toBe('disconnected');
+    expect(midAccount?.externalRevocationAttempted).toBe(true);
+    expect(midAccount?.externalRevocationResult).toBe('pending');
+
+    // 2. Credentials are ALREADY deleted
+    const credRows = await pool.query(
+      `SELECT * FROM social_credentials WHERE social_account_id = $1`,
+      [account.id],
+    );
+    expect(credRows.rows).toHaveLength(0);
+
+    // Release the barrier
+    barrierRelease();
+    const finalResult = await disconnectTask;
+
+    expect(finalResult.account.status).toBe('disconnected');
+    expect(finalResult.account.externalRevocationResult).toBe('succeeded');
+
+    // Confirm DB has updated to 'succeeded'
+    const finalAccount = await adapter.findSocialAccountById({
+      workspaceId: wsId,
+      accountId: account.id,
+    });
+    expect(finalAccount?.externalRevocationResult).toBe('succeeded');
+  });
+
+  it('eligibility: earliest_refresh_at in the future rejected by claim SQL for both manual and due maintenance', async () => {
+    const account = await createTestAccount('threads_future_elig', 'Future Eligibility');
+    const future = new Date(Date.now() + 3600000).toISOString();
+    const past = new Date(Date.now() - 3600000).toISOString();
+    const now = new Date().toISOString();
+
+    // Ensure no other accounts in the DB are due
+    await pool.query(
+      `UPDATE social_accounts SET next_refresh_at = NOW() + INTERVAL '10 days' WHERE id <> $1`,
+      [account.id],
+    );
+
+    // 1. Set earliest_refresh_at to future, next_refresh_at to past (due)
+    await pool.query(
+      `UPDATE social_credentials SET earliest_refresh_at = $1 WHERE social_account_id = $2`,
+      [future, account.id],
+    );
+    await pool.query(`UPDATE social_accounts SET next_refresh_at = $1 WHERE id = $2`, [
+      past,
+      account.id,
+    ]);
+
+    // Manual claim MUST FAIL because earliest_refresh_at is in the future
+    const manualClaim = await adapter.claimSocialAccountForRefresh({
+      workspaceId: wsId,
+      accountId: account.id,
+      workerId: 'worker-elig',
+      leaseDurationSeconds: 60,
+      now,
+    });
+    expect(manualClaim).toBeNull();
+
+    // Due claim MUST FAIL because earliest_refresh_at is in the future
+    const dueClaim = await adapter.claimNextDueSocialAccountForRefresh({
+      now,
+      workerId: 'worker-elig',
+      leaseDurationSeconds: 60,
+      claimToken: generateUuidV7(),
+    });
+    expect(dueClaim).toBeNull();
+
+    // 2. Advance earliest_refresh_at to past
+    await pool.query(
+      `UPDATE social_credentials SET earliest_refresh_at = $1 WHERE social_account_id = $2`,
+      [past, account.id],
+    );
+
+    // Now due claim succeeds!
+    const validDueClaim = await adapter.claimNextDueSocialAccountForRefresh({
+      now,
+      workerId: 'worker-elig',
+      leaseDurationSeconds: 60,
+      claimToken: generateUuidV7(),
+    });
+    expect(validDueClaim).not.toBeNull();
+    expect(validDueClaim?.account.id).toBe(account.id);
   });
 
   it('partial callback persists truthful partial status and non-success audit event', async () => {

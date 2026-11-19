@@ -3,6 +3,7 @@ import {
   SocialAuthExchangeError,
   SocialAuthOutcomeUnknownError,
   SocialAuthRateLimitError,
+  SocialAuthTerminalError,
 } from '@affiliate-content-os/application';
 import { ThreadsSocialAuthAdapter, type HttpTransport } from '../../src/social/index.js';
 
@@ -58,6 +59,26 @@ describe('ThreadsSocialAuthAdapter', () => {
         state: 'random_state_abc123',
         redirectUri: 'http://127.0.0.1:3000/api/v1/social-connections/threads/callback',
         scopes: ['threads_basic'], // Missing threads_content_publish
+      }),
+    ).rejects.toThrow(SocialAuthExchangeError);
+
+    await expect(
+      adapter.createAuthorizationUrl({
+        workspaceId: '018f3a2c-4e5b-7c8d-9e0f-1a2b3c4d5e6f',
+        platform: 'threads',
+        state: 'random_state_abc123',
+        redirectUri: 'http://127.0.0.1:3000/api/v1/social-connections/threads/callback',
+        scopes: [],
+      }),
+    ).rejects.toThrow(SocialAuthExchangeError);
+
+    await expect(
+      adapter.createAuthorizationUrl({
+        workspaceId: '018f3a2c-4e5b-7c8d-9e0f-1a2b3c4d5e6f',
+        platform: 'threads',
+        state: 'random_state_abc123',
+        redirectUri: 'http://127.0.0.1:3000/api/v1/social-connections/threads/callback',
+        scopes: ['threads_basic', 'threads_content_publish', 'threads_basic'],
       }),
     ).rejects.toThrow(SocialAuthExchangeError);
   });
@@ -372,5 +393,276 @@ describe('ThreadsSocialAuthAdapter', () => {
       expect(message).not.toContain('super-secret-threads-key-456');
       expect(message).not.toContain('short_token_xyz');
     }
+  });
+
+  it('rejects oversized IDs and IDs with control characters', async () => {
+    const oversizedId = 'a'.repeat(129);
+    const mockTransport: HttpTransport = {
+      fetch: vi.fn().mockResolvedValueOnce({
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ access_token: 'short_tok', user_id: oversizedId }),
+      }),
+    };
+
+    const adapter = new ThreadsSocialAuthAdapter({
+      ...defaultOptions,
+      transport: mockTransport,
+    });
+
+    await expect(
+      adapter.exchangeCode({
+        platform: 'threads',
+        code: 'valid_code',
+        redirectUri: 'http://127.0.0.1:3000/callback',
+      }),
+    ).rejects.toThrow(SocialAuthExchangeError);
+
+    const controlId = 'bad\x00user\nid';
+    const mockTransportControl: HttpTransport = {
+      fetch: vi.fn().mockResolvedValueOnce({
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ access_token: 'short_tok', user_id: controlId }),
+      }),
+    };
+
+    const adapterControl = new ThreadsSocialAuthAdapter({
+      ...defaultOptions,
+      transport: mockTransportControl,
+    });
+
+    await expect(
+      adapterControl.exchangeCode({
+        platform: 'threads',
+        code: 'valid_code',
+        redirectUri: 'http://127.0.0.1:3000/callback',
+      }),
+    ).rejects.toThrow(SocialAuthExchangeError);
+  });
+
+  it('rejects non-positive or non-integer expires_in', async () => {
+    const mockTransport: HttpTransport = {
+      fetch: vi
+        .fn()
+        .mockResolvedValueOnce({
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ access_token: 'short_tok', user_id: 'user_123' }),
+        })
+        .mockResolvedValueOnce({
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ access_token: 'long_tok', expires_in: -10 }),
+        }),
+    };
+
+    const adapter = new ThreadsSocialAuthAdapter({
+      ...defaultOptions,
+      transport: mockTransport,
+    });
+
+    await expect(
+      adapter.exchangeCode({
+        platform: 'threads',
+        code: 'valid_code',
+        redirectUri: 'http://127.0.0.1:3000/callback',
+      }),
+    ).rejects.toThrow(SocialAuthExchangeError);
+  });
+
+  it('handles permission inspection variations: only basic, only publish, empty data, duplicates', async () => {
+    // 1. Only basic returned
+    const mockTransportBasic: HttpTransport = {
+      fetch: vi
+        .fn()
+        .mockResolvedValueOnce({
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ access_token: 'short_tok', user_id: 'user_123' }),
+        })
+        .mockResolvedValueOnce({
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ access_token: 'long_tok', expires_in: 5184000 }),
+        })
+        .mockResolvedValueOnce({
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ id: 'user_123', username: 'user_basic' }),
+        })
+        .mockResolvedValueOnce({
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            data: [{ permission: 'threads_basic', status: 'granted' }],
+          }),
+        }),
+    };
+
+    const adapterBasic = new ThreadsSocialAuthAdapter({
+      ...defaultOptions,
+      transport: mockTransportBasic,
+    });
+
+    const resBasic = await adapterBasic.exchangeCode({
+      platform: 'threads',
+      code: 'code1',
+      redirectUri: 'http://localhost/cb',
+    });
+    expect(resBasic.grantedScopes).toEqual(['threads_basic']);
+    expect(resBasic.capabilities.canPublishText).toBe(false);
+    expect(resBasic.isRecoverablePartial).toBe(true);
+
+    // 2. Only publish returned (with duplicates and unknown items)
+    const mockTransportPublish: HttpTransport = {
+      fetch: vi
+        .fn()
+        .mockResolvedValueOnce({
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ access_token: 'short_tok', user_id: 'user_123' }),
+        })
+        .mockResolvedValueOnce({
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ access_token: 'long_tok', expires_in: 5184000 }),
+        })
+        .mockResolvedValueOnce({
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ id: 'user_123', username: 'user_pub' }),
+        })
+        .mockResolvedValueOnce({
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            data: [
+              { permission: 'threads_content_publish', status: 'granted' },
+              { permission: 'threads_content_publish', status: 'granted' },
+              { permission: 'unknown_special_scope', status: 'granted' },
+            ],
+          }),
+        }),
+    };
+
+    const adapterPublish = new ThreadsSocialAuthAdapter({
+      ...defaultOptions,
+      transport: mockTransportPublish,
+    });
+
+    const resPublish = await adapterPublish.exchangeCode({
+      platform: 'threads',
+      code: 'code2',
+      redirectUri: 'http://localhost/cb',
+    });
+    expect(resPublish.grantedScopes).toEqual(['threads_content_publish']);
+    expect(resPublish.capabilities.canPublishText).toBe(false);
+    expect(resPublish.isRecoverablePartial).toBe(true);
+
+    // 3. Empty data array
+    const mockTransportEmpty: HttpTransport = {
+      fetch: vi
+        .fn()
+        .mockResolvedValueOnce({
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ access_token: 'short_tok', user_id: 'user_123' }),
+        })
+        .mockResolvedValueOnce({
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ access_token: 'long_tok', expires_in: 5184000 }),
+        })
+        .mockResolvedValueOnce({
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ id: 'user_123', username: 'user_empty' }),
+        })
+        .mockResolvedValueOnce({
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ data: [] }),
+        }),
+    };
+
+    const adapterEmpty = new ThreadsSocialAuthAdapter({
+      ...defaultOptions,
+      transport: mockTransportEmpty,
+    });
+
+    const resEmpty = await adapterEmpty.exchangeCode({
+      platform: 'threads',
+      code: 'code3',
+      redirectUri: 'http://localhost/cb',
+    });
+    expect(resEmpty.grantedScopes).toEqual([]);
+    expect(resEmpty.capabilities.canPublishText).toBe(false);
+    expect(resEmpty.isRecoverablePartial).toBe(true);
+  });
+
+  it('inspectCurrentAccount inspects live profile and permissions', async () => {
+    const mockTransport: HttpTransport = {
+      fetch: vi
+        .fn()
+        .mockResolvedValueOnce({
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            id: 'threads_user_777',
+            username: 'inspected_user',
+            name: 'Inspected Account',
+          }),
+        })
+        .mockResolvedValueOnce({
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            data: [
+              { permission: 'threads_basic', status: 'granted' },
+              { permission: 'threads_content_publish', status: 'granted' },
+            ],
+          }),
+        }),
+    };
+
+    const adapter = new ThreadsSocialAuthAdapter({
+      ...defaultOptions,
+      transport: mockTransport,
+    });
+
+    const result = await adapter.inspectCurrentAccount?.({
+      accessToken: 'valid_access_token_777',
+    });
+
+    expect(result).toBeDefined();
+    expect(result?.providerAccountId).toBe('threads_user_777');
+    expect(result?.handle).toBe('@inspected_user');
+    expect(result?.displayName).toBe('Inspected Account');
+    expect(result?.grantedScopes).toEqual(['threads_basic', 'threads_content_publish']);
+    expect(result?.capabilities).toEqual({ canPublishText: true, canPublishMedia: false });
+  });
+
+  it('inspectCurrentAccount throws on upstream error', async () => {
+    const mockTransport: HttpTransport = {
+      fetch: vi.fn().mockResolvedValueOnce({
+        status: 401,
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          error: { message: 'Invalid OAuth 2.0 Access Token', code: 190 },
+        }),
+      }),
+    };
+
+    const adapter = new ThreadsSocialAuthAdapter({
+      ...defaultOptions,
+      transport: mockTransport,
+    });
+
+    await expect(
+      adapter.inspectCurrentAccount?.({
+        accessToken: 'expired_invalid_token',
+      }),
+    ).rejects.toThrow(SocialAuthTerminalError);
   });
 });

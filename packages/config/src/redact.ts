@@ -131,6 +131,7 @@ export function getRedactedSocialConfigMetadata(
     socialKillSwitchActive: config.socialKillSwitchActive,
     threadsConnectionKillSwitchActive: config.threadsConnectionKillSwitchActive,
     threadsRefreshKillSwitchActive: config.threadsRefreshKillSwitchActive,
+    socialMaintenanceEnabled: config.socialMaintenanceEnabled,
   };
 
   return Object.freeze(result);

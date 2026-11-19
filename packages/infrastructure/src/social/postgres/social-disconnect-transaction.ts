@@ -10,13 +10,16 @@ import {
   SocialAccountNotFoundError,
   SocialAccountVersionMismatchError,
   type DisconnectSocialAccountParams,
+  type UpdateExternalRevocationResultParams,
 } from '@affiliate-content-os/application';
 import { createTransactionScopedPostgresAuditAdapter } from '../../audit/index.js';
 import type { Database } from '../../database/types.js';
 import { mapSocialAccountRow, type SocialAccountRow } from './postgres-social-mappers.js';
 import {
+  SQL_COMPLETE_OPERATION,
   SQL_DELETE_SOCIAL_CREDENTIALS,
   SQL_DISCONNECT_SOCIAL_ACCOUNT,
+  SQL_UPDATE_EXTERNAL_REVOCATION_RESULT,
 } from './postgres-social-lifecycle-statements.js';
 
 export async function executeDisconnectSocialAccount(
@@ -46,7 +49,22 @@ export async function executeDisconnectSocialAccount(
       }
       const existing = checkRes.rows[0]!;
       if (existing.status === 'disconnected') {
-        return mapSocialAccountRow(existing);
+        const mappedExisting = mapSocialAccountRow(existing);
+        if (params.operationId && params.operationLeaseToken) {
+          await tx.query(SQL_COMPLETE_OPERATION, [
+            params.operationId,
+            params.operationLeaseToken,
+            mappedExisting.version,
+            200,
+            JSON.stringify({
+              id: mappedExisting.id,
+              version: mappedExisting.version,
+              status: mappedExisting.status,
+            }),
+            params.now,
+          ]);
+        }
+        return mappedExisting;
       }
       throw new SocialAccountVersionMismatchError(
         `Account version mismatch: expected ${params.expectedVersion}, found ${existing.version}`,
@@ -85,6 +103,35 @@ export async function executeDisconnectSocialAccount(
       createdAt: parseIsoTimestamp(params.now),
     });
 
-    return mapSocialAccountRow(updateRes.rows[0]!);
+    const mappedAcc = mapSocialAccountRow(updateRes.rows[0]!);
+
+    if (params.operationId && params.operationLeaseToken) {
+      await tx.query(SQL_COMPLETE_OPERATION, [
+        params.operationId,
+        params.operationLeaseToken,
+        mappedAcc.version,
+        200,
+        JSON.stringify({
+          id: mappedAcc.id,
+          version: mappedAcc.version,
+          status: mappedAcc.status,
+        }),
+        params.now,
+      ]);
+    }
+
+    return mappedAcc;
   });
+}
+
+export async function executeUpdateExternalRevocationResult(
+  database: Database,
+  params: UpdateExternalRevocationResultParams,
+): Promise<void> {
+  await database.query(SQL_UPDATE_EXTERNAL_REVOCATION_RESULT, [
+    params.workspaceId,
+    params.accountId,
+    params.externalRevocationResult,
+    params.now,
+  ]);
 }

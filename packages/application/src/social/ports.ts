@@ -3,6 +3,8 @@ export type {
   CreateAuthorizationUrlResult,
   ExchangeCodeInput,
   ExchangeCodeResult,
+  InspectAccountInput,
+  InspectAccountResult,
   RefreshTokenInput,
   RefreshTokenResult,
   RevokeTokenResult,
@@ -25,6 +27,7 @@ export type {
   RecordFailedSocialAccountRefreshParams,
   ReleaseSocialAccountRefreshLeaseParams,
   SocialIdempotencyInput,
+  UpdateExternalRevocationResultParams,
 } from './ports-lifecycle-params.js';
 
 export type {

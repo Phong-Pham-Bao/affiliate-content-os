@@ -449,7 +449,12 @@ export class InMemorySocialPersistence implements SocialPersistencePort {
       ...acc,
       status: params.derivedStatus,
       statusReason: params.statusReason,
-      capabilitiesCheckedAt: params.now,
+      capabilitiesCheckedAt:
+        params.capabilitiesCheckedAt !== undefined ? params.capabilitiesCheckedAt : params.now,
+      grantedScopes: params.grantedScopes ?? acc.grantedScopes,
+      capabilities: params.capabilities ?? acc.capabilities,
+      displayName: params.displayName ?? acc.displayName,
+      handle: params.handle ?? acc.handle,
       lastRefreshedAt: params.now,
       nextRefreshAt: params.nextRefreshAt,
       allowedActions: Object.freeze(['reconnect', 'refresh', 'disconnect']),
@@ -506,13 +511,33 @@ export class InMemorySocialPersistence implements SocialPersistencePort {
     return updated;
   }
 
+  public async updateExternalRevocationResultAtomic(params: {
+    readonly workspaceId: string;
+    readonly accountId: string;
+    readonly externalRevocationResult: 'succeeded' | 'failed';
+    readonly now: string;
+  }): Promise<void> {
+    const acc = this.accounts.get(params.accountId);
+    if (acc) {
+      this.accounts.set(params.accountId, {
+        ...acc,
+        externalRevocationResult: params.externalRevocationResult,
+        updatedAt: params.now,
+      });
+    }
+  }
+
   public async executeMutationWithIdempotency(params: {
     readonly workspaceId: string;
     readonly accountId: string;
     readonly actorUserId: string;
     readonly idempotency: SocialIdempotencyInput;
     readonly now: string;
-    readonly executeMutation: () => Promise<SocialAccountSnapshot>;
+    readonly operationType?: 'refresh' | 'disconnect' | undefined;
+    readonly executeMutation: (claimedOp?: {
+      readonly operationId: string;
+      readonly leaseToken: string;
+    }) => Promise<SocialAccountSnapshot>;
   }): Promise<{ readonly replayed: boolean; readonly account: SocialAccountSnapshot }> {
     const idempKey = `${params.workspaceId}:${params.actorUserId}:${params.idempotency.routeKey}:${Buffer.from(params.idempotency.keyHash).toString('hex')}`;
     const existing = this.idempotencyKeys.get(idempKey);
@@ -533,7 +558,10 @@ export class InMemorySocialPersistence implements SocialPersistencePort {
       }
     }
 
-    const account = await params.executeMutation();
+    const account = await params.executeMutation({
+      operationId: 'fake-op-id',
+      leaseToken: 'fake-lease-token',
+    });
     const expiresAt = new Date(Date.parse(params.now) + 86400 * 1000).toISOString();
     this.idempotencyKeys.set(idempKey, {
       principalId: params.actorUserId,

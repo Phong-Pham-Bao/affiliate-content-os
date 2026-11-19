@@ -1,6 +1,11 @@
 import crypto from 'node:crypto';
 import { MessageChannel } from 'node:worker_threads';
-import { ConfigurationError, type AppConfig, type AIConfig } from '@affiliate-content-os/config';
+import {
+  ConfigurationError,
+  type AppConfig,
+  type AIConfig,
+  type SocialConfig,
+} from '@affiliate-content-os/config';
 import type { Database, DatabasePool } from '@affiliate-content-os/infrastructure/database';
 import {
   PostgresAnalysisAdapter,
@@ -16,7 +21,12 @@ import type {
   DurableJobQueuePort,
   PersistExecutionResultTransactionPort,
   OperationPersistencePort,
+  SocialAuthAdapter,
+  SocialCredentialProtectorPort,
+  SocialPersistencePort,
 } from '@affiliate-content-os/application';
+import { maintainDueSocialAccounts } from '@affiliate-content-os/application';
+import type { SocialPlatform } from '@affiliate-content-os/domain';
 import { processJobExecution } from './job-processor.js';
 
 export interface WorkerRuntimeHandle {
@@ -27,6 +37,11 @@ export interface WorkerRuntimeHandle {
 export interface WorkerDependencies {
   readonly config: AppConfig;
   readonly aiConfig?: AIConfig | undefined;
+  readonly socialConfig?: SocialConfig | undefined;
+  readonly socialPersistence?: SocialPersistencePort | undefined;
+  readonly credentialProtector?: SocialCredentialProtectorPort | undefined;
+  readonly socialAdapters?: ReadonlyMap<SocialPlatform, SocialAuthAdapter> | undefined;
+  readonly socialMaintenanceEnabled?: boolean | undefined;
   readonly signal: AbortSignal;
   readonly database?: Database | undefined;
   readonly pool?: DatabasePool | undefined;
@@ -121,77 +136,138 @@ export async function runWorker(deps: WorkerDependencies): Promise<void> {
     gatewayPort = new GeminiAIGatewayAdapter({ config: deps.aiConfig });
   }
 
-  if (
-    !jobAdapter ||
-    !catalogPort ||
-    !analysisPort ||
-    !aiRunPort ||
-    !operationPort ||
-    !persistTxPort ||
-    !deps.aiConfig?.enabled ||
-    !gatewayPort
-  ) {
+  const canRunAI = Boolean(
+    jobAdapter &&
+    catalogPort &&
+    analysisPort &&
+    aiRunPort &&
+    operationPort &&
+    persistTxPort &&
+    deps.aiConfig?.enabled &&
+    gatewayPort,
+  );
+
+  const isMaintenanceActive = Boolean(
+    deps.socialMaintenanceEnabled ?? deps.socialConfig?.socialMaintenanceEnabled,
+  );
+
+  const canRunMaintenance = Boolean(
+    isMaintenanceActive &&
+    deps.socialConfig?.enabled &&
+    !deps.socialConfig.socialKillSwitchActive &&
+    !deps.socialConfig.threadsRefreshKillSwitchActive &&
+    deps.socialPersistence &&
+    deps.credentialProtector &&
+    deps.socialAdapters,
+  );
+
+  if (!canRunAI && !canRunMaintenance) {
     return waitInIdleHandle(deps);
   }
 
   while (!deps.signal.aborted) {
-    let claimedJob: Awaited<ReturnType<typeof jobAdapter.claimNextJob>>;
-    try {
-      claimedJob = await jobAdapter.claimNextJob({ workerId, leaseDurationSeconds });
-    } catch {
-      if (deps.signal.aborted) break;
-      await delay(Math.min(pollingIntervalMs, 5000), deps.signal);
-      continue;
+    let hadWork = false;
+
+    // 1. Social maintenance due accounts execution (if enabled and fail-closed checks pass)
+    if (
+      canRunMaintenance &&
+      deps.socialPersistence &&
+      deps.credentialProtector &&
+      deps.socialAdapters
+    ) {
+      try {
+        const maintResult = await maintainDueSocialAccounts(
+          { workerId, maxBatchSize: 5 },
+          {
+            persistence: deps.socialPersistence,
+            protector: deps.credentialProtector,
+            adapters: deps.socialAdapters,
+            enabled: true,
+            socialKillSwitchActive: deps.socialConfig?.socialKillSwitchActive,
+            threadsRefreshKillSwitchActive: deps.socialConfig?.threadsRefreshKillSwitchActive,
+            appReviewStatus: deps.socialConfig?.threadsAppReviewStatus,
+            threadsHttpTimeoutMs: deps.socialConfig?.threadsHttpTimeoutMs,
+            clock: { now: () => new Date() },
+          },
+        );
+        if (maintResult.processedCount > 0) {
+          hadWork = true;
+        }
+      } catch {
+        // Individual maintenance errors handled within use case; worker continues loop
+      }
     }
 
-    if (claimedJob) {
+    // 2. AI analysis / workforce jobs execution
+    if (
+      canRunAI &&
+      jobAdapter &&
+      catalogPort &&
+      analysisPort &&
+      aiRunPort &&
+      operationPort &&
+      persistTxPort &&
+      gatewayPort
+    ) {
+      let claimedJob: Awaited<ReturnType<typeof jobAdapter.claimNextJob>>;
       try {
-        await processJobExecution(claimedJob, {
-          workerId,
-          gatewayPort,
-          catalogPort,
-          analysisPort,
-          aiRunPort,
-          operationPort,
-          persistTxPort,
-          pool,
-        });
+        claimedJob = await jobAdapter.claimNextJob({ workerId, leaseDurationSeconds });
       } catch {
-        if (claimedJob.jobType !== 'workforce_planning') {
-          await persistTxPort.persistExecutionResultAtomic({
-            workspaceId: claimedJob.workspaceId,
-            operationId: claimedJob.operationId,
-            aiRunId: claimedJob.aiRunId,
-            jobId: claimedJob.id,
-            jobVersion: claimedJob.version,
+        if (deps.signal.aborted) break;
+        await delay(Math.min(pollingIntervalMs, 5000), deps.signal);
+        continue;
+      }
+
+      if (claimedJob) {
+        hadWork = true;
+        try {
+          await processJobExecution(claimedJob, {
             workerId,
-            outcome: {
-              kind: 'terminal_failure',
-              errorCategory: 'internal_error',
-              errorCode: 'UNHANDLED_PROCESS_FAILURE',
-              errorMessage: 'An unexpected process error occurred during job execution',
-              reservedMicrounits: claimedJob.reservedSpendMicrounits,
-              actualSpendMicrounits: 0,
-              auditEvent: {
-                id: crypto.randomUUID(),
-                workspaceId: claimedJob.workspaceId,
-                actorUserId: null,
-                actorType: 'system',
-                action: 'ai_analysis.failed',
-                resourceType: 'operation',
-                resourceId: claimedJob.operationId,
-                result: 'failed',
-                changesJson: { error_code: 'UNHANDLED_PROCESS_FAILURE' },
-              },
-            },
+            gatewayPort,
+            catalogPort,
+            analysisPort,
+            aiRunPort,
+            operationPort,
+            persistTxPort,
+            pool,
           });
+        } catch {
+          if (claimedJob.jobType !== 'workforce_planning') {
+            await persistTxPort.persistExecutionResultAtomic({
+              workspaceId: claimedJob.workspaceId,
+              operationId: claimedJob.operationId,
+              aiRunId: claimedJob.aiRunId,
+              jobId: claimedJob.id,
+              jobVersion: claimedJob.version,
+              workerId,
+              outcome: {
+                kind: 'terminal_failure',
+                errorCategory: 'internal_error',
+                errorCode: 'UNHANDLED_PROCESS_FAILURE',
+                errorMessage: 'An unexpected process error occurred during job execution',
+                reservedMicrounits: claimedJob.reservedSpendMicrounits,
+                actualSpendMicrounits: 0,
+                auditEvent: {
+                  id: crypto.randomUUID(),
+                  workspaceId: claimedJob.workspaceId,
+                  actorUserId: null,
+                  actorType: 'system',
+                  action: 'ai_analysis.failed',
+                  resourceType: 'operation',
+                  resourceId: claimedJob.operationId,
+                  result: 'failed',
+                  changesJson: { error_code: 'UNHANDLED_PROCESS_FAILURE' },
+                },
+              },
+            });
+          }
         }
       }
-      if (deps.once) break;
-      continue;
     }
 
     if (deps.once) break;
-    await delay(pollingIntervalMs, deps.signal);
+    if (!hadWork) {
+      await delay(pollingIntervalMs, deps.signal);
+    }
   }
 }

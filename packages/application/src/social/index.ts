@@ -35,6 +35,8 @@ export {
 
 export {
   refreshSocialAccount,
+  executeClaimedSocialAccountRefresh,
+  type ExecuteClaimedRefreshParams,
   type RefreshSocialAccountCommand,
   type RefreshSocialAccountDependencies,
   type RefreshSocialAccountResult,
@@ -95,6 +97,8 @@ export {
   type EncryptedSocialCredentials,
   type ExchangeCodeInput,
   type ExchangeCodeResult,
+  type InspectAccountInput,
+  type InspectAccountResult,
   type RecordFailedOAuthCallbackParams,
   type RecordFailedSocialAccountRefreshParams,
   type RefreshTokenInput,
@@ -109,4 +113,5 @@ export {
   type SocialCredentialProtectorPort,
   type SocialIdempotencyInput,
   type SocialPersistencePort,
+  type UpdateExternalRevocationResultParams,
 } from './ports.js';

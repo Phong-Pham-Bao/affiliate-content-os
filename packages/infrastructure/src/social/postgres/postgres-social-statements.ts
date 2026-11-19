@@ -143,9 +143,11 @@ export const SQL_FIND_CALLBACK_RESULT_BY_KEY = `
 
 export const SQL_LIST_SOCIAL_ACCOUNTS = `
   SELECT id, workspace_id, platform, provider_account_id, display_name, handle,
-         status, granted_scopes, capabilities_json, capabilities_checked_at,
-         token_expires_at, connected_by_user_id, disconnected_at, environment,
-         created_at, updated_at, version
+         status, status_reason, exchange_stage, granted_scopes, capabilities_json,
+         capabilities_checked_at, token_expires_at, reauth_required_at,
+         last_refreshed_at, next_refresh_at, connected_by_user_id, disconnected_at,
+         environment, external_revocation_attempted, external_revocation_supported,
+         external_revocation_result, created_at, updated_at, version
   FROM social_accounts
   WHERE workspace_id = $1
   ORDER BY updated_at DESC;
@@ -153,9 +155,11 @@ export const SQL_LIST_SOCIAL_ACCOUNTS = `
 
 export const SQL_FIND_SOCIAL_ACCOUNT_BY_ID = `
   SELECT id, workspace_id, platform, provider_account_id, display_name, handle,
-         status, granted_scopes, capabilities_json, capabilities_checked_at,
-         token_expires_at, connected_by_user_id, disconnected_at, environment,
-         created_at, updated_at, version
+         status, status_reason, exchange_stage, granted_scopes, capabilities_json,
+         capabilities_checked_at, token_expires_at, reauth_required_at,
+         last_refreshed_at, next_refresh_at, connected_by_user_id, disconnected_at,
+         environment, external_revocation_attempted, external_revocation_supported,
+         external_revocation_result, created_at, updated_at, version
   FROM social_accounts
   WHERE workspace_id = $1 AND id = $2;
 `;

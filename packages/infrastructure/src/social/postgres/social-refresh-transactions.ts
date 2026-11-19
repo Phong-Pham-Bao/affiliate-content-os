@@ -24,6 +24,7 @@ import {
   SQL_CLAIM_REFRESH_LEASE,
   SQL_COMPLETE_ACCOUNT_REFRESH,
   SQL_COMPLETE_CREDENTIALS_REFRESH,
+  SQL_COMPLETE_OPERATION,
   SQL_FIND_CREDENTIALS_FOR_REFRESH,
   SQL_FIND_DUE_ACCOUNT_FOR_REFRESH_CLAIM,
   SQL_RECORD_FAILED_ACCOUNT_REFRESH,
@@ -109,6 +110,9 @@ export async function executeCompleteSocialAccountRefresh(
   params: CompleteSocialAccountRefreshParams,
 ) {
   return database.withTransaction(async (tx) => {
+    const grantedScopesJson = JSON.stringify(params.grantedScopes ?? []);
+    const capabilitiesJson = JSON.stringify(params.capabilities ?? {});
+
     const accRes = await tx.query<SocialAccountRow>(SQL_COMPLETE_ACCOUNT_REFRESH, [
       params.workspaceId,
       params.accountId,
@@ -117,6 +121,11 @@ export async function executeCompleteSocialAccountRefresh(
       params.tokenExpiresAt,
       params.nextRefreshAt,
       params.now,
+      params.capabilitiesCheckedAt ?? null,
+      grantedScopesJson,
+      capabilitiesJson,
+      params.displayName ?? null,
+      params.handle ?? null,
       params.expectedAccountVersion,
       params.expectedLeaseToken,
     ]);
@@ -149,6 +158,23 @@ export async function executeCompleteSocialAccountRefresh(
       );
     }
 
+    const mappedAcc = mapSocialAccountRow(accRes.rows[0]!);
+
+    if (params.operationId && params.operationLeaseToken) {
+      await tx.query(SQL_COMPLETE_OPERATION, [
+        params.operationId,
+        params.operationLeaseToken,
+        mappedAcc.version,
+        200,
+        JSON.stringify({
+          id: mappedAcc.id,
+          version: mappedAcc.version,
+          status: mappedAcc.status,
+        }),
+        params.now,
+      ]);
+    }
+
     if (params.actorUserId) {
       const audit = createTransactionScopedPostgresAuditAdapter(tx);
       await audit.appendAuditEvent({
@@ -172,7 +198,7 @@ export async function executeCompleteSocialAccountRefresh(
       });
     }
 
-    return mapSocialAccountRow(accRes.rows[0]!);
+    return mappedAcc;
   });
 }
 
@@ -199,7 +225,24 @@ export async function executeRecordFailedSocialAccountRefresh(
       );
     }
 
-    return mapSocialAccountRow(accRes.rows[0]!);
+    const mappedAcc = mapSocialAccountRow(accRes.rows[0]!);
+
+    if (params.operationId && params.operationLeaseToken) {
+      await tx.query(SQL_COMPLETE_OPERATION, [
+        params.operationId,
+        params.operationLeaseToken,
+        mappedAcc.version,
+        200,
+        JSON.stringify({
+          id: mappedAcc.id,
+          version: mappedAcc.version,
+          status: mappedAcc.status,
+        }),
+        params.now,
+      ]);
+    }
+
+    return mappedAcc;
   });
 }
 

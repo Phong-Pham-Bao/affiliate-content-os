@@ -69,7 +69,10 @@ export async function handleDisconnectSocialAccount(
   const routeKey = `DELETE /api/v1/workspaces/:workspaceId/social-accounts/:accountId`;
   const now = (deps.clock?.now() ?? new Date()).toISOString();
 
-  const executeDisconnect = async () => {
+  const executeDisconnect = async (claimedOp?: {
+    readonly operationId: string;
+    readonly leaseToken: string;
+  }) => {
     const res = await disconnectSocialAccount(
       {
         workspaceId,
@@ -77,6 +80,7 @@ export async function handleDisconnectSocialAccount(
         actorUserId: authContext.user.id,
         expectedVersion,
         auditContext,
+        operationId: claimedOp?.operationId,
       },
       {
         persistence: deps.socialPersistence,
@@ -102,6 +106,7 @@ export async function handleDisconnectSocialAccount(
         routeKey,
       },
       now,
+      operationType: 'disconnect',
       executeMutation: executeDisconnect,
     });
     account = idempResult.account;

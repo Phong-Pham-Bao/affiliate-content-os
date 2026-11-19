@@ -6,6 +6,8 @@ import {
   type CreateAuthorizationUrlResult,
   type ExchangeCodeInput,
   type ExchangeCodeResult,
+  type InspectAccountInput,
+  type InspectAccountResult,
   type RefreshTokenInput,
   type RefreshTokenResult,
   type RevokeTokenResult,
@@ -26,6 +28,16 @@ export interface ThreadsSocialAuthAdapterOptions {
 }
 
 const REQUIRED_SCOPES = ['threads_basic', 'threads_content_publish'] as const;
+
+function hasControlCharacters(s: string): boolean {
+  for (let i = 0; i < s.length; i++) {
+    const code = s.charCodeAt(i);
+    if ((code >= 0 && code <= 31) || code === 127) {
+      return true;
+    }
+  }
+  return false;
+}
 
 export class ThreadsSocialAuthAdapter implements SocialAuthAdapter {
   public readonly platform: SocialPlatform = 'threads';
@@ -55,15 +67,16 @@ export class ThreadsSocialAuthAdapter implements SocialAuthAdapter {
   public async createAuthorizationUrl(
     input: CreateAuthorizationUrlInput,
   ): Promise<CreateAuthorizationUrlResult> {
-    if (input.scopes && input.scopes.length > 0) {
-      const scopeSet = new Set(input.scopes);
-      const hasAllRequired = REQUIRED_SCOPES.every((s) => scopeSet.has(s));
-      const hasUnexpected = input.scopes.some(
-        (s) => !REQUIRED_SCOPES.includes(s as (typeof REQUIRED_SCOPES)[number]),
-      );
-      if (!hasAllRequired || hasUnexpected) {
-        throw new SocialAuthExchangeError('Invalid authorization scopes requested');
-      }
+    if (!input.scopes || input.scopes.length !== 2) {
+      throw new SocialAuthExchangeError('Invalid authorization scopes requested');
+    }
+    const scopeSet = new Set(input.scopes);
+    if (
+      scopeSet.size !== 2 ||
+      !scopeSet.has('threads_basic') ||
+      !scopeSet.has('threads_content_publish')
+    ) {
+      throw new SocialAuthExchangeError('Invalid authorization scopes requested');
     }
 
     const params = new URLSearchParams({
@@ -128,7 +141,11 @@ export class ThreadsSocialAuthAdapter implements SocialAuthAdapter {
     }
 
     const shortLivedToken = String(shortData.access_token);
-    const providerAccountId = String(shortData.user_id).trim();
+    const rawId = String(shortData.user_id).trim();
+    if (!rawId || rawId.length > 128 || hasControlCharacters(rawId)) {
+      throw new SocialAuthExchangeError('Invalid provider user ID');
+    }
+    const providerAccountId = rawId;
 
     // 2. Long-token exchange (post-token stage; failure is recoverable)
     let longLivedToken = shortLivedToken;
@@ -151,9 +168,20 @@ export class ThreadsSocialAuthAdapter implements SocialAuthAdapter {
       if (longRes.status === 200) {
         const longData = JSON.parse(longRes.body);
         if (typeof longData.access_token === 'string' && longData.access_token.length > 0) {
+          if (
+            longData.expires_in !== undefined &&
+            (typeof longData.expires_in !== 'number' ||
+              !Number.isSafeInteger(longData.expires_in) ||
+              longData.expires_in <= 0)
+          ) {
+            throw new SocialAuthExchangeError('Invalid token expires_in returned by provider');
+          }
           longLivedToken = String(longData.access_token);
           tokenExpiresInSeconds =
-            typeof longData.expires_in === 'number' && Number.isFinite(longData.expires_in)
+            typeof longData.expires_in === 'number' &&
+            Number.isSafeInteger(longData.expires_in) &&
+            longData.expires_in > 0 &&
+            longData.expires_in <= 31536000
               ? longData.expires_in
               : 5184000;
           tokenKind = 'long_lived';
@@ -164,7 +192,10 @@ export class ThreadsSocialAuthAdapter implements SocialAuthAdapter {
       } else {
         isRecoverablePartial = true;
       }
-    } catch {
+    } catch (err: unknown) {
+      if (err instanceof SocialAuthExchangeError) {
+        throw err;
+      }
       isRecoverablePartial = true;
     }
 
@@ -186,6 +217,9 @@ export class ThreadsSocialAuthAdapter implements SocialAuthAdapter {
         const profileData = JSON.parse(profileRes.body);
         if (typeof profileData.id === 'string' || typeof profileData.id === 'number') {
           const profileId = String(profileData.id).trim();
+          if (!profileId || profileId.length > 128 || hasControlCharacters(profileId)) {
+            throw new SocialAuthExchangeError('Invalid provider profile user ID');
+          }
           if (profileId !== providerAccountId) {
             throw new SocialAuthExchangeError(
               'Provider profile user ID does not match token exchange user ID',
@@ -216,8 +250,8 @@ export class ThreadsSocialAuthAdapter implements SocialAuthAdapter {
       isRecoverablePartial = true;
     }
 
-    // 4. Granted scopes determination: NEVER fabricate threads_content_publish
-    const grantedScopes: string[] = ['threads_basic'];
+    // 4. Granted scopes determination: start empty, NEVER fabricate
+    const grantedScopes: string[] = [];
     let grantsVerified = false;
 
     if (!isRecoverablePartial && profileVerified) {
@@ -233,12 +267,26 @@ export class ThreadsSocialAuthAdapter implements SocialAuthAdapter {
         if (permRes.status === 200) {
           const permData = JSON.parse(permRes.body);
           if (Array.isArray(permData.data)) {
-            for (const item of permData.data) {
-              if (item && item.status === 'granted' && typeof item.permission === 'string') {
-                if (!grantedScopes.includes(item.permission)) grantedScopes.push(item.permission);
+            const items = permData.data.slice(0, 50);
+            for (const item of items) {
+              if (
+                item &&
+                item.status === 'granted' &&
+                typeof item.permission === 'string' &&
+                item.permission.length <= 64 &&
+                !hasControlCharacters(item.permission)
+              ) {
+                if (
+                  REQUIRED_SCOPES.includes(item.permission as (typeof REQUIRED_SCOPES)[number]) &&
+                  !grantedScopes.includes(item.permission)
+                ) {
+                  grantedScopes.push(item.permission);
+                }
               }
             }
-            grantsVerified = grantedScopes.includes('threads_content_publish');
+            grantsVerified =
+              grantedScopes.includes('threads_basic') &&
+              grantedScopes.includes('threads_content_publish');
           }
         }
       } catch {
@@ -253,7 +301,10 @@ export class ThreadsSocialAuthAdapter implements SocialAuthAdapter {
     }
 
     const capabilities: Record<string, boolean> = {
-      canPublishText: stage === 'completed' && grantedScopes.includes('threads_content_publish'),
+      canPublishText:
+        stage === 'completed' &&
+        grantedScopes.includes('threads_basic') &&
+        grantedScopes.includes('threads_content_publish'),
       canPublishMedia: false,
     };
 
@@ -293,10 +344,95 @@ export class ThreadsSocialAuthAdapter implements SocialAuthAdapter {
     return {
       accessToken: String(data.access_token),
       tokenExpiresInSeconds:
-        typeof data.expires_in === 'number' && Number.isFinite(data.expires_in)
+        typeof data.expires_in === 'number' &&
+        Number.isSafeInteger(data.expires_in) &&
+        data.expires_in > 0 &&
+        data.expires_in <= 31536000
           ? data.expires_in
           : 5184000,
       tokenKind: 'long_lived',
+    };
+  }
+
+  public async inspectCurrentAccount(input: InspectAccountInput): Promise<InspectAccountResult> {
+    // 1. Profile inspection
+    const profileUrl = `${this.apiBaseUrl}/${this.apiVersion}/me?fields=id,username,name&access_token=${encodeURIComponent(input.accessToken)}`;
+    const profileRes = await this.transport.fetch({
+      method: 'GET',
+      url: profileUrl,
+      headers: { Accept: 'application/json' },
+      timeoutMs: this.timeoutMs,
+    });
+
+    if (profileRes.status !== 200) {
+      throw classifyThreadsError(profileRes.status, profileRes.body, false, profileRes.headers);
+    }
+
+    const profileData = JSON.parse(profileRes.body);
+    const rawId = String(profileData.id ?? '').trim();
+    if (!rawId || rawId.length > 128 || hasControlCharacters(rawId)) {
+      throw new SocialAuthExchangeError('Invalid provider profile user ID');
+    }
+
+    const validName =
+      typeof profileData.name === 'string' && profileData.name.trim().length > 0
+        ? profileData.name.trim().slice(0, 128)
+        : null;
+    const validUsername =
+      typeof profileData.username === 'string' && profileData.username.trim().length > 0
+        ? profileData.username.trim().slice(0, 64)
+        : null;
+    const displayName = validName ?? validUsername ?? rawId;
+    const handle = validUsername ? `@${validUsername}` : null;
+
+    // 2. Permissions inspection
+    const permUrl = `${this.apiBaseUrl}/${this.apiVersion}/me/permissions?access_token=${encodeURIComponent(input.accessToken)}`;
+    const permRes = await this.transport.fetch({
+      method: 'GET',
+      url: permUrl,
+      headers: { Accept: 'application/json' },
+      timeoutMs: this.timeoutMs,
+    });
+
+    if (permRes.status !== 200) {
+      throw classifyThreadsError(permRes.status, permRes.body, false, permRes.headers);
+    }
+
+    const permData = JSON.parse(permRes.body);
+    const grantedScopes: string[] = [];
+    if (Array.isArray(permData.data)) {
+      const items = permData.data.slice(0, 50);
+      for (const item of items) {
+        if (
+          item &&
+          item.status === 'granted' &&
+          typeof item.permission === 'string' &&
+          item.permission.length <= 64 &&
+          !hasControlCharacters(item.permission)
+        ) {
+          if (
+            REQUIRED_SCOPES.includes(item.permission as (typeof REQUIRED_SCOPES)[number]) &&
+            !grantedScopes.includes(item.permission)
+          ) {
+            grantedScopes.push(item.permission);
+          }
+        }
+      }
+    }
+
+    const capabilities = {
+      canPublishText:
+        grantedScopes.includes('threads_basic') &&
+        grantedScopes.includes('threads_content_publish'),
+      canPublishMedia: false,
+    };
+
+    return {
+      providerAccountId: rawId,
+      displayName,
+      handle,
+      grantedScopes: Object.freeze(grantedScopes),
+      capabilities: Object.freeze(capabilities),
     };
   }
 

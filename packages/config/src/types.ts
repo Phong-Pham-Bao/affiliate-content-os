@@ -181,6 +181,7 @@ export interface SocialConfig {
   readonly socialKillSwitchActive: boolean;
   readonly threadsConnectionKillSwitchActive: boolean;
   readonly threadsRefreshKillSwitchActive: boolean;
+  readonly socialMaintenanceEnabled: boolean;
 }
 
 export interface RedactedSocialConfigMetadata {
@@ -203,6 +204,7 @@ export interface RedactedSocialConfigMetadata {
   readonly socialKillSwitchActive: boolean;
   readonly threadsConnectionKillSwitchActive: boolean;
   readonly threadsRefreshKillSwitchActive: boolean;
+  readonly socialMaintenanceEnabled: boolean;
 }
 
 export type RawEnvironment = Record<string, string | undefined>;

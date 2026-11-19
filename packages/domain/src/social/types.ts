@@ -26,6 +26,7 @@ export const SOCIAL_ACCOUNT_STATUS_REASONS = [
   'reconnect_required',
   'capability_stale',
   'missing_grants',
+  'identity_mismatch',
 ] as const;
 export type SocialAccountStatusReason = (typeof SOCIAL_ACCOUNT_STATUS_REASONS)[number];
 
@@ -41,7 +42,12 @@ export const OAUTH_EXCHANGE_STAGES = [
 ] as const;
 export type OAuthExchangeStage = (typeof OAUTH_EXCHANGE_STAGES)[number];
 
-export const EXTERNAL_REVOCATION_RESULTS = ['succeeded', 'failed', 'unsupported'] as const;
+export const EXTERNAL_REVOCATION_RESULTS = [
+  'pending',
+  'succeeded',
+  'failed',
+  'unsupported',
+] as const;
 export type ExternalRevocationResult = (typeof EXTERNAL_REVOCATION_RESULTS)[number];
 
 export const SOCIAL_ACCOUNT_ENVIRONMENTS = ['production', 'test', 'local'] as const;

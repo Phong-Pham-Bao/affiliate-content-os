@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   parseIsoTimestamp,
   parseMembershipId,
+  type SocialAccountStatusReason,
   type SocialPlatform,
 } from '@affiliate-content-os/domain';
 import {
@@ -9,6 +10,7 @@ import {
   completeSocialCallback,
   getSocialCallbackResult,
   listSocialAccounts,
+  refreshSocialAccount,
   CallbackResultForbiddenError,
   CallbackResultGoneError,
   OAuthCallbackInvalidError,
@@ -803,6 +805,346 @@ describe('Social Application Use Cases', () => {
       expect(
         (list[0] as unknown as Record<string, unknown>)['accessTokenCiphertext'],
       ).toBeUndefined();
+    });
+  });
+
+  describe('refreshSocialAccount and capability inspection', () => {
+    const accountId = 'acc-refresh-123';
+    const staleTime = '2026-11-01T00:00:00.000Z';
+    const initialAccount = {
+      id: accountId,
+      workspaceId: wsId,
+      platform: 'threads' as const,
+      providerAccountId: 'threads_user_111',
+      displayName: 'Creator One',
+      handle: '@creatorone',
+      status: 'active' as const,
+      statusReason: 'initial_exchange_complete' as const,
+      exchangeStage: 'completed' as const,
+      grantedScopes: ['threads_basic', 'threads_content_publish'],
+      capabilities: { canPublishText: true },
+      capabilitiesCheckedAt: staleTime,
+      tokenExpiresAt: '2026-12-01T00:00:00.000Z',
+      reauthRequiredAt: null,
+      lastRefreshedAt: null,
+      nextRefreshAt: null,
+      connectedByUserId: ownerUserId,
+      disconnectedAt: null,
+      environment: 'local' as const,
+      createdAt: staleTime,
+      updatedAt: staleTime,
+      version: 1,
+    };
+
+    const mockProtector: SocialCredentialProtectorPort = {
+      encrypt: vi.fn().mockReturnValue({
+        accessTokenCiphertext: new Uint8Array([1, 2, 3]),
+        accessTokenIv: new Uint8Array([4, 5, 6]),
+        accessTokenAuthTag: new Uint8Array([7, 8, 9]),
+        refreshTokenCiphertext: null,
+        refreshTokenIv: null,
+        refreshTokenAuthTag: null,
+        keyVersion: 'v1',
+      }),
+      decrypt: vi.fn().mockReturnValue({
+        accessToken: 'decrypted_access_token',
+        refreshToken: null,
+      }),
+      encryptOAuthVerifier: vi.fn(),
+      decryptOAuthVerifier: vi.fn(),
+    };
+
+    const createClaim = (acc = initialAccount) => ({
+      account: acc,
+      claimedAccountVersion: acc.version,
+      claimedCredentialVersion: 1,
+      refreshLeaseToken: 'lease-tok-123',
+      encryptedCredentials: {
+        accessTokenCiphertext: new Uint8Array([1, 2, 3]),
+        accessTokenIv: new Uint8Array([4, 5, 6]),
+        accessTokenAuthTag: new Uint8Array([7, 8, 9]),
+        refreshTokenCiphertext: null,
+        refreshTokenIv: null,
+        refreshTokenAuthTag: null,
+        keyVersion: 'v1',
+      },
+    });
+
+    it('refreshes token AND updates capabilitiesCheckedAt when inspection succeeds', async () => {
+      const persistence = createMockPersistence();
+      const authPort = createMockAuthPort();
+      const claim = createClaim();
+
+      vi.mocked(persistence.claimSocialAccountForRefresh).mockResolvedValue(claim);
+      vi.mocked(persistence.completeSocialAccountRefreshAtomic).mockImplementation(
+        async (params) => ({
+          ...initialAccount,
+          version: 2,
+          capabilitiesCheckedAt: params.capabilitiesCheckedAt ?? null,
+          status: params.derivedStatus,
+        }),
+      );
+
+      const mockAdapter: SocialAuthAdapter = {
+        platform: 'threads',
+        supportsRefresh: true,
+        supportsRevocation: false,
+        createAuthorizationUrl: vi.fn(),
+        exchangeCode: vi.fn(),
+        refreshToken: vi.fn().mockResolvedValue({
+          accessToken: 'fresh_rotated_token',
+          tokenExpiresInSeconds: 5184000,
+        }),
+        inspectCurrentAccount: vi.fn().mockResolvedValue({
+          providerAccountId: 'threads_user_111',
+          displayName: 'Creator One',
+          handle: '@creatorone',
+          grantedScopes: ['threads_basic', 'threads_content_publish'],
+          capabilities: { canPublishText: true },
+        }),
+      };
+
+      const result = await refreshSocialAccount(
+        { workspaceId: wsId, accountId, actorUserId: ownerUserId },
+        {
+          persistence,
+          protector: mockProtector,
+          adapters: new Map([['threads', mockAdapter]]),
+          workspaceAuthorization: authPort,
+          enabled: true,
+          appReviewStatus: 'approved',
+          clock: { now: () => mockNow },
+        },
+      );
+
+      expect(result.refreshed).toBe(true);
+      expect(result.account.capabilitiesCheckedAt).toBe(mockNow.toISOString());
+      expect(result.account.status).toBe('active');
+      expect(mockAdapter.refreshToken).toHaveBeenCalledTimes(1);
+      expect(mockAdapter.inspectCurrentAccount).toHaveBeenCalledTimes(1);
+    });
+
+    it('rotates token but does NOT update capabilitiesCheckedAt and derives degraded/capability_stale when inspection fails', async () => {
+      const persistence = createMockPersistence();
+      const authPort = createMockAuthPort();
+      const claim = createClaim();
+
+      vi.mocked(persistence.claimSocialAccountForRefresh).mockResolvedValue(claim);
+      vi.mocked(persistence.completeSocialAccountRefreshAtomic).mockImplementation(
+        async (params) => ({
+          ...initialAccount,
+          version: 2,
+          capabilitiesCheckedAt: params.capabilitiesCheckedAt ?? null,
+          status: params.derivedStatus,
+        }),
+      );
+
+      const mockAdapter: SocialAuthAdapter = {
+        platform: 'threads',
+        supportsRefresh: true,
+        supportsRevocation: false,
+        createAuthorizationUrl: vi.fn(),
+        exchangeCode: vi.fn(),
+        refreshToken: vi.fn().mockResolvedValue({
+          accessToken: 'fresh_rotated_token',
+          tokenExpiresInSeconds: 5184000,
+        }),
+        inspectCurrentAccount: vi.fn().mockRejectedValue(new Error('Inspection endpoint 500')),
+      };
+
+      const result = await refreshSocialAccount(
+        { workspaceId: wsId, accountId, actorUserId: ownerUserId },
+        {
+          persistence,
+          protector: mockProtector,
+          adapters: new Map([['threads', mockAdapter]]),
+          workspaceAuthorization: authPort,
+          enabled: true,
+          appReviewStatus: 'approved',
+          clock: { now: () => mockNow },
+        },
+      );
+
+      expect(result.refreshed).toBe(true);
+      // capabilitiesCheckedAt must NOT be updated
+      expect(result.account.capabilitiesCheckedAt).toBe(staleTime);
+      // derived status should be degraded
+      expect(result.account.status).toBe('degraded');
+      expect(persistence.completeSocialAccountRefreshAtomic).toHaveBeenCalledWith(
+        expect.objectContaining({
+          capabilitiesCheckedAt: staleTime,
+          derivedStatus: 'degraded',
+          statusReason: 'transient_failure',
+        }),
+      );
+    });
+
+    it('rotates token without updating capabilitiesCheckedAt and derives degraded/capability_stale when inspection is not supported', async () => {
+      const persistence = createMockPersistence();
+      const authPort = createMockAuthPort();
+      const claim = createClaim();
+
+      vi.mocked(persistence.claimSocialAccountForRefresh).mockResolvedValue(claim);
+      vi.mocked(persistence.completeSocialAccountRefreshAtomic).mockImplementation(
+        async (params) => ({
+          ...initialAccount,
+          version: 2,
+          capabilitiesCheckedAt: params.capabilitiesCheckedAt ?? null,
+          status: params.derivedStatus,
+        }),
+      );
+
+      const mockAdapterWithoutInspection: SocialAuthAdapter = {
+        platform: 'threads',
+        supportsRefresh: true,
+        supportsRevocation: false,
+        createAuthorizationUrl: vi.fn(),
+        exchangeCode: vi.fn(),
+        refreshToken: vi.fn().mockResolvedValue({
+          accessToken: 'fresh_rotated_token',
+          tokenExpiresInSeconds: 5184000,
+        }),
+      };
+
+      const result = await refreshSocialAccount(
+        { workspaceId: wsId, accountId, actorUserId: ownerUserId },
+        {
+          persistence,
+          protector: mockProtector,
+          adapters: new Map([['threads', mockAdapterWithoutInspection]]),
+          workspaceAuthorization: authPort,
+          enabled: true,
+          appReviewStatus: 'approved',
+          clock: { now: () => mockNow },
+        },
+      );
+
+      expect(result.refreshed).toBe(true);
+      expect(result.account.capabilitiesCheckedAt).toBe(staleTime);
+      expect(result.account.status).toBe('degraded');
+      expect(persistence.completeSocialAccountRefreshAtomic).toHaveBeenCalledWith(
+        expect.objectContaining({
+          capabilitiesCheckedAt: staleTime,
+          derivedStatus: 'degraded',
+          statusReason: 'capability_stale',
+        }),
+      );
+    });
+
+    it('fails with reauth_required and identity_mismatch when inspection profile ID does not match stored ID', async () => {
+      const persistence = createMockPersistence();
+      const authPort = createMockAuthPort();
+      const claim = createClaim();
+
+      vi.mocked(persistence.claimSocialAccountForRefresh).mockResolvedValue(claim);
+      vi.mocked(persistence.recordFailedSocialAccountRefreshAtomic).mockImplementation(
+        async (params) => ({
+          ...initialAccount,
+          version: 2,
+          status: params.derivedStatus,
+          statusReason: params.statusReason as SocialAccountStatusReason,
+        }),
+      );
+
+      const mockAdapter: SocialAuthAdapter = {
+        platform: 'threads',
+        supportsRefresh: true,
+        supportsRevocation: false,
+        createAuthorizationUrl: vi.fn(),
+        exchangeCode: vi.fn(),
+        refreshToken: vi.fn().mockResolvedValue({
+          accessToken: 'fresh_rotated_token',
+          tokenExpiresInSeconds: 5184000,
+        }),
+        inspectCurrentAccount: vi.fn().mockResolvedValue({
+          providerAccountId: 'different_imposter_user', // Mismatch!
+          displayName: 'Imposter',
+          handle: '@imposter',
+          grantedScopes: ['threads_basic', 'threads_content_publish'],
+          capabilities: { canPublishText: true },
+        }),
+      };
+
+      const result = await refreshSocialAccount(
+        { workspaceId: wsId, accountId, actorUserId: ownerUserId },
+        {
+          persistence,
+          protector: mockProtector,
+          adapters: new Map([['threads', mockAdapter]]),
+          workspaceAuthorization: authPort,
+          enabled: true,
+          appReviewStatus: 'approved',
+          clock: { now: () => mockNow },
+        },
+      );
+
+      expect(result.refreshed).toBe(false);
+      expect(result.account.status).toBe('reauth_required');
+      expect(persistence.recordFailedSocialAccountRefreshAtomic).toHaveBeenCalledWith(
+        expect.objectContaining({
+          derivedStatus: 'reauth_required',
+          statusReason: 'identity_mismatch',
+        }),
+      );
+    });
+
+    it('derives degraded with missing_grants when inspection omits threads_content_publish', async () => {
+      const persistence = createMockPersistence();
+      const authPort = createMockAuthPort();
+      const claim = createClaim();
+
+      vi.mocked(persistence.claimSocialAccountForRefresh).mockResolvedValue(claim);
+      vi.mocked(persistence.completeSocialAccountRefreshAtomic).mockImplementation(
+        async (params) => ({
+          ...initialAccount,
+          version: 2,
+          capabilitiesCheckedAt: params.capabilitiesCheckedAt ?? null,
+          status: params.derivedStatus,
+        }),
+      );
+
+      const mockAdapter: SocialAuthAdapter = {
+        platform: 'threads',
+        supportsRefresh: true,
+        supportsRevocation: false,
+        createAuthorizationUrl: vi.fn(),
+        exchangeCode: vi.fn(),
+        refreshToken: vi.fn().mockResolvedValue({
+          accessToken: 'fresh_rotated_token',
+          tokenExpiresInSeconds: 5184000,
+        }),
+        inspectCurrentAccount: vi.fn().mockResolvedValue({
+          providerAccountId: 'threads_user_111',
+          displayName: 'Creator One',
+          handle: '@creatorone',
+          grantedScopes: ['threads_basic'], // Missing threads_content_publish!
+          capabilities: { canPublishText: false },
+        }),
+      };
+
+      const result = await refreshSocialAccount(
+        { workspaceId: wsId, accountId, actorUserId: ownerUserId },
+        {
+          persistence,
+          protector: mockProtector,
+          adapters: new Map([['threads', mockAdapter]]),
+          workspaceAuthorization: authPort,
+          enabled: true,
+          appReviewStatus: 'approved',
+          clock: { now: () => mockNow },
+        },
+      );
+
+      expect(result.refreshed).toBe(true);
+      expect(result.account.status).toBe('degraded');
+      expect(persistence.completeSocialAccountRefreshAtomic).toHaveBeenCalledWith(
+        expect.objectContaining({
+          capabilitiesCheckedAt: mockNow.toISOString(),
+          grantedScopes: ['threads_basic'],
+          derivedStatus: 'degraded',
+          statusReason: 'missing_grants',
+        }),
+      );
     });
   });
 });

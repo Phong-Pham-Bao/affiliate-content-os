@@ -90,6 +90,22 @@ export function loadSocialConfig(rawEnv: RawEnvironment, nodeEnv?: NodeEnv): Soc
     }
   }
 
+  const rawMaintenance = rawEnv['SOCIAL_MAINTENANCE_ENABLED'];
+  let socialMaintenanceEnabled = false;
+  if (rawMaintenance !== undefined && rawMaintenance.trim() !== '') {
+    const trimmed = rawMaintenance.trim().toLowerCase();
+    if (trimmed === 'true') {
+      socialMaintenanceEnabled = true;
+    } else if (trimmed === 'false') {
+      socialMaintenanceEnabled = false;
+    } else {
+      issues.push({
+        field: 'SOCIAL_MAINTENANCE_ENABLED',
+        message: 'Must be either "true" or "false"',
+      });
+    }
+  }
+
   const rawKeyProvider = rawEnv['SOCIAL_KEY_PROVIDER']?.trim();
   let keyProvider: SocialKeyProvider = 'local';
   if (rawKeyProvider !== undefined && rawKeyProvider !== '') {
@@ -182,6 +198,7 @@ export function loadSocialConfig(rawEnv: RawEnvironment, nodeEnv?: NodeEnv): Soc
     credentialKeyVersion,
     transactionTtlSeconds,
     callbackResultTtlSeconds,
+    socialMaintenanceEnabled,
     ...threadsConfig,
   });
 }

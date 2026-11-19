@@ -2,8 +2,15 @@ import {
   getRedactedConfigMetadata,
   type AIConfig,
   type AppConfig,
+  type SocialConfig,
 } from '@affiliate-content-os/config';
 import type { Database } from '@affiliate-content-os/infrastructure/database';
+import type {
+  SocialAuthAdapter,
+  SocialCredentialProtectorPort,
+  SocialPersistencePort,
+} from '@affiliate-content-os/application';
+import type { SocialPlatform } from '@affiliate-content-os/domain';
 import { runWorker, type WorkerDependencies, type WorkerRuntimeHandle } from './worker.js';
 import {
   raceWithDeadline,
@@ -15,6 +22,11 @@ import {
 export interface StartWorkerOptions {
   readonly config: AppConfig;
   readonly aiConfig?: AIConfig | undefined;
+  readonly socialConfig?: SocialConfig | undefined;
+  readonly socialPersistence?: SocialPersistencePort | undefined;
+  readonly credentialProtector?: SocialCredentialProtectorPort | undefined;
+  readonly socialAdapters?: ReadonlyMap<SocialPlatform, SocialAuthAdapter> | undefined;
+  readonly socialMaintenanceEnabled?: boolean | undefined;
   readonly database: Database;
   readonly abortController?: AbortController | undefined;
   readonly installSignalHandlers?: boolean | undefined;
@@ -210,6 +222,11 @@ export async function startWorker(options: StartWorkerOptions): Promise<void> {
     runtimePromise = workerRunnerFn({
       config,
       aiConfig: options.aiConfig,
+      socialConfig: options.socialConfig,
+      socialPersistence: options.socialPersistence,
+      credentialProtector: options.credentialProtector,
+      socialAdapters: options.socialAdapters,
+      socialMaintenanceEnabled: options.socialMaintenanceEnabled,
       database,
       signal: controller.signal,
       onStarted: handleStarted,

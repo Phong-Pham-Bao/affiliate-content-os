@@ -63,6 +63,7 @@ describe('Real PostgreSQL Tenancy Schema and Constraints Integration', () => {
       'products',
       'schema_migrations',
       'script_generation_units',
+      'social_account_operations',
       'social_accounts',
       'social_credentials',
       'users',

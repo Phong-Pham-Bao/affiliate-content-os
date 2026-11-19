@@ -55,6 +55,18 @@ export interface RevokeTokenResult {
   readonly revoked: boolean;
 }
 
+export interface InspectAccountInput {
+  readonly accessToken: string;
+}
+
+export interface InspectAccountResult {
+  readonly providerAccountId: string;
+  readonly displayName?: string | null | undefined;
+  readonly handle?: string | null | undefined;
+  readonly grantedScopes: readonly string[];
+  readonly capabilities: Record<string, boolean>;
+}
+
 export interface SocialAuthAdapter {
   readonly platform: SocialPlatform;
   readonly supportsRefresh: boolean;
@@ -62,6 +74,7 @@ export interface SocialAuthAdapter {
   createAuthorizationUrl(input: CreateAuthorizationUrlInput): Promise<CreateAuthorizationUrlResult>;
   exchangeCode(input: ExchangeCodeInput): Promise<ExchangeCodeResult>;
   refreshToken?(input: RefreshTokenInput): Promise<RefreshTokenResult>;
+  inspectCurrentAccount?(input: InspectAccountInput): Promise<InspectAccountResult>;
   revokeToken?(accessToken?: string): Promise<RevokeTokenResult>;
   revoke?(accessToken: string): Promise<void>;
 }

@@ -18,6 +18,8 @@ import {
   SocialPlatformUnsupportedError,
 } from './errors.js';
 import type {
+  ClaimedSocialAccountRefresh,
+  InspectAccountResult,
   SocialAuditContext,
   SocialAuthAdapter,
   SocialCredentialProtectorPort,
@@ -29,6 +31,8 @@ export interface RefreshSocialAccountCommand {
   readonly accountId: string;
   readonly actorUserId?: string | undefined;
   readonly auditContext?: SocialAuditContext | undefined;
+  readonly claimToken?: string | undefined;
+  readonly operationId?: string | undefined;
 }
 
 export interface RefreshSocialAccountDependencies {
@@ -40,6 +44,7 @@ export interface RefreshSocialAccountDependencies {
   readonly socialKillSwitchActive?: boolean | undefined;
   readonly threadsRefreshKillSwitchActive?: boolean | undefined;
   readonly appReviewStatus?: 'development' | 'approved' | undefined;
+  readonly threadsHttpTimeoutMs?: number | undefined;
   readonly clock: { now(): Date };
 }
 
@@ -48,96 +53,77 @@ export interface RefreshSocialAccountResult {
   readonly refreshed: boolean;
 }
 
-export async function refreshSocialAccount(
-  command: RefreshSocialAccountCommand,
+export interface ExecuteClaimedRefreshParams {
+  readonly workspaceId: string;
+  readonly accountId: string;
+  readonly claim: ClaimedSocialAccountRefresh;
+  readonly actorUserId?: string | undefined;
+  readonly auditContext?: SocialAuditContext | undefined;
+  readonly operationId?: string | undefined;
+}
+
+/**
+ * Single internal execution primitive for social account refresh.
+ * Accepts an already-acquired ClaimedSocialAccountRefresh and executes:
+ * decrypt -> provider refresh/inspection -> encrypt -> fenced completion/failure/release.
+ */
+export async function executeClaimedSocialAccountRefresh(
+  params: ExecuteClaimedRefreshParams,
   deps: RefreshSocialAccountDependencies,
 ): Promise<RefreshSocialAccountResult> {
-  if (!deps.enabled) throw new SocialAuthNotConfiguredError();
-  if (deps.socialKillSwitchActive || deps.threadsRefreshKillSwitchActive) {
-    throw new SocialKillSwitchActiveError();
-  }
-
-  if (command.actorUserId && deps.workspaceAuthorization) {
-    await authorizeWorkspaceAction(
-      {
-        workspaceId: parseWorkspaceId(command.workspaceId),
-        userId: parseUserId(command.actorUserId),
-        capability: 'social_accounts.manage',
-      },
-      { authorization: deps.workspaceAuthorization },
-    );
-  }
-
   const now = deps.clock.now();
-  const claimToken = crypto.randomUUID();
-
-  // 1. Claim account for refresh (atomic exclusive claim)
-  const claimed = await deps.persistence.claimSocialAccountForRefresh({
-    workspaceId: command.workspaceId,
-    accountId: command.accountId,
-    leaseDurationSeconds: 60,
-    claimToken,
-    now: now.toISOString(),
-  });
-
-  if (!claimed) {
-    const existing = await deps.persistence.findSocialAccountById({
-      workspaceId: command.workspaceId,
-      accountId: command.accountId,
-    });
-    if (!existing) throw new SocialAccountNotFoundError();
-    return { account: existing, refreshed: false };
-  }
-
-  const account = claimed.account;
+  const account = params.claim.account;
   const adapter = deps.adapters.get(account.platform);
+
   if (!adapter) {
     await deps.persistence.releaseSocialAccountRefreshLeaseAtomic({
-      workspaceId: command.workspaceId,
-      accountId: command.accountId,
-      leaseToken: claimed.refreshLeaseToken,
+      workspaceId: params.workspaceId,
+      accountId: params.accountId,
+      leaseToken: params.claim.refreshLeaseToken,
       now: now.toISOString(),
     });
     throw new SocialPlatformUnsupportedError(account.platform);
   }
 
-  // 2. Decrypt credentials narrowly outside DB transaction
+  // 1. Decrypt credentials narrowly outside DB transaction
   let decrypted;
   try {
     decrypted = deps.protector.decrypt({
-      workspaceId: command.workspaceId,
-      socialAccountId: command.accountId,
+      workspaceId: params.workspaceId,
+      socialAccountId: params.accountId,
       platform: account.platform,
-      credentials: claimed.encryptedCredentials,
+      credentials: params.claim.encryptedCredentials,
     });
   } catch {
     const updated = await deps.persistence.recordFailedSocialAccountRefreshAtomic({
-      workspaceId: command.workspaceId,
-      accountId: command.accountId,
-      expectedAccountVersion: claimed.claimedAccountVersion,
-      expectedLeaseToken: claimed.refreshLeaseToken,
+      workspaceId: params.workspaceId,
+      accountId: params.accountId,
+      expectedAccountVersion: params.claim.claimedAccountVersion,
+      expectedLeaseToken: params.claim.refreshLeaseToken,
       derivedStatus: 'reauth_required',
       statusReason: 'reauth_required',
       nextRefreshAt: null,
       reauthRequiredAt: now.toISOString(),
       now: now.toISOString(),
-      actorUserId: command.actorUserId,
-      auditContext: command.auditContext,
+      actorUserId: params.actorUserId,
+      auditContext: params.auditContext,
+      operationId: params.operationId,
+      operationLeaseToken: params.claim.refreshLeaseToken,
     });
     return { account: updated, refreshed: false };
   }
 
   if (!adapter.supportsRefresh || !adapter.refreshToken) {
     await deps.persistence.releaseSocialAccountRefreshLeaseAtomic({
-      workspaceId: command.workspaceId,
-      accountId: command.accountId,
-      leaseToken: claimed.refreshLeaseToken,
+      workspaceId: params.workspaceId,
+      accountId: params.accountId,
+      leaseToken: params.claim.refreshLeaseToken,
       now: now.toISOString(),
     });
     return { account, refreshed: false };
   }
 
-  // 3. Call provider refresh OUTSIDE database transaction
+  // 2. Call provider refresh OUTSIDE database transaction
   let newAccessToken: string;
   let tokenExpiresInSeconds: number | null | undefined;
   try {
@@ -168,37 +154,78 @@ export async function refreshSocialAccount(
       : new Date(now.getTime() + retrySec * 1000).toISOString();
 
     const updated = await deps.persistence.recordFailedSocialAccountRefreshAtomic({
-      workspaceId: command.workspaceId,
-      accountId: command.accountId,
-      expectedAccountVersion: claimed.claimedAccountVersion,
-      expectedLeaseToken: claimed.refreshLeaseToken,
+      workspaceId: params.workspaceId,
+      accountId: params.accountId,
+      expectedAccountVersion: params.claim.claimedAccountVersion,
+      expectedLeaseToken: params.claim.refreshLeaseToken,
       derivedStatus,
       statusReason,
       nextRefreshAt,
       reauthRequiredAt: isAuthTerminal ? now.toISOString() : null,
       now: now.toISOString(),
-      actorUserId: command.actorUserId,
-      auditContext: command.auditContext,
+      actorUserId: params.actorUserId,
+      auditContext: params.auditContext,
+      operationId: params.operationId,
+      operationLeaseToken: params.claim.refreshLeaseToken,
     });
 
     return { account: updated, refreshed: false };
   }
 
-  // 4. Encrypt new replacement token with fresh nonce and bound AAD
+  // 3. Inspect current account identity and granted permissions
+  // Never reuse old scopes as freshly checked evidence
+  let inspection: InspectAccountResult | null = null;
+  let inspectionFailed = false;
+  let identityMismatch = false;
+
+  if (typeof adapter.inspectCurrentAccount === 'function') {
+    try {
+      const inspRes = await adapter.inspectCurrentAccount({ accessToken: newAccessToken });
+      if (inspRes.providerAccountId !== account.providerAccountId) {
+        identityMismatch = true;
+      } else {
+        inspection = inspRes;
+      }
+    } catch {
+      inspectionFailed = true;
+    }
+  }
+
+  if (identityMismatch) {
+    // Current profile ID from provider does NOT match stored provider account ID
+    const updated = await deps.persistence.recordFailedSocialAccountRefreshAtomic({
+      workspaceId: params.workspaceId,
+      accountId: params.accountId,
+      expectedAccountVersion: params.claim.claimedAccountVersion,
+      expectedLeaseToken: params.claim.refreshLeaseToken,
+      derivedStatus: 'reauth_required',
+      statusReason: 'identity_mismatch',
+      nextRefreshAt: null,
+      reauthRequiredAt: now.toISOString(),
+      now: now.toISOString(),
+      actorUserId: params.actorUserId,
+      auditContext: params.auditContext,
+      operationId: params.operationId,
+      operationLeaseToken: params.claim.refreshLeaseToken,
+    });
+    return { account: updated, refreshed: false };
+  }
+
+  // 4. Encrypt rotated replacement credentials
   let encrypted;
   try {
     encrypted = deps.protector.encrypt({
-      workspaceId: command.workspaceId,
-      socialAccountId: command.accountId,
+      workspaceId: params.workspaceId,
+      socialAccountId: params.accountId,
       platform: account.platform,
       accessToken: newAccessToken,
       refreshToken: decrypted.refreshToken,
     });
   } catch {
     await deps.persistence.releaseSocialAccountRefreshLeaseAtomic({
-      workspaceId: command.workspaceId,
-      accountId: command.accountId,
-      leaseToken: claimed.refreshLeaseToken,
+      workspaceId: params.workspaceId,
+      accountId: params.accountId,
+      leaseToken: params.claim.refreshLeaseToken,
       now: now.toISOString(),
     });
     throw new SocialCredentialEncryptionError('Failed to encrypt rotated credentials');
@@ -209,6 +236,29 @@ export async function refreshSocialAccount(
       ? new Date(now.getTime() + tokenExpiresInSeconds * 1000).toISOString()
       : account.tokenExpiresAt;
 
+  // Determine capabilities, granted scopes, and capabilitiesCheckedAt
+  let capabilitiesCheckedAt: string | null;
+  let grantedScopes: readonly string[];
+  let capabilities: Record<string, boolean>;
+  let displayName: string;
+  let handle: string | null;
+
+  if (inspection) {
+    // Verified inspection succeeded with matching identity and fresh grants
+    capabilitiesCheckedAt = now.toISOString();
+    grantedScopes = inspection.grantedScopes;
+    capabilities = inspection.capabilities;
+    displayName = inspection.displayName ?? account.displayName;
+    handle = inspection.handle ?? account.handle;
+  } else {
+    // Inspection failed or unsupported: token rotated safely, but capabilitiesCheckedAt NOT refreshed
+    capabilitiesCheckedAt = account.capabilitiesCheckedAt;
+    grantedScopes = account.grantedScopes;
+    capabilities = account.capabilities;
+    displayName = account.displayName;
+    handle = account.handle;
+  }
+
   const lifecycle = deriveAccountLifecycle({
     platform: account.platform,
     exchangeStage: 'completed',
@@ -216,10 +266,11 @@ export async function refreshSocialAccount(
     tokenExpiresAt,
     verifiedIdentity: {
       providerAccountId: account.providerAccountId,
-      displayName: account.displayName,
+      displayName,
     },
-    grantedScopes: account.grantedScopes,
-    capabilitiesCheckedAt: now.toISOString(),
+    grantedScopes,
+    capabilitiesCheckedAt,
+    lastInspectionErrorClass: inspectionFailed ? 'transient_network' : null,
     appReviewStatus: deps.appReviewStatus ?? 'development',
     killSwitches: {
       globalKillSwitch: deps.socialKillSwitchActive,
@@ -230,20 +281,86 @@ export async function refreshSocialAccount(
 
   // 5. Atomically rotate credential and update account under CAS and claim fencing
   const updatedAccount = await deps.persistence.completeSocialAccountRefreshAtomic({
-    workspaceId: command.workspaceId,
-    accountId: command.accountId,
-    expectedAccountVersion: claimed.claimedAccountVersion,
-    expectedCredentialVersion: claimed.claimedCredentialVersion,
-    expectedLeaseToken: claimed.refreshLeaseToken,
+    workspaceId: params.workspaceId,
+    accountId: params.accountId,
+    expectedAccountVersion: params.claim.claimedAccountVersion,
+    expectedCredentialVersion: params.claim.claimedCredentialVersion,
+    expectedLeaseToken: params.claim.refreshLeaseToken,
     encryptedCredentials: encrypted,
     tokenExpiresAt,
     nextRefreshAt: lifecycle.nextRefreshAt,
+    capabilitiesCheckedAt,
+    grantedScopes,
+    capabilities,
+    displayName,
+    handle,
     derivedStatus: lifecycle.status,
     statusReason: lifecycle.statusReason,
     now: now.toISOString(),
-    actorUserId: command.actorUserId,
-    auditContext: command.auditContext,
+    actorUserId: params.actorUserId,
+    auditContext: params.auditContext,
+    operationId: params.operationId,
+    operationLeaseToken: params.claim.refreshLeaseToken,
   });
 
   return { account: updatedAccount, refreshed: true };
+}
+
+export async function refreshSocialAccount(
+  command: RefreshSocialAccountCommand,
+  deps: RefreshSocialAccountDependencies,
+): Promise<RefreshSocialAccountResult> {
+  if (!deps.enabled) throw new SocialAuthNotConfiguredError();
+  if (deps.socialKillSwitchActive || deps.threadsRefreshKillSwitchActive) {
+    throw new SocialKillSwitchActiveError();
+  }
+
+  if (command.actorUserId && deps.workspaceAuthorization) {
+    await authorizeWorkspaceAction(
+      {
+        workspaceId: parseWorkspaceId(command.workspaceId),
+        userId: parseUserId(command.actorUserId),
+        capability: 'social_accounts.manage',
+      },
+      { authorization: deps.workspaceAuthorization },
+    );
+  }
+
+  const now = deps.clock.now();
+  const claimToken = command.claimToken ?? crypto.randomUUID();
+
+  // Derive lease duration: provider timeout plus margin, min 120s
+  const providerTimeoutMs = deps.threadsHttpTimeoutMs ?? 15000;
+  const leaseDurationSeconds = Math.max(120, Math.ceil((providerTimeoutMs * 2 + 30000) / 1000));
+
+  // 1. Claim account for refresh (atomic exclusive claim, enforcing earliest_refresh_at)
+  const claimed = await deps.persistence.claimSocialAccountForRefresh({
+    workspaceId: command.workspaceId,
+    accountId: command.accountId,
+    leaseDurationSeconds,
+    claimToken,
+    now: now.toISOString(),
+  });
+
+  if (!claimed) {
+    const existing = await deps.persistence.findSocialAccountById({
+      workspaceId: command.workspaceId,
+      accountId: command.accountId,
+    });
+    if (!existing) throw new SocialAccountNotFoundError();
+    return { account: existing, refreshed: false };
+  }
+
+  // 2. Delegate to the single execution primitive
+  return executeClaimedSocialAccountRefresh(
+    {
+      workspaceId: command.workspaceId,
+      accountId: command.accountId,
+      claim: claimed,
+      actorUserId: command.actorUserId,
+      auditContext: command.auditContext,
+      operationId: command.operationId,
+    },
+    deps,
+  );
 }

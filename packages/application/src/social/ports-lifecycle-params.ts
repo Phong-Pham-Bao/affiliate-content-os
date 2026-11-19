@@ -37,11 +37,18 @@ export interface CompleteSocialAccountRefreshParams {
   readonly encryptedCredentials: EncryptedSocialCredentials;
   readonly tokenExpiresAt: string | null;
   readonly nextRefreshAt: string | null;
+  readonly capabilitiesCheckedAt?: string | null | undefined;
+  readonly grantedScopes?: readonly string[] | undefined;
+  readonly capabilities?: Record<string, boolean> | undefined;
+  readonly displayName?: string | null | undefined;
+  readonly handle?: string | null | undefined;
   readonly derivedStatus: SocialAccountStatus;
   readonly statusReason: SocialAccountStatusReason;
   readonly now: string;
   readonly actorUserId?: string | undefined;
   readonly auditContext?: SocialAuditContext | undefined;
+  readonly operationId?: string | undefined;
+  readonly operationLeaseToken?: string | undefined;
 }
 
 export interface RecordFailedSocialAccountRefreshParams {
@@ -56,6 +63,8 @@ export interface RecordFailedSocialAccountRefreshParams {
   readonly now: string;
   readonly actorUserId?: string | undefined;
   readonly auditContext?: SocialAuditContext | undefined;
+  readonly operationId?: string | undefined;
+  readonly operationLeaseToken?: string | undefined;
 }
 
 export interface ReleaseSocialAccountRefreshLeaseParams {
@@ -79,9 +88,18 @@ export interface DisconnectSocialAccountParams {
   readonly expectedVersion: number;
   readonly externalRevocationAttempted: boolean;
   readonly externalRevocationSupported: boolean;
-  readonly externalRevocationResult: 'succeeded' | 'failed' | 'unsupported';
+  readonly externalRevocationResult: 'pending' | 'succeeded' | 'failed' | 'unsupported';
   readonly now: string;
   readonly auditContext?: SocialAuditContext | undefined;
+  readonly operationId?: string | undefined;
+  readonly operationLeaseToken?: string | undefined;
+}
+
+export interface UpdateExternalRevocationResultParams {
+  readonly workspaceId: string;
+  readonly accountId: string;
+  readonly externalRevocationResult: 'succeeded' | 'failed';
+  readonly now: string;
 }
 
 export interface SocialIdempotencyInput {

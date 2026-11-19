@@ -19,6 +19,7 @@ import type {
   ReleaseSocialAccountRefreshLeaseParams,
   SocialAuditContext,
   SocialIdempotencyInput,
+  UpdateExternalRevocationResultParams,
 } from './ports-lifecycle-params.js';
 
 export type { SocialAuditContext, SocialIdempotencyInput };
@@ -193,12 +194,19 @@ export interface SocialPersistencePort {
   disconnectSocialAccountAtomic(
     params: DisconnectSocialAccountParams,
   ): Promise<SocialAccountSnapshot>;
+  updateExternalRevocationResultAtomic?(
+    params: UpdateExternalRevocationResultParams,
+  ): Promise<void>;
   executeMutationWithIdempotency?(params: {
     readonly workspaceId: string;
     readonly accountId: string;
     readonly actorUserId: string;
     readonly idempotency: SocialIdempotencyInput;
     readonly now: string;
-    readonly executeMutation: () => Promise<SocialAccountSnapshot>;
+    readonly operationType?: 'refresh' | 'disconnect' | undefined;
+    readonly executeMutation: (claimedOp?: {
+      readonly operationId: string;
+      readonly leaseToken: string;
+    }) => Promise<SocialAccountSnapshot>;
   }): Promise<{ readonly replayed: boolean; readonly account: SocialAccountSnapshot }>;
 }

@@ -7,6 +7,8 @@ import {
   type CreateAuthorizationUrlResult,
   type ExchangeCodeInput,
   type ExchangeCodeResult,
+  type InspectAccountInput,
+  type InspectAccountResult,
   type RefreshTokenInput,
   type RefreshTokenResult,
   type RevokeTokenResult,
@@ -136,6 +138,41 @@ export class FakeSocialAuthAdapter implements SocialAuthAdapter {
       accessToken: refreshedToken,
       tokenExpiresInSeconds: 5184000,
       tokenKind: 'long_lived',
+    };
+  }
+
+  public async inspectCurrentAccount(input: InspectAccountInput): Promise<InspectAccountResult> {
+    if (input.accessToken.includes('fail_inspection')) {
+      throw new Error('Simulated fake inspection failure');
+    }
+    if (input.accessToken.includes('mismatch_identity')) {
+      return {
+        providerAccountId: 'mismatched_provider_account_id',
+        displayName: 'Mismatched User',
+        handle: '@mismatched',
+        grantedScopes: ['threads_basic', 'threads_content_publish'],
+        capabilities: { canPublishText: true, canPublishMedia: false },
+      };
+    }
+    if (input.accessToken.includes('missing_grants')) {
+      return {
+        providerAccountId: 'fake_user_id',
+        displayName: 'Missing Grants User',
+        handle: '@missing_grants',
+        grantedScopes: ['threads_basic'],
+        capabilities: { canPublishText: false, canPublishMedia: false },
+      };
+    }
+    const grantedScopes =
+      this.platform === 'threads'
+        ? ['threads_basic', 'threads_content_publish']
+        : ['user.info.basic', 'video.publish'];
+    return {
+      providerAccountId: 'fake_user_id',
+      displayName: this.platform === 'threads' ? 'Fake Threads Creator' : 'Fake TikTok Creator',
+      handle: `@fake_${this.platform}_user`,
+      grantedScopes,
+      capabilities: { canPublishText: true, canPublishMedia: false },
     };
   }
 

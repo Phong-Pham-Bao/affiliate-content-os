@@ -22,16 +22,22 @@ export const SQL_FIND_ACCOUNT_FOR_REFRESH_CLAIM = `
 `;
 
 export const SQL_CLAIM_REFRESH_LEASE = `
-  UPDATE social_accounts
+  UPDATE social_accounts s
   SET refresh_lease_claimed_at = $3,
       refresh_lease_expires_at = ($3::timestamptz + ($4 * interval '1 second')),
       refresh_lease_worker_id = $5,
       refresh_lease_token = $6,
       updated_at = $3
-  WHERE workspace_id = $1
-    AND id = $2
-    AND status <> 'disconnected'
-    AND (refresh_lease_expires_at IS NULL OR refresh_lease_expires_at <= $3::timestamptz)
+  WHERE s.workspace_id = $1
+    AND s.id = $2
+    AND s.status <> 'disconnected'
+    AND (s.refresh_lease_expires_at IS NULL OR s.refresh_lease_expires_at <= $3::timestamptz)
+    AND EXISTS (
+      SELECT 1 FROM social_credentials c
+      WHERE c.workspace_id = s.workspace_id
+        AND c.social_account_id = s.id
+        AND (c.earliest_refresh_at IS NULL OR c.earliest_refresh_at <= $3::timestamptz)
+    )
   RETURNING *;
 `;
 
@@ -63,7 +69,11 @@ export const SQL_COMPLETE_ACCOUNT_REFRESH = `
       token_expires_at = $5,
       next_refresh_at = $6,
       last_refreshed_at = $7,
-      capabilities_checked_at = $7,
+      capabilities_checked_at = $8,
+      granted_scopes = $9::jsonb,
+      capabilities_json = $10::jsonb,
+      display_name = COALESCE($11, display_name),
+      handle = COALESCE($12, handle),
       refresh_lease_claimed_at = NULL,
       refresh_lease_expires_at = NULL,
       refresh_lease_worker_id = NULL,
@@ -73,8 +83,8 @@ export const SQL_COMPLETE_ACCOUNT_REFRESH = `
       version = version + 1
   WHERE workspace_id = $1
     AND id = $2
-    AND version = $8
-    AND refresh_lease_token = $9
+    AND version = $13
+    AND refresh_lease_token = $14
     AND status <> 'disconnected'
   RETURNING *;
 `;
@@ -124,7 +134,10 @@ export const SQL_FIND_DUE_ACCOUNT_FOR_REFRESH_CLAIM = `
   SELECT s.id, s.workspace_id, s.version
   FROM social_accounts s
   JOIN workspaces w ON w.id = s.workspace_id
+  JOIN social_credentials c ON c.workspace_id = s.workspace_id AND c.social_account_id = s.id
   WHERE s.status IN ('active', 'degraded')
+    AND w.status = 'active'
+    AND (c.earliest_refresh_at IS NULL OR c.earliest_refresh_at <= $1::timestamptz)
     AND (
       (s.next_refresh_at IS NOT NULL AND s.next_refresh_at <= $1::timestamptz AND (s.refresh_lease_expires_at IS NULL OR s.refresh_lease_expires_at <= $1::timestamptz))
       OR (s.refresh_lease_expires_at IS NOT NULL AND s.refresh_lease_expires_at <= $1::timestamptz)
@@ -157,7 +170,57 @@ export const SQL_DISCONNECT_SOCIAL_ACCOUNT = `
   RETURNING *;
 `;
 
+export const SQL_UPDATE_EXTERNAL_REVOCATION_RESULT = `
+  UPDATE social_accounts
+  SET external_revocation_result = $3,
+      updated_at = $4
+  WHERE workspace_id = $1 AND id = $2 AND status = 'disconnected';
+`;
+
 export const SQL_DELETE_SOCIAL_CREDENTIALS = `
   DELETE FROM social_credentials
   WHERE workspace_id = $1 AND social_account_id = $2;
+`;
+
+export const SQL_FIND_OPERATION_FOR_UPDATE = `
+  SELECT id, workspace_id, social_account_id, principal_id, route_key,
+         key_hash, request_hash, operation_type, status, lease_token,
+         lease_expires_at, resource_version, status_code, error_code,
+         error_message, response_json, created_at, completed_at, expires_at
+  FROM social_account_operations
+  WHERE workspace_id = $1
+    AND principal_id = $2
+    AND route_key = $3
+    AND key_hash = $4
+  FOR UPDATE;
+`;
+
+export const SQL_INSERT_PENDING_OPERATION = `
+  INSERT INTO social_account_operations (
+    id, workspace_id, social_account_id, principal_id, route_key,
+    key_hash, request_hash, operation_type, status, lease_token,
+    lease_expires_at, created_at, expires_at
+  ) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8, 'pending', $9, $10, $11, $12
+  ) RETURNING *;
+`;
+
+export const SQL_COMPLETE_OPERATION = `
+  UPDATE social_account_operations
+  SET status = 'completed',
+      resource_version = $3,
+      status_code = $4,
+      response_json = $5::jsonb,
+      completed_at = $6
+  WHERE id = $1 AND lease_token = $2;
+`;
+
+export const SQL_FAIL_OPERATION = `
+  UPDATE social_account_operations
+  SET status = 'failed',
+      status_code = $3,
+      error_code = $4,
+      error_message = $5,
+      completed_at = $6
+  WHERE id = $1 AND lease_token = $2 AND status = 'pending';
 `;
