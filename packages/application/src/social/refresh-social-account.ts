@@ -123,7 +123,19 @@ export async function executeClaimedSocialAccountRefresh(
     return { account, refreshed: false };
   }
 
-  // 2. Call provider refresh OUTSIDE database transaction
+  // 2. Persist provider_attempt_started transition before external refresh call
+  if (
+    params.operationId &&
+    params.claim.refreshLeaseToken &&
+    typeof deps.persistence.markOperationAttemptStarted === 'function'
+  ) {
+    await deps.persistence.markOperationAttemptStarted({
+      operationId: params.operationId,
+      leaseToken: params.claim.refreshLeaseToken,
+    });
+  }
+
+  // 3. Call provider refresh OUTSIDE database transaction
   let newAccessToken: string;
   let tokenExpiresInSeconds: number | null | undefined;
   try {

@@ -1,6 +1,8 @@
 import type { ConfigurationIssue } from './errors.js';
 import {
   ALLOWED_THREADS_APP_REVIEW_STATUSES,
+  DEFAULT_META_GRAPH_BASE_URL,
+  DEFAULT_META_GRAPH_VERSION,
   DEFAULT_THREADS_API_BASE_URL,
   DEFAULT_THREADS_API_VERSION,
   DEFAULT_THREADS_AUTH_BASE_URL,
@@ -22,6 +24,9 @@ export interface ValidatedThreadsConfig {
   readonly threadsAuthBaseUrl: string;
   readonly threadsApiBaseUrl: string;
   readonly threadsApiVersion: string;
+  readonly metaGraphBaseUrl: string;
+  readonly metaGraphVersion: string;
+  readonly threadsAppAccessToken: string | null;
   readonly threadsAppReviewStatus: ThreadsAppReviewStatus;
   readonly threadsHttpTimeoutMs: number;
   readonly socialKillSwitchActive: boolean;
@@ -170,6 +175,39 @@ export function validateThreadsConfig(
     }
   }
 
+  const metaGraphBaseUrl = validateProviderUrl(
+    rawEnv['META_GRAPH_BASE_URL'],
+    'META_GRAPH_BASE_URL',
+    DEFAULT_META_GRAPH_BASE_URL,
+    'graph.facebook.com',
+    nodeEnv,
+    issues,
+  );
+
+  let metaGraphVersion = DEFAULT_META_GRAPH_VERSION;
+  const rawMetaVer = rawEnv['META_GRAPH_VERSION']?.trim();
+  if (rawMetaVer !== undefined && rawMetaVer !== '') {
+    if (!/^v[0-9]+\.[0-9]+$/.test(rawMetaVer)) {
+      issues.push({ field: 'META_GRAPH_VERSION', message: 'Must match format vX.Y (e.g. v21.0)' });
+    } else {
+      metaGraphVersion = rawMetaVer;
+    }
+  }
+
+  let threadsAppAccessToken: string | null = null;
+  const rawAppToken = rawEnv['THREADS_APP_ACCESS_TOKEN']?.trim();
+  if (rawAppToken !== undefined && rawAppToken !== '') {
+    // eslint-disable-next-line no-control-regex
+    if (rawAppToken.length > 512 || /[\x00-\x1F\x7F]/.test(rawAppToken)) {
+      issues.push({
+        field: 'THREADS_APP_ACCESS_TOKEN',
+        message: 'Must be a valid token string (<= 512 chars, no control chars)',
+      });
+    } else {
+      threadsAppAccessToken = rawAppToken;
+    }
+  }
+
   let creds: ThreadsCredentials = {
     threadsAppId: null,
     threadsAppSecret: null,
@@ -187,6 +225,9 @@ export function validateThreadsConfig(
     threadsAuthBaseUrl,
     threadsApiBaseUrl,
     threadsApiVersion,
+    metaGraphBaseUrl,
+    metaGraphVersion,
+    threadsAppAccessToken,
     threadsAppReviewStatus,
     threadsHttpTimeoutMs,
     socialKillSwitchActive,

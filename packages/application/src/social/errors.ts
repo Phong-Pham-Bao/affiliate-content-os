@@ -161,3 +161,61 @@ export class SocialAuthOutcomeUnknownError extends Error {
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }
+
+export function classifyOperationSafeError(err: unknown): {
+  readonly errorCode: string;
+  readonly errorMessage: string;
+} {
+  if (err instanceof SocialAccountVersionMismatchError) {
+    return {
+      errorCode: 'VERSION_MISMATCH',
+      errorMessage: 'Social account version changed concurrently. Please retry.',
+    };
+  }
+  if (err instanceof SocialAccountNotFoundError) {
+    return {
+      errorCode: 'NOT_FOUND',
+      errorMessage: 'Social account was not found in this workspace.',
+    };
+  }
+  if (err instanceof SocialAuthRateLimitError) {
+    return {
+      errorCode: 'RATE_LIMITED',
+      errorMessage: 'Provider rate limit exceeded. Please retry later.',
+    };
+  }
+  if (err instanceof SocialAuthTerminalError) {
+    return {
+      errorCode: 'TERMINAL_AUTH_ERROR',
+      errorMessage: 'Provider authorization is invalid, revoked, or expired.',
+    };
+  }
+  if (err instanceof SocialAuthOutcomeUnknownError) {
+    return {
+      errorCode: 'OUTCOME_UNKNOWN',
+      errorMessage: 'Provider request timed out before outcome could be established safely.',
+    };
+  }
+  if (err instanceof SocialCredentialEncryptionError) {
+    return {
+      errorCode: 'CRYPTO_ERROR',
+      errorMessage: 'Failed to process encrypted credentials.',
+    };
+  }
+  if (err instanceof SocialPlatformUnsupportedError) {
+    return {
+      errorCode: 'PLATFORM_UNSUPPORTED',
+      errorMessage: 'The requested social platform is not supported.',
+    };
+  }
+  if (err instanceof SocialKillSwitchActiveError) {
+    return {
+      errorCode: 'KILL_SWITCH_ACTIVE',
+      errorMessage: 'Social operations are temporarily disabled by administrative policy.',
+    };
+  }
+  return {
+    errorCode: 'INTERNAL_ERROR',
+    errorMessage: 'An internal error occurred during the social account operation.',
+  };
+}

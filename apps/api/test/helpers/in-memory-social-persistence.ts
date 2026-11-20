@@ -28,6 +28,7 @@ import {
   type SaveOAuthTransactionWithIdempotencyParams,
   type SaveOAuthTransactionWithIdempotencyResult,
   type SocialIdempotencyInput,
+  type SocialMutationIdempotencyResult,
   type SocialPersistencePort,
 } from '@affiliate-content-os/application';
 import {
@@ -532,18 +533,20 @@ export class InMemorySocialPersistence implements SocialPersistencePort {
     readonly accountId: string;
     readonly actorUserId: string;
     readonly idempotency: SocialIdempotencyInput;
-    readonly now: string;
+    readonly now?: string | undefined;
+    readonly leaseDurationSeconds?: number | undefined;
     readonly operationType?: 'refresh' | 'disconnect' | undefined;
     readonly executeMutation: (claimedOp?: {
       readonly operationId: string;
       readonly leaseToken: string;
     }) => Promise<SocialAccountSnapshot>;
-  }): Promise<{ readonly replayed: boolean; readonly account: SocialAccountSnapshot }> {
+  }): Promise<SocialMutationIdempotencyResult> {
+    const now = params.now ?? new Date().toISOString();
     const idempKey = `${params.workspaceId}:${params.actorUserId}:${params.idempotency.routeKey}:${Buffer.from(params.idempotency.keyHash).toString('hex')}`;
     const existing = this.idempotencyKeys.get(idempKey);
 
     if (existing) {
-      if (new Date(existing.expiresAt).getTime() <= new Date(params.now).getTime()) {
+      if (new Date(existing.expiresAt).getTime() <= new Date(now).getTime()) {
         this.idempotencyKeys.delete(idempKey);
       } else {
         if (
@@ -552,6 +555,7 @@ export class InMemorySocialPersistence implements SocialPersistencePort {
           throw new IdempotencyKeyReusedError();
         }
         return {
+          status: 'completed',
           replayed: true,
           account: existing.response as SocialAccountSnapshot,
         };
@@ -562,7 +566,7 @@ export class InMemorySocialPersistence implements SocialPersistencePort {
       operationId: 'fake-op-id',
       leaseToken: 'fake-lease-token',
     });
-    const expiresAt = new Date(Date.parse(params.now) + 86400 * 1000).toISOString();
+    const expiresAt = new Date(Date.parse(now) + 86400 * 1000).toISOString();
     this.idempotencyKeys.set(idempKey, {
       principalId: params.actorUserId,
       routeKey: params.idempotency.routeKey,
@@ -573,6 +577,7 @@ export class InMemorySocialPersistence implements SocialPersistencePort {
     });
 
     return {
+      status: 'completed',
       replayed: false,
       account,
     };

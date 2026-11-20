@@ -143,6 +143,35 @@ export interface ConsumeCallbackResultParams {
   readonly now: string;
 }
 
+export interface SocialMutationCompletedResult {
+  readonly status: 'completed';
+  readonly replayed: boolean;
+  readonly account: SocialAccountSnapshot;
+}
+
+export interface SocialMutationInProgressResult {
+  readonly status: 'in_progress';
+  readonly retryAfterSeconds: number;
+}
+
+export type SocialMutationIdempotencyResult =
+  SocialMutationCompletedResult | SocialMutationInProgressResult;
+
+export interface ClaimedRevocationJob {
+  readonly id: string;
+  readonly workspaceId: string;
+  readonly socialAccountId: string;
+  readonly platform: SocialPlatform;
+  readonly encryptedToken: Uint8Array;
+  readonly tokenIv: Uint8Array;
+  readonly tokenAuthTag: Uint8Array;
+  readonly encryptionKeyVersion: string;
+  readonly status: 'pending' | 'in_progress';
+  readonly phase: 'claimed' | 'provider_attempt_started' | 'terminal';
+  readonly leaseToken: string;
+  readonly attemptCount: number;
+}
+
 export interface SocialPersistencePort {
   saveOAuthTransaction(params: SaveOAuthTransactionParams): Promise<OAuthTransactionSnapshot>;
   saveOAuthTransactionWithIdempotency(
@@ -197,16 +226,48 @@ export interface SocialPersistencePort {
   updateExternalRevocationResultAtomic?(
     params: UpdateExternalRevocationResultParams,
   ): Promise<void>;
+  markOperationAttemptStarted?(params: {
+    readonly operationId: string;
+    readonly leaseToken: string;
+  }): Promise<void>;
+  claimNextDueSocialAccountRevocationJob?(params: {
+    readonly now: string;
+    readonly workerId: string;
+    readonly leaseDurationSeconds: number;
+    readonly claimToken: string;
+  }): Promise<ClaimedRevocationJob | null>;
+  markSocialAccountRevocationAttemptStarted?(params: {
+    readonly jobId: string;
+    readonly leaseToken: string;
+    readonly now: string;
+  }): Promise<void>;
+  completeSocialAccountRevocationJobAtomic?(params: {
+    readonly jobId: string;
+    readonly leaseToken: string;
+    readonly workspaceId: string;
+    readonly accountId: string;
+    readonly now: string;
+  }): Promise<void>;
+  failSocialAccountRevocationJobAtomic?(params: {
+    readonly jobId: string;
+    readonly leaseToken: string;
+    readonly workspaceId: string;
+    readonly accountId: string;
+    readonly errorCode: string;
+    readonly errorMessage: string;
+    readonly now: string;
+  }): Promise<void>;
   executeMutationWithIdempotency?(params: {
     readonly workspaceId: string;
     readonly accountId: string;
     readonly actorUserId: string;
     readonly idempotency: SocialIdempotencyInput;
-    readonly now: string;
+    readonly now?: string | undefined;
+    readonly leaseDurationSeconds?: number | undefined;
     readonly operationType?: 'refresh' | 'disconnect' | undefined;
     readonly executeMutation: (claimedOp?: {
       readonly operationId: string;
       readonly leaseToken: string;
     }) => Promise<SocialAccountSnapshot>;
-  }): Promise<{ readonly replayed: boolean; readonly account: SocialAccountSnapshot }>;
+  }): Promise<SocialMutationIdempotencyResult>;
 }

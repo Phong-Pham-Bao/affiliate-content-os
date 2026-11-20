@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { AppConfig, SocialConfig } from '@affiliate-content-os/config';
+import {
+  ConfigurationError,
+  type AppConfig,
+  type SocialConfig,
+} from '@affiliate-content-os/config';
 import type {
   SocialAuthAdapter,
   SocialCredentialProtectorPort,
@@ -137,60 +141,50 @@ describe('Worker Social Maintenance Runtime Wiring', () => {
   it('fails closed when socialPersistence port is missing', async () => {
     const abortController = new AbortController();
 
-    const workerPromise = runWorker({
-      config: baseConfig,
-      socialConfig: baseSocialConfig,
-      socialMaintenanceEnabled: true,
-      credentialProtector: mockProtector,
-      socialAdapters: new Map([['threads', mockAdapter]]),
-      signal: abortController.signal,
-      once: true,
-    });
-
-    await new Promise((r) => setTimeout(r, 50));
-    abortController.abort();
-    await workerPromise;
+    await expect(
+      runWorker({
+        config: baseConfig,
+        socialConfig: baseSocialConfig,
+        socialMaintenanceEnabled: true,
+        credentialProtector: mockProtector,
+        socialAdapters: new Map([['threads', mockAdapter]]),
+        signal: abortController.signal,
+        once: true,
+      }),
+    ).rejects.toThrow(ConfigurationError);
   });
 
   it('fails closed when credentialProtector is missing', async () => {
     const persistence = createMockPersistence();
     const abortController = new AbortController();
 
-    const workerPromise = runWorker({
-      config: baseConfig,
-      socialConfig: baseSocialConfig,
-      socialMaintenanceEnabled: true,
-      socialPersistence: persistence,
-      socialAdapters: new Map([['threads', mockAdapter]]),
-      signal: abortController.signal,
-      once: true,
-    });
-
-    await new Promise((r) => setTimeout(r, 50));
-    abortController.abort();
-    await workerPromise;
-
-    expect(persistence.claimNextDueSocialAccountForRefresh).not.toHaveBeenCalled();
+    await expect(
+      runWorker({
+        config: baseConfig,
+        socialConfig: baseSocialConfig,
+        socialMaintenanceEnabled: true,
+        socialPersistence: persistence,
+        socialAdapters: new Map([['threads', mockAdapter]]),
+        signal: abortController.signal,
+        once: true,
+      }),
+    ).rejects.toThrow(ConfigurationError);
   });
 
-  it('fails closed when socialAdapters map is missing', async () => {
+  it('fails closed when socialAdapters map is missing or empty', async () => {
     const persistence = createMockPersistence();
     const abortController = new AbortController();
 
-    const workerPromise = runWorker({
-      config: baseConfig,
-      socialConfig: baseSocialConfig,
-      socialMaintenanceEnabled: true,
-      socialPersistence: persistence,
-      credentialProtector: mockProtector,
-      signal: abortController.signal,
-      once: true,
-    });
-
-    await new Promise((r) => setTimeout(r, 50));
-    abortController.abort();
-    await workerPromise;
-
-    expect(persistence.claimNextDueSocialAccountForRefresh).not.toHaveBeenCalled();
+    await expect(
+      runWorker({
+        config: baseConfig,
+        socialConfig: baseSocialConfig,
+        socialMaintenanceEnabled: true,
+        socialPersistence: persistence,
+        credentialProtector: mockProtector,
+        signal: abortController.signal,
+        once: true,
+      }),
+    ).rejects.toThrow(ConfigurationError);
   });
 });

@@ -14,6 +14,9 @@ describe('ThreadsSocialAuthAdapter', () => {
     authBaseUrl: 'https://www.threads.com',
     apiBaseUrl: 'https://graph.threads.com',
     apiVersion: 'v1.0',
+    metaGraphBaseUrl: 'https://graph.facebook.com',
+    metaGraphVersion: 'v21.0',
+    appAccessToken: 'test_app_token_injected',
     timeoutMs: 5000,
     environment: 'local' as const,
   };
@@ -116,15 +119,18 @@ describe('ThreadsSocialAuthAdapter', () => {
             name: 'Threads Creator Pro',
           }),
         })
-        // 4. Permissions lookup
+        // 4. Meta debug_token lookup
         .mockResolvedValueOnce({
           status: 200,
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
-            data: [
-              { permission: 'threads_basic', status: 'granted' },
-              { permission: 'threads_content_publish', status: 'granted' },
-            ],
+            data: {
+              app_id: 'threads-app-123',
+              user_id: 'threads_user_999',
+              is_valid: true,
+              scopes: ['threads_basic', 'threads_content_publish'],
+              expires_at: 1735689600,
+            },
           }),
         }),
     };
@@ -495,7 +501,12 @@ describe('ThreadsSocialAuthAdapter', () => {
           status: 200,
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
-            data: [{ permission: 'threads_basic', status: 'granted' }],
+            data: {
+              app_id: 'threads-app-123',
+              user_id: 'user_123',
+              is_valid: true,
+              scopes: ['threads_basic'],
+            },
           }),
         }),
     };
@@ -537,11 +548,16 @@ describe('ThreadsSocialAuthAdapter', () => {
           status: 200,
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
-            data: [
-              { permission: 'threads_content_publish', status: 'granted' },
-              { permission: 'threads_content_publish', status: 'granted' },
-              { permission: 'unknown_special_scope', status: 'granted' },
-            ],
+            data: {
+              app_id: 'threads-app-123',
+              user_id: 'user_123',
+              is_valid: true,
+              scopes: [
+                'threads_content_publish',
+                'threads_content_publish',
+                'unknown_special_scope',
+              ],
+            },
           }),
         }),
     };
@@ -582,7 +598,14 @@ describe('ThreadsSocialAuthAdapter', () => {
         .mockResolvedValueOnce({
           status: 200,
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ data: [] }),
+          body: JSON.stringify({
+            data: {
+              app_id: 'threads-app-123',
+              user_id: 'user_123',
+              is_valid: true,
+              scopes: [],
+            },
+          }),
         }),
     };
 
@@ -618,10 +641,12 @@ describe('ThreadsSocialAuthAdapter', () => {
           status: 200,
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
-            data: [
-              { permission: 'threads_basic', status: 'granted' },
-              { permission: 'threads_content_publish', status: 'granted' },
-            ],
+            data: {
+              app_id: 'threads-app-123',
+              user_id: 'threads_user_777',
+              is_valid: true,
+              scopes: ['threads_basic', 'threads_content_publish'],
+            },
           }),
         }),
     };

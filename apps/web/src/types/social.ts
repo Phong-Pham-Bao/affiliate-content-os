@@ -5,7 +5,12 @@ export type SocialAccountStatus =
 
 export type SocialAccountAction = 'reconnect' | 'refresh' | 'disconnect';
 
-export type ExternalRevocationResult = 'succeeded' | 'failed' | 'unsupported';
+export type ExternalRevocationResult = 'pending' | 'succeeded' | 'failed' | 'unsupported';
+
+export interface SocialOperationInProgressDTO {
+  readonly status: 'in_progress';
+  readonly message: string;
+}
 
 export interface SocialAccountCapabilities {
   readonly canPublishText?: boolean | undefined;

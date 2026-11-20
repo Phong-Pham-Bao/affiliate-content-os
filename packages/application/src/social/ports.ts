@@ -42,5 +42,9 @@ export type {
   SaveOAuthTransactionWithIdempotencyParams,
   SaveOAuthTransactionWithIdempotencyResult,
   SocialAuditContext,
+  SocialMutationIdempotencyResult,
+  SocialMutationCompletedResult,
+  SocialMutationInProgressResult,
+  ClaimedRevocationJob,
   SocialPersistencePort,
 } from './ports-persistence.js';

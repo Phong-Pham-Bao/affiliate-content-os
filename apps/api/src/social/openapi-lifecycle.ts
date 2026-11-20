@@ -127,6 +127,21 @@ export function buildOpenApiSocialLifecyclePaths(): Record<string, unknown> {
               },
             },
           },
+          '202': {
+            description: 'Social account operation is in progress.',
+            headers: {
+              ...commonHeaders,
+              'Retry-After': {
+                schema: { type: 'string' },
+                description: 'Estimated seconds before retry.',
+              },
+            },
+            content: {
+              'application/json': {
+                schema: (refreshSocialAccountRouteSchema.response as Record<string, unknown>)[202],
+              },
+            },
+          },
           '400': { description: 'Bad request.', content: problemDetailsContent },
           '401': { description: 'Authentication required.', content: problemDetailsContent },
           '403': { description: 'Owner capability required.', content: problemDetailsContent },
@@ -201,6 +216,23 @@ export function buildOpenApiSocialLifecyclePaths(): Record<string, unknown> {
                 schema: (
                   disconnectSocialAccountRouteSchema.response as Record<string, unknown>
                 )[200],
+              },
+            },
+          },
+          '202': {
+            description: 'Social account operation is in progress.',
+            headers: {
+              ...commonHeaders,
+              'Retry-After': {
+                schema: { type: 'string' },
+                description: 'Estimated seconds before retry.',
+              },
+            },
+            content: {
+              'application/json': {
+                schema: (
+                  disconnectSocialAccountRouteSchema.response as Record<string, unknown>
+                )[202],
               },
             },
           },

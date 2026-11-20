@@ -46,8 +46,18 @@ async function main(): Promise<void> {
 
   try {
     socialConfig = loadSocialConfig(process.env, config.nodeEnv);
-  } catch {
-    // If social configuration fails to load, worker continues with social maintenance disabled
+  } catch (err: unknown) {
+    const rawSocialAuth = process.env['SOCIAL_AUTH_ENABLED']?.trim().toLowerCase();
+    const rawMaintenance = process.env['SOCIAL_MAINTENANCE_ENABLED']?.trim().toLowerCase();
+    const isExplicitlyDisabled =
+      (rawSocialAuth === 'false' || rawSocialAuth === undefined || rawSocialAuth === '') &&
+      (rawMaintenance === 'false' || rawMaintenance === undefined || rawMaintenance === '');
+
+    if (!isExplicitlyDisabled) {
+      const message = err instanceof Error ? err.message : 'Unknown social configuration error';
+      console.error(`Worker process startup failed: ${message}`);
+      process.exit(1);
+    }
   }
 
   const database = createDatabase(databaseConfig, { sslCaContent });
@@ -85,6 +95,9 @@ async function main(): Promise<void> {
           authBaseUrl: socialConfig.threadsAuthBaseUrl,
           apiBaseUrl: socialConfig.threadsApiBaseUrl,
           apiVersion: socialConfig.threadsApiVersion,
+          metaGraphBaseUrl: socialConfig.metaGraphBaseUrl,
+          metaGraphVersion: socialConfig.metaGraphVersion,
+          appAccessToken: socialConfig.threadsAppAccessToken ?? undefined,
           timeoutMs: socialConfig.threadsHttpTimeoutMs,
           environment: config.nodeEnv === 'production' ? 'production' : 'local',
         }),

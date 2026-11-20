@@ -41,6 +41,9 @@ export async function handleRefreshSocialAccount(
   const routeKey = `POST /api/v1/workspaces/:workspaceId/social-accounts/:accountId/refresh`;
   const now = (deps.clock?.now() ?? new Date()).toISOString();
 
+  const providerTimeoutMs = deps.socialConfig.threadsHttpTimeoutMs ?? 15000;
+  const leaseDurationSeconds = Math.max(180, Math.ceil((providerTimeoutMs * 2 + 30000) / 1000));
+
   const executeRefresh = async (claimedOp?: {
     readonly operationId: string;
     readonly leaseToken: string;
@@ -51,6 +54,7 @@ export async function handleRefreshSocialAccount(
         accountId,
         actorUserId: authContext.user.id,
         auditContext,
+        claimToken: claimedOp?.leaseToken,
         operationId: claimedOp?.operationId,
       },
       {
@@ -82,9 +86,20 @@ export async function handleRefreshSocialAccount(
         routeKey,
       },
       now,
+      leaseDurationSeconds,
       operationType: 'refresh',
       executeMutation: executeRefresh,
     });
+    if (idempResult.status === 'in_progress') {
+      return reply
+        .status(202)
+        .header('Retry-After', String(idempResult.retryAfterSeconds))
+        .type('application/json; charset=utf-8')
+        .send({
+          status: 'in_progress',
+          message: 'Social account operation is currently in progress. Please retry later.',
+        });
+    }
     account = idempResult.account;
   } else {
     account = await executeRefresh();

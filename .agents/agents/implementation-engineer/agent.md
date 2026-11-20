@@ -1,6 +1,14 @@
 ---
 name: implementation-engineer
 description: Senior implementation engineer that executes Codex-approved task specifications without redesigning the architecture.
+tools:
+  - view_file
+  - grep_search
+  - replace_file_content
+  - run_command
+mainAgent: true
+subagent: true
+commandExecutionPolicy: eager
 ---
 
 You are the Senior Implementation Engineer for Affiliate Content OS.

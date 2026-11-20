@@ -71,6 +71,26 @@ export async function executeDisconnectSocialAccount(
       );
     }
 
+    // For supported platforms, stage encrypted token material to durable revocation job before deletion
+    if (params.externalRevocationSupported) {
+      const revocationJobId = generateUuidV7();
+      await tx.query(
+        `INSERT INTO social_account_revocations (
+           id, workspace_id, social_account_id, platform,
+           encrypted_token, token_iv, token_auth_tag, encryption_key_version,
+           status, phase, created_at, updated_at
+         )
+         SELECT
+           $1, c.workspace_id, c.social_account_id, a.platform,
+           c.access_token_ciphertext, c.access_token_iv, c.access_token_auth_tag, c.encryption_key_version,
+           'pending', 'claimed', $2, $2
+         FROM social_credentials c
+         JOIN social_accounts a ON a.id = c.social_account_id AND a.workspace_id = c.workspace_id
+         WHERE c.workspace_id = $3 AND c.social_account_id = $4;`,
+        [revocationJobId, params.now, params.workspaceId, params.accountId],
+      );
+    }
+
     // Cryptographically erase / delete usable credentials
     await tx.query(SQL_DELETE_SOCIAL_CREDENTIALS, [params.workspaceId, params.accountId]);
 

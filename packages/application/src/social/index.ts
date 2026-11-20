@@ -57,6 +57,14 @@ export {
 } from './maintain-social-accounts.js';
 
 export {
+  processDueSocialAccountRevocations,
+  type ProcessDueRevocationsCommand,
+  type ProcessDueRevocationsDependencies,
+  type ProcessDueRevocationsResult,
+} from './process-due-revocations.js';
+
+export {
+  classifyOperationSafeError,
   CallbackResultForbiddenError,
   CallbackResultGoneError,
   CallbackResultNotFoundError,
@@ -113,5 +121,9 @@ export {
   type SocialCredentialProtectorPort,
   type SocialIdempotencyInput,
   type SocialPersistencePort,
+  type SocialMutationIdempotencyResult,
+  type SocialMutationCompletedResult,
+  type SocialMutationInProgressResult,
+  type ClaimedRevocationJob,
   type UpdateExternalRevocationResultParams,
 } from './ports.js';

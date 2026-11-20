@@ -9,6 +9,7 @@ import {
   refreshSocialAccount,
   maintainDueSocialAccounts,
   disconnectSocialAccount,
+  processDueSocialAccountRevocations,
   SocialAuthExchangeError,
   type SocialAuthAdapter,
 } from '@affiliate-content-os/application';
@@ -185,25 +186,26 @@ describe('Social Lifecycle Concurrency & Barriers Integration', () => {
 
   it('old claim token cannot complete a newer reclaimed lease', async () => {
     const account = await createTestAccount('threads_stale_token', 'Stale Token Claimant');
-    const t0 = new Date('2026-11-20T00:00:00.000Z');
+    const t0 = new Date();
 
     // Worker 1 claims
     const claim1 = await adapter.claimSocialAccountForRefresh({
       workspaceId: wsId,
       accountId: account.id,
       workerId: 'worker-1',
-      leaseDurationSeconds: 5,
+      leaseDurationSeconds: 2,
       now: t0.toISOString(),
     });
     expect(claim1).not.toBeNull();
 
     // Lease expires and Worker 2 claims
+    const tExpired = new Date(t0.getTime() + 5000);
     const claim2 = await adapter.claimSocialAccountForRefresh({
       workspaceId: wsId,
       accountId: account.id,
       workerId: 'worker-2',
       leaseDurationSeconds: 60,
-      now: new Date('2026-11-20T00:00:10.000Z').toISOString(),
+      now: tExpired.toISOString(),
     });
     expect(claim2).not.toBeNull();
 
@@ -215,6 +217,7 @@ describe('Social Lifecycle Concurrency & Barriers Integration', () => {
       accessToken: 'stale_worker1_token',
     });
 
+    const tComplete = new Date(t0.getTime() + 6000);
     await expect(
       adapter.completeSocialAccountRefreshAtomic({
         workspaceId: wsId,
@@ -227,7 +230,7 @@ describe('Social Lifecycle Concurrency & Barriers Integration', () => {
         nextRefreshAt: null,
         derivedStatus: 'active',
         statusReason: 'none',
-        now: new Date('2026-11-20T00:00:12.000Z').toISOString(),
+        now: tComplete.toISOString(),
       }),
     ).rejects.toThrow(SocialAccountVersionMismatchError);
 
@@ -243,7 +246,7 @@ describe('Social Lifecycle Concurrency & Barriers Integration', () => {
       nextRefreshAt: null,
       derivedStatus: 'active',
       statusReason: 'none',
-      now: new Date('2026-11-20T00:00:12.000Z').toISOString(),
+      now: tComplete.toISOString(),
     });
     expect(completed.version).toBe(claim2!.claimedAccountVersion + 1);
   });
@@ -376,7 +379,7 @@ describe('Social Lifecycle Concurrency & Barriers Integration', () => {
       if (claimedOp) {
         await pool.query(
           `UPDATE social_account_operations
-           SET status = 'completed', resource_version = $2, completed_at = NOW()
+           SET status = 'completed', phase = 'terminal', resource_version = $2, completed_at = NOW()
            WHERE id = $1`,
           [claimedOp.operationId, account.version + 1],
         );
@@ -403,6 +406,8 @@ describe('Social Lifecycle Concurrency & Barriers Integration', () => {
       executeMutation,
     });
 
+    expect(call1.status).toBe('completed');
+    if (call1.status !== 'completed') throw new Error('Expected completed');
     expect(call1.replayed).toBe(false);
     expect(call1.account.version).toBe(account.version + 1);
     expect(mutationExecutionCount).toBe(1);
@@ -422,6 +427,8 @@ describe('Social Lifecycle Concurrency & Barriers Integration', () => {
       executeMutation,
     });
 
+    expect(call2.status).toBe('completed');
+    if (call2.status !== 'completed') throw new Error('Expected completed');
     expect(call2.replayed).toBe(true);
     expect(call2.account.version).toBe(call1.account.version);
     expect(mutationExecutionCount).toBe(1); // Mutation was NOT run again!
@@ -466,7 +473,7 @@ describe('Social Lifecycle Concurrency & Barriers Integration', () => {
       if (claimedOp) {
         await pool.query(
           `UPDATE social_account_operations
-           SET status = 'completed', resource_version = $2, completed_at = NOW()
+           SET status = 'completed', phase = 'terminal', resource_version = $2, completed_at = NOW()
            WHERE id = $1`,
           [claimedOp.operationId, account.version + 1],
         );
@@ -516,6 +523,8 @@ describe('Social Lifecycle Concurrency & Barriers Integration', () => {
       executeMutation,
     });
 
+    expect(replayed.status).toBe('completed');
+    if (replayed.status !== 'completed') throw new Error('Expected completed');
     expect(replayed.replayed).toBe(true);
     expect(replayed.account.version).toBe(account.version + 1);
     expect(attempts).toBe(1); // executeMutation was NOT called again!
@@ -582,6 +591,10 @@ describe('Social Lifecycle Concurrency & Barriers Integration', () => {
     // 1. Account is due for refresh
     const dueAccount = await createTestAccount('threads_due_maint', 'Due Maintenance');
     const past = new Date(Date.now() - 3600000).toISOString();
+    await pool.query(
+      `UPDATE social_accounts SET next_refresh_at = NOW() + INTERVAL '10 days', refresh_lease_expires_at = NULL WHERE id <> $1`,
+      [dueAccount.id],
+    );
     await pool.query(`UPDATE social_accounts SET next_refresh_at = $1 WHERE id = $2`, [
       past,
       dueAccount.id,
@@ -717,8 +730,8 @@ describe('Social Lifecycle Concurrency & Barriers Integration', () => {
       clock: { now: () => new Date() },
     };
 
-    // Start disconnect in background
-    const disconnectTask = disconnectSocialAccount(
+    // 1. Immediate local disconnect: does not wait for remote revocation
+    const disconnectResult = await disconnectSocialAccount(
       {
         workspaceId: wsId,
         accountId: account.id,
@@ -728,39 +741,57 @@ describe('Social Lifecycle Concurrency & Barriers Integration', () => {
       deps,
     );
 
-    // Wait a brief moment for the local transaction to commit while remote call is blocked
-    await new Promise((r) => setTimeout(r, 100));
+    expect(disconnectResult.account.status).toBe('disconnected');
+    expect(disconnectResult.account.externalRevocationResult).toBe('pending');
 
-    // CHECK INVARIANTS WHILE BLOCKED ON BARRIER:
-    // 1. Account status is ALREADY disconnected
-    const midAccount = await adapter.findSocialAccountById({
-      workspaceId: wsId,
-      accountId: account.id,
-    });
-    expect(midAccount?.status).toBe('disconnected');
-    expect(midAccount?.externalRevocationAttempted).toBe(true);
-    expect(midAccount?.externalRevocationResult).toBe('pending');
-
-    // 2. Credentials are ALREADY deleted
+    // 2. Credentials are ALREADY deleted locally
     const credRows = await pool.query(
       `SELECT * FROM social_credentials WHERE social_account_id = $1`,
       [account.id],
     );
     expect(credRows.rows).toHaveLength(0);
 
-    // Release the barrier
+    // 3. Revocation job is staged in social_account_revocations
+    const stagedJobs = await pool.query(
+      `SELECT status, phase, encrypted_token FROM social_account_revocations WHERE social_account_id = $1`,
+      [account.id],
+    );
+    expect(stagedJobs.rows).toHaveLength(1);
+    expect(stagedJobs.rows[0]?.status).toBe('pending');
+    expect(stagedJobs.rows[0]?.phase).toBe('claimed');
+    expect(stagedJobs.rows[0]?.encrypted_token).not.toBeNull();
+
+    // 4. Asynchronous worker processes the staged revocation
+    const workerTask = processDueSocialAccountRevocations(
+      { workerId: 'worker-revocations', maxBatchSize: 1 },
+      deps,
+    );
+
+    // Brief delay to ensure worker entered revokeToken barrier
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Release barrier to allow worker to complete provider call
     barrierRelease();
-    const finalResult = await disconnectTask;
+    const workerResult = await workerTask;
 
-    expect(finalResult.account.status).toBe('disconnected');
-    expect(finalResult.account.externalRevocationResult).toBe('succeeded');
+    expect(workerResult.processedCount).toBe(1);
+    expect(workerResult.succeededCount).toBe(1);
 
-    // Confirm DB has updated to 'succeeded'
+    // 5. Account in DB has updated to 'succeeded'
     const finalAccount = await adapter.findSocialAccountById({
       workspaceId: wsId,
       accountId: account.id,
     });
     expect(finalAccount?.externalRevocationResult).toBe('succeeded');
+
+    // 6. Encrypted token material is wiped upon completion
+    const completedJob = await pool.query(
+      `SELECT status, phase, encrypted_token FROM social_account_revocations WHERE social_account_id = $1`,
+      [account.id],
+    );
+    expect(completedJob.rows[0]?.status).toBe('succeeded');
+    expect(completedJob.rows[0]?.phase).toBe('terminal');
+    expect(completedJob.rows[0]?.encrypted_token.length).toBe(0);
   });
 
   it('eligibility: earliest_refresh_at in the future rejected by claim SQL for both manual and due maintenance', async () => {
@@ -771,7 +802,7 @@ describe('Social Lifecycle Concurrency & Barriers Integration', () => {
 
     // Ensure no other accounts in the DB are due
     await pool.query(
-      `UPDATE social_accounts SET next_refresh_at = NOW() + INTERVAL '10 days' WHERE id <> $1`,
+      `UPDATE social_accounts SET next_refresh_at = NOW() + INTERVAL '10 days', refresh_lease_expires_at = NULL WHERE id <> $1`,
       [account.id],
     );
 

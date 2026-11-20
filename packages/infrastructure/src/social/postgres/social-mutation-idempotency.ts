@@ -7,10 +7,13 @@ import {
   type SocialAccountSnapshot,
 } from '@affiliate-content-os/domain';
 import {
+  classifyOperationSafeError,
   generateUuidV7,
   IdempotencyKeyReusedError,
   SocialAccountNotFoundError,
+  SocialAuthOutcomeUnknownError,
   type SocialIdempotencyInput,
+  type SocialMutationIdempotencyResult,
 } from '@affiliate-content-os/application';
 import type { Database } from '../../database/types.js';
 import {
@@ -40,6 +43,7 @@ interface OperationRow {
   request_hash: Buffer;
   operation_type: string;
   status: 'pending' | 'completed' | 'failed';
+  phase: 'claimed' | 'provider_attempt_started' | 'terminal';
   lease_token: string;
   lease_expires_at: Date | string;
   resource_version: number | null;
@@ -78,14 +82,17 @@ export async function executeSocialAccountMutationWithIdempotency(
     readonly accountId: string;
     readonly actorUserId: string;
     readonly idempotency: SocialIdempotencyInput;
-    readonly now: string;
+    readonly now?: string | undefined;
+    readonly leaseDurationSeconds?: number | undefined;
     readonly operationType?: 'refresh' | 'disconnect' | undefined;
     readonly executeMutation: (claimedOp?: {
       readonly operationId: string;
       readonly leaseToken: string;
     }) => Promise<SocialAccountSnapshot>;
   },
-): Promise<{ readonly replayed: boolean; readonly account: SocialAccountSnapshot }> {
+): Promise<SocialMutationIdempotencyResult> {
+  const now = params.now ?? new Date().toISOString();
+  const leaseDurationSeconds = params.leaseDurationSeconds ?? 180;
   const lockKey = computeIdempotencyAdvisoryLockKey(
     params.actorUserId,
     params.idempotency.routeKey,
@@ -115,7 +122,7 @@ export async function executeSocialAccountMutationWithIdempotency(
         throw new IdempotencyKeyReusedError();
       }
 
-      const isExpired = Date.parse(String(op.expires_at)) <= Date.parse(params.now);
+      const isExpired = Date.parse(String(op.expires_at)) <= Date.parse(now);
       if (isExpired) {
         await tx.query('DELETE FROM social_account_operations WHERE id = $1', [op.id]);
       } else if (op.status === 'completed') {
@@ -123,10 +130,12 @@ export async function executeSocialAccountMutationWithIdempotency(
       } else if (op.status === 'failed') {
         // Reclaim failed operation on retry with fresh lease token
         const newLeaseToken = generateUuidV7();
-        const newLeaseExpiresAt = new Date(Date.parse(params.now) + 120_000).toISOString();
+        const newLeaseExpiresAt = new Date(
+          Date.parse(now) + leaseDurationSeconds * 1000,
+        ).toISOString();
         await tx.query(
           `UPDATE social_account_operations
-           SET status = 'pending', lease_token = $2, lease_expires_at = $3,
+           SET status = 'pending', phase = 'claimed', lease_token = $2, lease_expires_at = $3,
                status_code = NULL, error_code = NULL, error_message = NULL,
                completed_at = NULL
            WHERE id = $1`,
@@ -134,16 +143,40 @@ export async function executeSocialAccountMutationWithIdempotency(
         );
         return { kind: 'claimed' as const, opId: op.id, leaseToken: newLeaseToken };
       } else if (op.status === 'pending') {
-        const isLeaseExpired = Date.parse(String(op.lease_expires_at)) <= Date.parse(params.now);
+        const isLeaseExpired = Date.parse(String(op.lease_expires_at)) <= Date.parse(now);
         if (!isLeaseExpired) {
           return { kind: 'in_flight' as const, opId: op.id };
         }
-        // Reclaim expired pending operation with fresh lease token
+        // Lease IS expired!
+        if (op.phase === 'provider_attempt_started') {
+          // Provider call started but process died before local commit! Outcome unknown!
+          // Expiry MUST NOT blindly call the rotating-token endpoint again!
+          await tx.query(
+            `UPDATE social_account_operations
+             SET status = 'failed', phase = 'terminal', status_code = 500,
+                 error_code = 'OUTCOME_UNKNOWN',
+                 error_message = 'Provider request timed out before outcome could be established safely.',
+                 completed_at = $2
+             WHERE id = $1`,
+            [op.id, now],
+          );
+          await tx.query(
+            `UPDATE social_accounts
+             SET status = 'reauth_required', status_reason = 'token_expired',
+                 reauth_required_at = $1, updated_at = GREATEST(updated_at, $1::timestamptz), version = version + 1
+             WHERE workspace_id = $2 AND id = $3 AND status <> 'disconnected'`,
+            [now, params.workspaceId, params.accountId],
+          );
+          return { kind: 'outcome_unknown' as const, opId: op.id };
+        }
+        // Safe to reclaim pre-call work with fresh lease token
         const newLeaseToken = generateUuidV7();
-        const newLeaseExpiresAt = new Date(Date.parse(params.now) + 120_000).toISOString();
+        const newLeaseExpiresAt = new Date(
+          Date.parse(now) + leaseDurationSeconds * 1000,
+        ).toISOString();
         await tx.query(
           `UPDATE social_account_operations
-           SET lease_token = $2, lease_expires_at = $3
+           SET lease_token = $2, lease_expires_at = $3, phase = 'claimed'
            WHERE id = $1`,
           [op.id, newLeaseToken, newLeaseExpiresAt],
         );
@@ -172,7 +205,7 @@ export async function executeSocialAccountMutationWithIdempotency(
     if (existingResult.rowCount !== 0 && existingResult.rows[0]) {
       const rawRow = existingResult.rows[0];
       const snapshot = validateAndMapIdempotencyRow(rawRow);
-      const isExpired = Date.parse(snapshot.expiresAt) <= Date.parse(params.now);
+      const isExpired = Date.parse(snapshot.expiresAt) <= Date.parse(now);
 
       if (isExpired) {
         await tx.query('DELETE FROM idempotency_keys WHERE id = $1', [snapshot.id]);
@@ -190,8 +223,8 @@ export async function executeSocialAccountMutationWithIdempotency(
     // Insert pending operation
     const operationId = generateUuidV7();
     const leaseToken = generateUuidV7();
-    const leaseExpiresAt = new Date(Date.parse(params.now) + 120_000).toISOString();
-    const expiresAt = new Date(Date.parse(params.now) + 86400 * 1000).toISOString();
+    const leaseExpiresAt = new Date(Date.parse(now) + leaseDurationSeconds * 1000).toISOString();
+    const expiresAt = new Date(Date.parse(now) + 86400 * 1000).toISOString();
     const operationType =
       params.operationType ??
       (params.idempotency.routeKey.includes('refresh') ? 'refresh' : 'disconnect');
@@ -207,12 +240,18 @@ export async function executeSocialAccountMutationWithIdempotency(
       operationType,
       leaseToken,
       leaseExpiresAt,
-      params.now,
+      now,
       expiresAt,
     ]);
 
     return { kind: 'claimed' as const, opId: operationId, leaseToken };
   });
+
+  if (claimResult.kind === 'outcome_unknown') {
+    throw new SocialAuthOutcomeUnknownError(
+      'Provider attempt started previously but outcome is unknown. Reauthorization is required.',
+    );
+  }
 
   // If already completed: reload authoritative account state from database
   if (claimResult.kind === 'completed') {
@@ -221,7 +260,11 @@ export async function executeSocialAccountMutationWithIdempotency(
       params.workspaceId,
       params.accountId,
     );
-    return { replayed: true, account };
+    return {
+      status: 'completed',
+      replayed: true,
+      account,
+    };
   }
 
   // If another concurrent request is in flight for the exact same key: converge by waiting briefly
@@ -242,17 +285,19 @@ export async function executeSocialAccountMutationWithIdempotency(
             params.workspaceId,
             params.accountId,
           );
-          return { replayed: true, account };
+          return {
+            status: 'completed',
+            replayed: true,
+            account,
+          };
         }
       }
     }
-    // If still in flight after polling, re-evaluate authoritative account
-    const account = await reloadAuthoritativeAccount(
-      database,
-      params.workspaceId,
-      params.accountId,
-    );
-    return { replayed: true, account };
+    // If still in flight after polling: NEVER return stale account as completed!
+    return {
+      status: 'in_progress',
+      retryAfterSeconds: 2,
+    };
   }
 
   // Phase 2: Winner executes the mutation outside any database transaction.
@@ -261,20 +306,19 @@ export async function executeSocialAccountMutationWithIdempotency(
   try {
     account = await params.executeMutation(claimedOp);
   } catch (err: unknown) {
-    // Record failed operation state so lease doesn't linger
+    const safeErr = classifyOperationSafeError(err);
     await database.query(SQL_FAIL_OPERATION, [
       claimedOp.operationId,
       claimedOp.leaseToken,
       500,
-      'MUTATION_ERROR',
-      err instanceof Error ? err.message : 'Unknown mutation error',
-      params.now,
+      safeErr.errorCode,
+      safeErr.errorMessage,
+      now,
     ]);
     throw err;
   }
 
   // Phase 3: Ensure completion in social_account_operations and idempotency_keys
-  // (In case executeMutation was a mock or did not complete it internally)
   await database.withTransaction(async (tx) => {
     await tx.query(SQL_COMPLETE_OPERATION, [
       claimedOp.operationId,
@@ -286,10 +330,10 @@ export async function executeSocialAccountMutationWithIdempotency(
         version: account.version,
         status: account.status,
       }),
-      params.now,
+      now,
     ]);
 
-    const expiresAt = new Date(Date.parse(params.now) + 86400 * 1000).toISOString();
+    const expiresAt = new Date(Date.parse(now) + 86400 * 1000).toISOString();
     await insertIdempotencyRecord(tx, {
       id: parseIdempotencyKeyId(generateUuidV7()),
       workspaceId: parseWorkspaceId(params.workspaceId),
@@ -302,11 +346,12 @@ export async function executeSocialAccountMutationWithIdempotency(
       resourceType: 'social_account',
       resourceId: params.accountId,
       expiresAt: parseIsoTimestamp(expiresAt),
-      createdAt: parseIsoTimestamp(params.now),
+      createdAt: parseIsoTimestamp(now),
     });
   });
 
   return {
+    status: 'completed',
     replayed: false,
     account,
   };

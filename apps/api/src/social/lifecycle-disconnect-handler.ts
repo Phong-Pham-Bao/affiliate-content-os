@@ -109,6 +109,16 @@ export async function handleDisconnectSocialAccount(
       operationType: 'disconnect',
       executeMutation: executeDisconnect,
     });
+    if (idempResult.status === 'in_progress') {
+      return reply
+        .status(202)
+        .header('Retry-After', String(idempResult.retryAfterSeconds))
+        .type('application/json; charset=utf-8')
+        .send({
+          status: 'in_progress',
+          message: 'Social account operation is currently in progress. Please retry later.',
+        });
+    }
     account = idempResult.account;
   } else {
     account = await executeDisconnect();

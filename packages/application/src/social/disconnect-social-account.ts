@@ -74,91 +74,23 @@ export async function disconnectSocialAccount(
   const supportsRevocation = Boolean(adapter && adapter.supportsRevocation);
   const now = deps.clock.now().toISOString();
 
-  // If revocation is unsupported (e.g. Threads), locally disconnect in one fast atomic transaction
-  if (!supportsRevocation) {
-    const account = await deps.persistence.disconnectSocialAccountAtomic({
-      workspaceId: command.workspaceId,
-      accountId: command.accountId,
-      actorUserId: command.actorUserId,
-      expectedVersion: command.expectedVersion,
-      externalRevocationAttempted: false,
-      externalRevocationSupported: false,
-      externalRevocationResult: 'unsupported',
-      now,
-      auditContext: command.auditContext,
-      operationId: command.operationId,
-    });
-    return { account, alreadyDisconnected: false };
-  }
-
-  // For adapters supporting remote revocation:
-  // 1. Decrypt token material needed for remote call before committing local deletion
-  let decryptedToken: string | null = null;
-  if (adapter?.revokeToken && deps.protector) {
-    try {
-      const encryptedCreds = await deps.persistence.findEncryptedCredentials({
-        workspaceId: command.workspaceId,
-        accountId: command.accountId,
-      });
-      if (encryptedCreds) {
-        const decrypted = deps.protector.decrypt({
-          workspaceId: command.workspaceId,
-          socialAccountId: command.accountId,
-          platform: existing.platform,
-          credentials: encryptedCreds,
-        });
-        decryptedToken = decrypted.accessToken;
-      }
-    } catch {
-      // Proceed with local disconnect, record revocation failure
-    }
-  }
-
-  // 2. CRITICAL: Commit local disconnect FIRST. Credentials deleted, account status=disconnected.
-  // External revocation status is staged as 'pending' (or 'failed' if decryption failed).
-  const initialResult = decryptedToken ? 'pending' : 'failed';
-  const disconnectedAccount = await deps.persistence.disconnectSocialAccountAtomic({
+  // Local-first atomic disconnect:
+  // - If revocation is unsupported (e.g. Threads), disconnects locally without calling provider.
+  // - If revocation is supported, stages encrypted token material for durable worker processing in the same transaction.
+  // - Returns authoritative local disconnected state immediately; never awaits remote provider call in HTTP request.
+  const initialResult = supportsRevocation ? 'pending' : 'unsupported';
+  const account = await deps.persistence.disconnectSocialAccountAtomic({
     workspaceId: command.workspaceId,
     accountId: command.accountId,
     actorUserId: command.actorUserId,
     expectedVersion: command.expectedVersion,
-    externalRevocationAttempted: Boolean(decryptedToken),
-    externalRevocationSupported: true,
+    externalRevocationAttempted: supportsRevocation,
+    externalRevocationSupported: supportsRevocation,
     externalRevocationResult: initialResult,
     now,
     auditContext: command.auditContext,
     operationId: command.operationId,
   });
 
-  // 3. Staged provider revocation call OUTSIDE database transaction
-  // The provider call cannot roll back or reactivate the locally disconnected account
-  if (decryptedToken && adapter?.revokeToken) {
-    let finalResult: 'succeeded' | 'failed';
-    try {
-      const res = await adapter.revokeToken(decryptedToken);
-      finalResult = res.revoked ? 'succeeded' : 'failed';
-    } catch {
-      finalResult = 'failed';
-    }
-
-    if (typeof deps.persistence.updateExternalRevocationResultAtomic === 'function') {
-      await deps.persistence.updateExternalRevocationResultAtomic({
-        workspaceId: command.workspaceId,
-        accountId: command.accountId,
-        externalRevocationResult: finalResult,
-        now: deps.clock.now().toISOString(),
-      });
-    }
-
-    // Return updated account snapshot with truthful externalRevocationResult
-    return {
-      account: {
-        ...disconnectedAccount,
-        externalRevocationResult: finalResult,
-      },
-      alreadyDisconnected: false,
-    };
-  }
-
-  return { account: disconnectedAccount, alreadyDisconnected: false };
+  return { account, alreadyDisconnected: false };
 }

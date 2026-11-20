@@ -25,7 +25,10 @@ import type {
   SocialCredentialProtectorPort,
   SocialPersistencePort,
 } from '@affiliate-content-os/application';
-import { maintainDueSocialAccounts } from '@affiliate-content-os/application';
+import {
+  maintainDueSocialAccounts,
+  processDueSocialAccountRevocations,
+} from '@affiliate-content-os/application';
 import type { SocialPlatform } from '@affiliate-content-os/domain';
 import { processJobExecution } from './job-processor.js';
 
@@ -151,6 +154,24 @@ export async function runWorker(deps: WorkerDependencies): Promise<void> {
     deps.socialMaintenanceEnabled ?? deps.socialConfig?.socialMaintenanceEnabled,
   );
 
+  if (isMaintenanceActive) {
+    if (
+      !deps.socialConfig?.enabled ||
+      !deps.socialPersistence ||
+      !deps.credentialProtector ||
+      !deps.socialAdapters ||
+      deps.socialAdapters.size === 0
+    ) {
+      throw new ConfigurationError([
+        {
+          field: 'SOCIAL_MAINTENANCE_ENABLED',
+          message:
+            'Worker cannot start: social maintenance is enabled but social configuration or dependencies are missing or invalid',
+        },
+      ]);
+    }
+  }
+
   const canRunMaintenance = Boolean(
     isMaintenanceActive &&
     deps.socialConfig?.enabled &&
@@ -191,6 +212,21 @@ export async function runWorker(deps: WorkerDependencies): Promise<void> {
           },
         );
         if (maintResult.processedCount > 0) {
+          hadWork = true;
+        }
+
+        const revokeResult = await processDueSocialAccountRevocations(
+          { workerId, maxBatchSize: 5 },
+          {
+            persistence: deps.socialPersistence,
+            protector: deps.credentialProtector,
+            adapters: deps.socialAdapters,
+            enabled: true,
+            socialKillSwitchActive: deps.socialConfig?.socialKillSwitchActive,
+            clock: { now: () => new Date() },
+          },
+        );
+        if (revokeResult.processedCount > 0) {
           hadWork = true;
         }
       } catch {

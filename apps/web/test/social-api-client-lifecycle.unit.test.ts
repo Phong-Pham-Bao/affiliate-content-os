@@ -83,7 +83,7 @@ describe('Social API Client - Lifecycle Operations', () => {
       }),
     } as unknown as Response);
 
-    const result = await refreshSocialAccount(workspaceId, accountId);
+    const result = (await refreshSocialAccount(workspaceId, accountId)) as SocialAccountDTO;
     expect(result.version).toBe(3);
     expect(result.lastRefreshedAt).toBe('2026-11-19T10:00:00.000Z');
     expect(fetch).toHaveBeenCalledWith(
@@ -110,7 +110,7 @@ describe('Social API Client - Lifecycle Operations', () => {
       }),
     } as unknown as Response);
 
-    const result = await disconnectSocialAccount(workspaceId, accountId, 2);
+    const result = (await disconnectSocialAccount(workspaceId, accountId, 2)) as SocialAccountDTO;
     expect(result.status).toBe('disconnected');
     expect(result.externalRevocationResult).toBe('unsupported');
     expect(fetch).toHaveBeenCalledWith(
@@ -124,6 +124,24 @@ describe('Social API Client - Lifecycle Operations', () => {
         body: JSON.stringify({ expectedVersion: 2 }),
       }),
     );
+  });
+
+  it('refreshSocialAccount handles 202 in-progress truthful response', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce({
+      ok: true,
+      status: 202,
+      headers: new Headers({ 'content-type': 'application/json', 'retry-after': '2' }),
+      json: async () => ({
+        status: 'in_progress',
+        message: 'Social account operation is currently in progress. Please retry later.',
+      }),
+    } as unknown as Response);
+
+    const result = (await refreshSocialAccount(workspaceId, accountId)) as SocialAccountDTO;
+    expect(result).toEqual({
+      status: 'in_progress',
+      message: 'Social account operation is currently in progress. Please retry later.',
+    });
   });
 
   it('disconnectSocialAccount handles 412 Precondition Failed properly', async () => {

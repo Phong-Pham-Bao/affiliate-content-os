@@ -40,6 +40,16 @@ export const reconnectSocialAccountRouteSchema: FastifySchema = {
   },
 };
 
+export const operationInProgressSchema = {
+  type: 'object',
+  properties: {
+    status: { type: 'string', const: 'in_progress' },
+    message: { type: 'string' },
+  },
+  required: ['status', 'message'],
+  additionalProperties: false,
+} as const;
+
 export const refreshSocialAccountRouteSchema: FastifySchema = {
   params: {
     type: 'object',
@@ -60,6 +70,7 @@ export const refreshSocialAccountRouteSchema: FastifySchema = {
   },
   response: {
     200: socialAccountSchema,
+    202: operationInProgressSchema,
   },
 };
 
@@ -91,5 +102,6 @@ export const disconnectSocialAccountRouteSchema: FastifySchema = {
   },
   response: {
     200: socialAccountSchema,
+    202: operationInProgressSchema,
   },
 };

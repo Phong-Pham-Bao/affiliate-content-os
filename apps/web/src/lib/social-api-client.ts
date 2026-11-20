@@ -2,6 +2,7 @@ import type {
   SocialAccountDTO,
   SocialAuthorizeResponseDTO,
   SocialCallbackResultDTO,
+  SocialOperationInProgressDTO,
   SocialPlatform,
 } from '../types/social.js';
 
@@ -149,7 +150,7 @@ export async function beginSocialReconnect(
 export async function refreshSocialAccount(
   workspaceId: string,
   accountId: string,
-): Promise<SocialAccountDTO> {
+): Promise<SocialAccountDTO | SocialOperationInProgressDTO> {
   const idempotencyKey = crypto.randomUUID();
   const res = await fetch(
     `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/social-accounts/${encodeURIComponent(accountId)}/refresh`,
@@ -161,14 +162,14 @@ export async function refreshSocialAccount(
       },
     },
   );
-  return handleApiResponse<SocialAccountDTO>(res);
+  return handleApiResponse<SocialAccountDTO | SocialOperationInProgressDTO>(res);
 }
 
 export async function disconnectSocialAccount(
   workspaceId: string,
   accountId: string,
   expectedVersion: number,
-): Promise<SocialAccountDTO> {
+): Promise<SocialAccountDTO | SocialOperationInProgressDTO> {
   const idempotencyKey = crypto.randomUUID();
   const res = await fetch(
     `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/social-accounts/${encodeURIComponent(accountId)}`,
@@ -183,5 +184,5 @@ export async function disconnectSocialAccount(
       body: JSON.stringify({ expectedVersion }),
     },
   );
-  return handleApiResponse<SocialAccountDTO>(res);
+  return handleApiResponse<SocialAccountDTO | SocialOperationInProgressDTO>(res);
 }

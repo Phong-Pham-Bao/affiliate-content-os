@@ -7,6 +7,7 @@ import {
   type OAuthCallbackResultSnapshot,
   type OAuthTransactionSnapshot,
   type SocialAccountSnapshot,
+  type SocialPlatform,
 } from '@affiliate-content-os/domain';
 import {
   CallbackResultForbiddenError,
@@ -15,6 +16,7 @@ import {
   OAuthTransactionExpiredError,
   OAuthTransactionNotFoundError,
   OAuthTransactionReplayedError,
+  type ClaimedRevocationJob,
   type ClaimNextDueSocialAccountParams,
   type ClaimOAuthTransactionParams,
   type ClaimSocialAccountForRefreshParams,
@@ -33,6 +35,7 @@ import {
   type SaveOAuthTransactionWithIdempotencyParams,
   type SaveOAuthTransactionWithIdempotencyResult,
   type SocialIdempotencyInput,
+  type SocialMutationIdempotencyResult,
   type SocialPersistencePort,
 } from '@affiliate-content-os/application';
 import {
@@ -72,7 +75,30 @@ import {
   executeUpdateExternalRevocationResult,
 } from './social-disconnect-transaction.js';
 import { executeSocialAccountMutationWithIdempotency } from './social-mutation-idempotency.js';
-import { SQL_FIND_CREDENTIALS_FOR_REFRESH } from './postgres-social-lifecycle-statements.js';
+import {
+  SQL_CLAIM_NEXT_DUE_REVOCATION_JOB,
+  SQL_COMPLETE_REVOCATION_JOB,
+  SQL_FAIL_REVOCATION_JOB,
+  SQL_FIND_CREDENTIALS_FOR_REFRESH,
+  SQL_MARK_OPERATION_ATTEMPT_STARTED,
+  SQL_MARK_REVOCATION_ATTEMPT_STARTED,
+  SQL_UPDATE_EXTERNAL_REVOCATION_RESULT,
+} from './postgres-social-lifecycle-statements.js';
+
+interface RevocationJobRow {
+  id: string;
+  workspace_id: string;
+  social_account_id: string;
+  platform: SocialPlatform;
+  encrypted_token: Buffer;
+  token_iv: Buffer;
+  token_auth_tag: Buffer;
+  encryption_key_version: string;
+  status: 'pending' | 'in_progress';
+  phase: 'claimed' | 'provider_attempt_started' | 'terminal';
+  lease_token: string;
+  attempt_count: number;
+}
 
 export class PostgresSocialPersistenceAdapter implements SocialPersistencePort {
   public constructor(private readonly database: Database) {}
@@ -431,18 +457,115 @@ export class PostgresSocialPersistenceAdapter implements SocialPersistencePort {
     return executeUpdateExternalRevocationResult(this.database, params);
   }
 
+  public async markOperationAttemptStarted(params: {
+    readonly operationId: string;
+    readonly leaseToken: string;
+  }): Promise<void> {
+    await this.database.query(SQL_MARK_OPERATION_ATTEMPT_STARTED, [
+      params.operationId,
+      params.leaseToken,
+    ]);
+  }
+
+  public async claimNextDueSocialAccountRevocationJob(params: {
+    readonly now: string;
+    readonly workerId: string;
+    readonly leaseDurationSeconds: number;
+    readonly claimToken: string;
+  }): Promise<ClaimedRevocationJob | null> {
+    const res = await this.database.query<RevocationJobRow>(SQL_CLAIM_NEXT_DUE_REVOCATION_JOB, [
+      params.now,
+      params.leaseDurationSeconds,
+      params.claimToken,
+      params.workerId,
+    ]);
+    if (res.rows.length === 0) return null;
+    const row = res.rows[0]!;
+    return {
+      id: row.id,
+      workspaceId: row.workspace_id,
+      socialAccountId: row.social_account_id,
+      platform: row.platform,
+      encryptedToken: row.encrypted_token,
+      tokenIv: row.token_iv,
+      tokenAuthTag: row.token_auth_tag,
+      encryptionKeyVersion: row.encryption_key_version,
+      status: row.status,
+      phase: row.phase,
+      leaseToken: row.lease_token,
+      attemptCount: row.attempt_count,
+    };
+  }
+
+  public async markSocialAccountRevocationAttemptStarted(params: {
+    readonly jobId: string;
+    readonly leaseToken: string;
+    readonly now: string;
+  }): Promise<void> {
+    await this.database.query(SQL_MARK_REVOCATION_ATTEMPT_STARTED, [
+      params.jobId,
+      params.leaseToken,
+      params.now,
+    ]);
+  }
+
+  public async completeSocialAccountRevocationJobAtomic(params: {
+    readonly jobId: string;
+    readonly leaseToken: string;
+    readonly workspaceId: string;
+    readonly accountId: string;
+    readonly now: string;
+  }): Promise<void> {
+    await this.database.withTransaction(async (tx) => {
+      await tx.query(SQL_COMPLETE_REVOCATION_JOB, [params.jobId, params.leaseToken, params.now]);
+      await tx.query(SQL_UPDATE_EXTERNAL_REVOCATION_RESULT, [
+        params.workspaceId,
+        params.accountId,
+        'succeeded',
+        params.now,
+      ]);
+    });
+  }
+
+  public async failSocialAccountRevocationJobAtomic(params: {
+    readonly jobId: string;
+    readonly leaseToken: string;
+    readonly workspaceId: string;
+    readonly accountId: string;
+    readonly errorCode: string;
+    readonly errorMessage: string;
+    readonly now: string;
+  }): Promise<void> {
+    await this.database.withTransaction(async (tx) => {
+      await tx.query(SQL_FAIL_REVOCATION_JOB, [
+        params.jobId,
+        params.leaseToken,
+        params.errorCode,
+        params.errorMessage,
+        params.now,
+      ]);
+      await tx.query(SQL_UPDATE_EXTERNAL_REVOCATION_RESULT, [
+        params.workspaceId,
+        params.accountId,
+        'failed',
+        params.now,
+      ]);
+    });
+  }
+
   public async executeMutationWithIdempotency(params: {
     readonly workspaceId: string;
     readonly accountId: string;
     readonly actorUserId: string;
     readonly idempotency: SocialIdempotencyInput;
-    readonly now: string;
+    readonly now?: string | undefined;
+    readonly leaseDurationSeconds?: number | undefined;
     readonly operationType?: 'refresh' | 'disconnect' | undefined;
     readonly executeMutation: (claimedOp?: {
       readonly operationId: string;
       readonly leaseToken: string;
     }) => Promise<SocialAccountSnapshot>;
-  }): Promise<{ readonly replayed: boolean; readonly account: SocialAccountSnapshot }> {
+  }): Promise<SocialMutationIdempotencyResult> {
     return executeSocialAccountMutationWithIdempotency(this.database, params);
   }
 }

@@ -50,7 +50,7 @@ describe('DefaultHttpTransport', () => {
 
   it('redacts access_token and client_secret from thrown network error messages', async () => {
     const sensitiveUrl =
-      'https://graph.threads.com/access_token?grant_type=th_exchange_token&client_secret=secret_xyz123&access_token=token_abc456';
+      'https://graph.threads.com/access_token?grant_type=th_exchange_token&client_secret=secret_xyz123&access_token=token_abc456&input_token=user_tok_789';
     const mockFetch = vi
       .fn()
       .mockRejectedValue(new Error(`Failed to fetch ${sensitiveUrl}: connection refused`));
@@ -65,8 +65,10 @@ describe('DefaultHttpTransport', () => {
       const msg = (err as Error).message;
       expect(msg).not.toContain('secret_xyz123');
       expect(msg).not.toContain('token_abc456');
+      expect(msg).not.toContain('user_tok_789');
       expect(msg).toContain('client_secret=[REDACTED]');
       expect(msg).toContain('access_token=[REDACTED]');
+      expect(msg).toContain('input_token=[REDACTED]');
       expect((err as Error).cause).toBeUndefined();
     }
 

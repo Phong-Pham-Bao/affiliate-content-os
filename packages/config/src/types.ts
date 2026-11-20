@@ -156,6 +156,8 @@ export type SocialKeyProvider = (typeof ALLOWED_SOCIAL_KEY_PROVIDERS)[number];
 export const DEFAULT_THREADS_AUTH_BASE_URL = 'https://www.threads.com';
 export const DEFAULT_THREADS_API_BASE_URL = 'https://graph.threads.com';
 export const DEFAULT_THREADS_API_VERSION = 'v1.0';
+export const DEFAULT_META_GRAPH_BASE_URL = 'https://graph.facebook.com';
+export const DEFAULT_META_GRAPH_VERSION = 'v21.0';
 export const DEFAULT_THREADS_HTTP_TIMEOUT_MS = 10000;
 export const DEFAULT_CAPABILITY_FRESHNESS_MAX_AGE_SECONDS = 7 * 24 * 3600;
 export const ALLOWED_THREADS_APP_REVIEW_STATUSES = ['development', 'approved'] as const;
@@ -176,6 +178,9 @@ export interface SocialConfig {
   readonly threadsAuthBaseUrl: string;
   readonly threadsApiBaseUrl: string;
   readonly threadsApiVersion: string;
+  readonly metaGraphBaseUrl: string;
+  readonly metaGraphVersion: string;
+  readonly threadsAppAccessToken: string | null;
   readonly threadsAppReviewStatus: ThreadsAppReviewStatus;
   readonly threadsHttpTimeoutMs: number;
   readonly socialKillSwitchActive: boolean;
@@ -199,6 +204,9 @@ export interface RedactedSocialConfigMetadata {
   readonly threadsAuthBaseUrl: string;
   readonly threadsApiBaseUrl: string;
   readonly threadsApiVersion: string;
+  readonly metaGraphBaseUrl: string;
+  readonly metaGraphVersion: string;
+  readonly hasThreadsAppAccessToken: boolean;
   readonly threadsAppReviewStatus: ThreadsAppReviewStatus;
   readonly threadsHttpTimeoutMs: number;
   readonly socialKillSwitchActive: boolean;

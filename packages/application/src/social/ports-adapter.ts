@@ -57,6 +57,7 @@ export interface RevokeTokenResult {
 
 export interface InspectAccountInput {
   readonly accessToken: string;
+  readonly expectedProviderAccountId?: string | undefined;
 }
 
 export interface InspectAccountResult {

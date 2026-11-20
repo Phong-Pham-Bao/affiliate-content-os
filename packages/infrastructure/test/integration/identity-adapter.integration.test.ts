@@ -369,6 +369,7 @@ describe('Real PostgreSQL Identity Adapter & Concurrency Integration Suite', () 
       'schema_migrations',
       'script_generation_units',
       'social_account_operations',
+      'social_account_revocations',
       'social_accounts',
       'social_credentials',
       'users',

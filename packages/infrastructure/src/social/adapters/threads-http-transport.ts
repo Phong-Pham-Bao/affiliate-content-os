@@ -19,10 +19,12 @@ export interface HttpTransport {
 const MAX_RESPONSE_BYTES = 65536; // 64KB safe bound for JSON responses
 
 export function redactProviderUrlSecrets(text: string): string {
-  return text.replace(
-    /([?&](?:access_token|client_secret|code|state)=)[^&\s"']+/gi,
-    '$1[REDACTED]',
-  );
+  return text
+    .replace(
+      /([?&](?:access_token|input_token|client_secret|code|state)=)[^&\s"']+/gi,
+      '$1[REDACTED]',
+    )
+    .replace(/(Authorization:\s*(?:Bearer\s+)?)[^\s,"']+/gi, '$1[REDACTED]');
 }
 
 export class DefaultHttpTransport implements HttpTransport {

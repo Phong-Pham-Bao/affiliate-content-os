@@ -125,6 +125,13 @@ export function ConnectionsPanel({ workspaceId, userRole }: ConnectionsPanelProp
     if (!isOwner) return;
     try {
       const updated = await refreshSocialAccount(workspaceId, account.id);
+      if ('status' in updated && updated.status === 'in_progress') {
+        setCallbackBanner({
+          status: 'success',
+          message: updated.message,
+        });
+        return;
+      }
       setAccounts((prev) => prev.map((a) => (a.id === updated.id ? updated : a)));
       setCallbackBanner({
         status: 'success',
@@ -140,6 +147,13 @@ export function ConnectionsPanel({ workspaceId, userRole }: ConnectionsPanelProp
     if (!isOwner) return;
     try {
       const updated = await disconnectSocialAccount(workspaceId, account.id, account.version);
+      if ('status' in updated && updated.status === 'in_progress') {
+        setCallbackBanner({
+          status: 'success',
+          message: updated.message,
+        });
+        return;
+      }
       setAccounts((prev) => prev.map((a) => (a.id === updated.id ? updated : a)));
       setCallbackBanner({
         status: 'success',

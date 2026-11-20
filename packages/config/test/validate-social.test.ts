@@ -246,4 +246,54 @@ describe('validate-social configuration', () => {
     expect(config.threadsConnectionKillSwitchActive).toBe(true);
     expect(config.threadsRefreshKillSwitchActive).toBe(true);
   });
+
+  it('validates Meta Graph base URL and version with secure defaults', () => {
+    const config = loadSocialConfig({});
+    expect(config.metaGraphBaseUrl).toBe('https://graph.facebook.com');
+    expect(config.metaGraphVersion).toBe('v21.0');
+    expect(config.threadsAppAccessToken).toBeNull();
+
+    const custom = loadSocialConfig({
+      META_GRAPH_BASE_URL: 'https://graph.facebook.com',
+      META_GRAPH_VERSION: 'v21.0',
+      THREADS_APP_ACCESS_TOKEN: 'test-app-token',
+    });
+    expect(custom.metaGraphBaseUrl).toBe('https://graph.facebook.com');
+    expect(custom.metaGraphVersion).toBe('v21.0');
+    expect(custom.threadsAppAccessToken).toBe('test-app-token');
+
+    const redacted = getRedactedSocialConfigMetadata(custom);
+    expect(redacted.metaGraphBaseUrl).toBe('https://graph.facebook.com');
+    expect(redacted.metaGraphVersion).toBe('v21.0');
+    expect(redacted.hasThreadsAppAccessToken).toBe(true);
+    // Never reveals raw token
+    expect(
+      (redacted as unknown as Record<string, unknown>)['threadsAppAccessToken'],
+    ).toBeUndefined();
+  });
+
+  it('rejects unapproved host for Meta Graph in production', () => {
+    expect(() =>
+      loadSocialConfig(
+        {
+          META_GRAPH_BASE_URL: 'https://evil.example.com',
+        },
+        'production',
+      ),
+    ).toThrow(ConfigurationError);
+  });
+
+  it('rejects invalid format for Meta Graph version', () => {
+    expect(() =>
+      loadSocialConfig({
+        META_GRAPH_VERSION: '21.0',
+      }),
+    ).toThrow(ConfigurationError);
+
+    expect(() =>
+      loadSocialConfig({
+        META_GRAPH_VERSION: 'v21',
+      }),
+    ).toThrow(ConfigurationError);
+  });
 });

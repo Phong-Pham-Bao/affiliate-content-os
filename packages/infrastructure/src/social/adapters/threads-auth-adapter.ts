@@ -22,6 +22,9 @@ export interface ThreadsSocialAuthAdapterOptions {
   readonly authBaseUrl?: string | undefined;
   readonly apiBaseUrl?: string | undefined;
   readonly apiVersion?: string | undefined;
+  readonly metaGraphBaseUrl?: string | undefined;
+  readonly metaGraphVersion?: string | undefined;
+  readonly appAccessToken?: string | undefined;
   readonly timeoutMs?: number | undefined;
   readonly environment?: SocialAccountEnvironment | undefined;
   readonly transport?: HttpTransport | undefined;
@@ -49,6 +52,9 @@ export class ThreadsSocialAuthAdapter implements SocialAuthAdapter {
   private readonly authBaseUrl: string;
   private readonly apiBaseUrl: string;
   private readonly apiVersion: string;
+  private readonly metaGraphBaseUrl: string;
+  private readonly metaGraphVersion: string;
+  private cachedAppAccessToken: string | null;
   private readonly timeoutMs: number;
   private readonly environment: SocialAccountEnvironment;
   private readonly transport: HttpTransport;
@@ -59,9 +65,144 @@ export class ThreadsSocialAuthAdapter implements SocialAuthAdapter {
     this.authBaseUrl = options.authBaseUrl ?? 'https://www.threads.com';
     this.apiBaseUrl = options.apiBaseUrl ?? 'https://graph.threads.com';
     this.apiVersion = options.apiVersion ?? 'v1.0';
+    this.metaGraphBaseUrl = options.metaGraphBaseUrl ?? 'https://graph.facebook.com';
+    this.metaGraphVersion = options.metaGraphVersion ?? 'v21.0';
+    this.cachedAppAccessToken = options.appAccessToken ?? null;
     this.timeoutMs = options.timeoutMs ?? 10000;
     this.environment = options.environment ?? 'production';
     this.transport = options.transport ?? new DefaultHttpTransport(this.timeoutMs);
+  }
+
+  private async getAppAccessToken(): Promise<string> {
+    if (this.cachedAppAccessToken) {
+      return this.cachedAppAccessToken;
+    }
+    const tokenUrl = `${this.metaGraphBaseUrl}/oauth/access_token?client_id=${encodeURIComponent(this.appId)}&client_secret=${encodeURIComponent(this.appSecret)}&grant_type=client_credentials`;
+    let res;
+    try {
+      res = await this.transport.fetch({
+        method: 'GET',
+        url: tokenUrl,
+        headers: { Accept: 'application/json' },
+        timeoutMs: this.timeoutMs,
+      });
+    } catch (err: unknown) {
+      if (err instanceof Error && err.message.includes('timed out')) {
+        throw new SocialAuthOutcomeUnknownError();
+      }
+      throw new SocialAuthExchangeError('Network error while requesting app access token');
+    }
+
+    if (res.status !== 200) {
+      throw classifyThreadsError(res.status, res.body, false, res.headers);
+    }
+
+    let data: { access_token?: unknown };
+    try {
+      data = JSON.parse(res.body);
+    } catch {
+      throw new SocialAuthExchangeError('Invalid JSON from app access token endpoint');
+    }
+
+    if (typeof data.access_token !== 'string' || data.access_token.length === 0) {
+      throw new SocialAuthExchangeError(
+        'Provider omitted access_token during client_credentials flow',
+      );
+    }
+    this.cachedAppAccessToken = String(data.access_token);
+    return this.cachedAppAccessToken;
+  }
+
+  private async inspectTokenWithMetaDebug(
+    userToken: string,
+    expectedUserId: string,
+  ): Promise<{ readonly grantedScopes: readonly string[]; readonly isValid: boolean }> {
+    const appToken = await this.getAppAccessToken();
+    const debugUrl = `${this.metaGraphBaseUrl}/${this.metaGraphVersion}/debug_token?input_token=${encodeURIComponent(userToken)}&access_token=${encodeURIComponent(appToken)}`;
+    let res;
+    try {
+      res = await this.transport.fetch({
+        method: 'GET',
+        url: debugUrl,
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${appToken}`,
+        },
+        timeoutMs: this.timeoutMs,
+      });
+    } catch (err: unknown) {
+      if (err instanceof Error && err.message.includes('timed out')) {
+        throw new SocialAuthOutcomeUnknownError();
+      }
+      throw new SocialAuthExchangeError('Network error during debug_token inspection');
+    }
+
+    if (res.status !== 200) {
+      throw classifyThreadsError(res.status, res.body, false, res.headers);
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(res.body);
+    } catch {
+      throw new SocialAuthExchangeError('Invalid JSON from Meta debug_token endpoint');
+    }
+
+    if (
+      !parsed ||
+      typeof parsed !== 'object' ||
+      !('data' in parsed) ||
+      !parsed.data ||
+      typeof parsed.data !== 'object'
+    ) {
+      throw new SocialAuthExchangeError(
+        'Malformed response wrapper from Meta debug_token endpoint',
+      );
+    }
+
+    const data = parsed.data as Record<string, unknown>;
+    if (data.is_valid !== true) {
+      return { grantedScopes: [], isValid: false };
+    }
+
+    const rawAppId = String(data.app_id ?? '').trim();
+    if (!rawAppId || rawAppId !== this.appId) {
+      throw new SocialAuthExchangeError('Meta debug_token app_id does not match configured app_id');
+    }
+
+    const rawUserId = String(data.user_id ?? '').trim();
+    if (!rawUserId || rawUserId !== expectedUserId) {
+      throw new SocialAuthExchangeError(
+        'Meta debug_token user_id does not match provider account ID',
+      );
+    }
+
+    if (
+      data.expires_at !== undefined &&
+      data.expires_at !== null &&
+      (typeof data.expires_at !== 'number' ||
+        !Number.isSafeInteger(data.expires_at) ||
+        data.expires_at <= 0)
+    ) {
+      throw new SocialAuthExchangeError('Invalid expiry bounds in Meta debug_token response');
+    }
+
+    const grantedScopes: string[] = [];
+    if (Array.isArray(data.scopes)) {
+      const items = data.scopes.slice(0, 50);
+      for (const scope of items) {
+        if (typeof scope === 'string' && scope.length <= 64 && !hasControlCharacters(scope)) {
+          if (
+            REQUIRED_SCOPES.includes(scope as (typeof REQUIRED_SCOPES)[number]) &&
+            !grantedScopes.includes(scope)
+          ) {
+            grantedScopes.push(scope);
+          }
+        }
+      }
+    }
+
+    return { grantedScopes: Object.freeze(grantedScopes), isValid: true };
   }
 
   public async createAuthorizationUrl(
@@ -250,47 +391,29 @@ export class ThreadsSocialAuthAdapter implements SocialAuthAdapter {
       isRecoverablePartial = true;
     }
 
-    // 4. Granted scopes determination: start empty, NEVER fabricate
+    // 4. Granted scopes determination via official Meta debug_token contract
     const grantedScopes: string[] = [];
     let grantsVerified = false;
 
     if (!isRecoverablePartial && profileVerified) {
       try {
-        const permUrl = `${this.apiBaseUrl}/${this.apiVersion}/me/permissions?access_token=${encodeURIComponent(longLivedToken)}`;
-        const permRes = await this.transport.fetch({
-          method: 'GET',
-          url: permUrl,
-          headers: { Accept: 'application/json' },
-          timeoutMs: this.timeoutMs,
-        });
-
-        if (permRes.status === 200) {
-          const permData = JSON.parse(permRes.body);
-          if (Array.isArray(permData.data)) {
-            const items = permData.data.slice(0, 50);
-            for (const item of items) {
-              if (
-                item &&
-                item.status === 'granted' &&
-                typeof item.permission === 'string' &&
-                item.permission.length <= 64 &&
-                !hasControlCharacters(item.permission)
-              ) {
-                if (
-                  REQUIRED_SCOPES.includes(item.permission as (typeof REQUIRED_SCOPES)[number]) &&
-                  !grantedScopes.includes(item.permission)
-                ) {
-                  grantedScopes.push(item.permission);
-                }
-              }
-            }
-            grantsVerified =
-              grantedScopes.includes('threads_basic') &&
-              grantedScopes.includes('threads_content_publish');
+        const debugResult = await this.inspectTokenWithMetaDebug(longLivedToken, providerAccountId);
+        if (debugResult.isValid) {
+          for (const s of debugResult.grantedScopes) {
+            grantedScopes.push(s);
           }
+          grantsVerified =
+            grantedScopes.includes('threads_basic') &&
+            grantedScopes.includes('threads_content_publish');
         }
-      } catch {
-        // If inspection fails, do not fabricate permissions
+      } catch (err: unknown) {
+        if (
+          err instanceof SocialAuthExchangeError &&
+          (err.message.includes('does not match') || err.message.includes('Invalid expiry bounds'))
+        ) {
+          throw err;
+        }
+        // If inspection fails or is unavailable, do not fabricate permissions
       }
     }
 
@@ -374,6 +497,12 @@ export class ThreadsSocialAuthAdapter implements SocialAuthAdapter {
       throw new SocialAuthExchangeError('Invalid provider profile user ID');
     }
 
+    if (input.expectedProviderAccountId && rawId !== input.expectedProviderAccountId) {
+      throw new SocialAuthExchangeError(
+        'Provider profile user ID does not match expected account ID',
+      );
+    }
+
     const validName =
       typeof profileData.name === 'string' && profileData.name.trim().length > 0
         ? profileData.name.trim().slice(0, 128)
@@ -385,41 +514,15 @@ export class ThreadsSocialAuthAdapter implements SocialAuthAdapter {
     const displayName = validName ?? validUsername ?? rawId;
     const handle = validUsername ? `@${validUsername}` : null;
 
-    // 2. Permissions inspection
-    const permUrl = `${this.apiBaseUrl}/${this.apiVersion}/me/permissions?access_token=${encodeURIComponent(input.accessToken)}`;
-    const permRes = await this.transport.fetch({
-      method: 'GET',
-      url: permUrl,
-      headers: { Accept: 'application/json' },
-      timeoutMs: this.timeoutMs,
-    });
-
-    if (permRes.status !== 200) {
-      throw classifyThreadsError(permRes.status, permRes.body, false, permRes.headers);
+    // 2. Official Meta debug_token inspection
+    const debugResult = await this.inspectTokenWithMetaDebug(input.accessToken, rawId);
+    if (!debugResult.isValid) {
+      throw new SocialAuthExchangeError(
+        'Token is not valid according to Meta debug_token endpoint',
+      );
     }
 
-    const permData = JSON.parse(permRes.body);
-    const grantedScopes: string[] = [];
-    if (Array.isArray(permData.data)) {
-      const items = permData.data.slice(0, 50);
-      for (const item of items) {
-        if (
-          item &&
-          item.status === 'granted' &&
-          typeof item.permission === 'string' &&
-          item.permission.length <= 64 &&
-          !hasControlCharacters(item.permission)
-        ) {
-          if (
-            REQUIRED_SCOPES.includes(item.permission as (typeof REQUIRED_SCOPES)[number]) &&
-            !grantedScopes.includes(item.permission)
-          ) {
-            grantedScopes.push(item.permission);
-          }
-        }
-      }
-    }
-
+    const grantedScopes = [...debugResult.grantedScopes];
     const capabilities = {
       canPublishText:
         grantedScopes.includes('threads_basic') &&

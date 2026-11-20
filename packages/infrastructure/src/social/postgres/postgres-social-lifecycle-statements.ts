@@ -27,7 +27,7 @@ export const SQL_CLAIM_REFRESH_LEASE = `
       refresh_lease_expires_at = ($3::timestamptz + ($4 * interval '1 second')),
       refresh_lease_worker_id = $5,
       refresh_lease_token = $6,
-      updated_at = $3
+      updated_at = GREATEST(s.updated_at, $3::timestamptz)
   WHERE s.workspace_id = $1
     AND s.id = $2
     AND s.status <> 'disconnected'
@@ -47,7 +47,7 @@ export const SQL_RELEASE_REFRESH_LEASE = `
       refresh_lease_expires_at = NULL,
       refresh_lease_worker_id = NULL,
       refresh_lease_token = NULL,
-      updated_at = $3
+      updated_at = GREATEST(updated_at, $3::timestamptz)
   WHERE workspace_id = $1
     AND id = $2
     AND refresh_lease_token = $4
@@ -79,7 +79,7 @@ export const SQL_COMPLETE_ACCOUNT_REFRESH = `
       refresh_lease_worker_id = NULL,
       refresh_lease_token = NULL,
       refresh_consecutive_failures = 0,
-      updated_at = $7,
+      updated_at = GREATEST(updated_at, $7::timestamptz),
       version = version + 1
   WHERE workspace_id = $1
     AND id = $2
@@ -104,7 +104,7 @@ export const SQL_COMPLETE_CREDENTIALS_REFRESH = `
       token_kind = 'long_lived',
       refresh_attempt_count = refresh_attempt_count + 1,
       earliest_refresh_at = ($11::timestamptz + interval '24 hours'),
-      updated_at = $11,
+      updated_at = GREATEST(updated_at, $11::timestamptz),
       version = version + 1
   WHERE workspace_id = $1 AND social_account_id = $2 AND version = $12;
 `;
@@ -120,7 +120,7 @@ export const SQL_RECORD_FAILED_ACCOUNT_REFRESH = `
       refresh_lease_worker_id = NULL,
       refresh_lease_token = NULL,
       refresh_consecutive_failures = refresh_consecutive_failures + 1,
-      updated_at = $7,
+      updated_at = GREATEST(updated_at, $7::timestamptz),
       version = version + 1
   WHERE workspace_id = $1
     AND id = $2
@@ -184,7 +184,7 @@ export const SQL_DELETE_SOCIAL_CREDENTIALS = `
 
 export const SQL_FIND_OPERATION_FOR_UPDATE = `
   SELECT id, workspace_id, social_account_id, principal_id, route_key,
-         key_hash, request_hash, operation_type, status, lease_token,
+         key_hash, request_hash, operation_type, status, phase, lease_token,
          lease_expires_at, resource_version, status_code, error_code,
          error_message, response_json, created_at, completed_at, expires_at
   FROM social_account_operations
@@ -198,29 +198,104 @@ export const SQL_FIND_OPERATION_FOR_UPDATE = `
 export const SQL_INSERT_PENDING_OPERATION = `
   INSERT INTO social_account_operations (
     id, workspace_id, social_account_id, principal_id, route_key,
-    key_hash, request_hash, operation_type, status, lease_token,
+    key_hash, request_hash, operation_type, status, phase, lease_token,
     lease_expires_at, created_at, expires_at
   ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, 'pending', $9, $10, $11, $12
+    $1, $2, $3, $4, $5, $6, $7, $8, 'pending', 'claimed', $9, $10, $11, $12
   ) RETURNING *;
+`;
+
+export const SQL_MARK_OPERATION_ATTEMPT_STARTED = `
+  UPDATE social_account_operations
+  SET phase = 'provider_attempt_started'
+  WHERE id = $1 AND lease_token = $2 AND status = 'pending';
 `;
 
 export const SQL_COMPLETE_OPERATION = `
   UPDATE social_account_operations
   SET status = 'completed',
+      phase = 'terminal',
       resource_version = $3,
       status_code = $4,
+      error_code = NULL,
+      error_message = NULL,
       response_json = $5::jsonb,
       completed_at = $6
-  WHERE id = $1 AND lease_token = $2;
+  WHERE id = $1 AND lease_token = $2 AND status = 'pending';
 `;
 
 export const SQL_FAIL_OPERATION = `
   UPDATE social_account_operations
   SET status = 'failed',
+      phase = 'terminal',
       status_code = $3,
       error_code = $4,
       error_message = $5,
       completed_at = $6
   WHERE id = $1 AND lease_token = $2 AND status = 'pending';
+`;
+
+export const SQL_RENEW_OPERATION_LEASE = `
+  UPDATE social_account_operations
+  SET lease_expires_at = $3
+  WHERE id = $1 AND lease_token = $2 AND status = 'pending';
+`;
+
+export const SQL_INSERT_REVOCATION_JOB = `
+  INSERT INTO social_account_revocations (
+    id, workspace_id, social_account_id, platform,
+    encrypted_token, token_iv, token_auth_tag, encryption_key_version,
+    status, phase, created_at, updated_at
+  ) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8, 'pending', 'claimed', $9, $9
+  ) RETURNING *;
+`;
+
+export const SQL_CLAIM_NEXT_DUE_REVOCATION_JOB = `
+  UPDATE social_account_revocations
+  SET status = 'in_progress',
+      lease_token = $3,
+      lease_expires_at = ($1::timestamptz + ($2 * interval '1 second')),
+      worker_id = $4,
+      attempt_count = attempt_count + 1,
+      updated_at = $1
+  WHERE id = (
+    SELECT id FROM social_account_revocations
+    WHERE status IN ('pending', 'in_progress')
+      AND (lease_expires_at IS NULL OR lease_expires_at <= $1::timestamptz)
+    ORDER BY created_at ASC
+    LIMIT 1
+    FOR UPDATE SKIP LOCKED
+  )
+  RETURNING *;
+`;
+
+export const SQL_MARK_REVOCATION_ATTEMPT_STARTED = `
+  UPDATE social_account_revocations
+  SET phase = 'provider_attempt_started',
+      updated_at = $3
+  WHERE id = $1 AND lease_token = $2 AND status = 'in_progress';
+`;
+
+export const SQL_COMPLETE_REVOCATION_JOB = `
+  UPDATE social_account_revocations
+  SET status = 'succeeded',
+      phase = 'terminal',
+      encrypted_token = '\\x'::bytea,
+      token_iv = '\\x000000000000000000000000'::bytea,
+      token_auth_tag = '\\x00000000000000000000000000000000'::bytea,
+      completed_at = $3,
+      updated_at = $3
+  WHERE id = $1 AND lease_token = $2 AND status = 'in_progress';
+`;
+
+export const SQL_FAIL_REVOCATION_JOB = `
+  UPDATE social_account_revocations
+  SET status = 'failed',
+      phase = 'terminal',
+      error_code = $3,
+      error_message = $4,
+      completed_at = $5,
+      updated_at = $5
+  WHERE id = $1 AND lease_token = $2 AND status = 'in_progress';
 `;
