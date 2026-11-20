@@ -11,6 +11,7 @@ import {
   disconnectSocialAccount,
   processDueSocialAccountRevocations,
   SocialAuthExchangeError,
+  SocialOperationFenceLostError,
   type SocialAuthAdapter,
 } from '@affiliate-content-os/application';
 import { createDatabase, type Database } from '../../src/database/index.js';
@@ -481,7 +482,7 @@ describe('Social Lifecycle Concurrency & Barriers Integration', () => {
       return updated!;
     };
 
-    // First attempt crashes after mutation has committed to DB
+    // First attempt crashes after mutation has committed to DB (operation fence lost on failure transition)
     await expect(
       adapter.executeMutationWithIdempotency({
         workspaceId: wsId,
@@ -496,7 +497,7 @@ describe('Social Lifecycle Concurrency & Barriers Integration', () => {
         now,
         executeMutation,
       }),
-    ).rejects.toThrow('SIMULATED_PROCESS_CRASH_AFTER_COMMIT');
+    ).rejects.toThrow(SocialOperationFenceLostError);
 
     expect(attempts).toBe(1);
 

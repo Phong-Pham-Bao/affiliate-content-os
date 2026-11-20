@@ -297,7 +297,7 @@ export async function executeSocialAccountMutationWithIdempotency(
     account = await params.executeMutation(claimedOp);
   } catch (err: unknown) {
     const safeErr = classifyOperationSafeError(err);
-    await database.query(SQL_FAIL_OPERATION, [
+    const failRes = await database.query(SQL_FAIL_OPERATION, [
       claimedOp.operationId,
       claimedOp.leaseToken,
       500,
@@ -305,6 +305,11 @@ export async function executeSocialAccountMutationWithIdempotency(
       safeErr.errorMessage,
       now,
     ]);
+    if (failRes.rowCount !== 1) {
+      throw new SocialOperationFenceLostError(
+        'Operation lease or fencing was lost during failure transition',
+      );
+    }
     throw err;
   }
 
