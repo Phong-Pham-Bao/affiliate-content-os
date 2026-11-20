@@ -16,6 +16,7 @@ import {
   OAuthTransactionExpiredError,
   OAuthTransactionNotFoundError,
   OAuthTransactionReplayedError,
+  SocialOperationFenceLostError,
   type ClaimedRevocationJob,
   type ClaimNextDueSocialAccountParams,
   type ClaimOAuthTransactionParams,
@@ -461,10 +462,15 @@ export class PostgresSocialPersistenceAdapter implements SocialPersistencePort {
     readonly operationId: string;
     readonly leaseToken: string;
   }): Promise<void> {
-    await this.database.query(SQL_MARK_OPERATION_ATTEMPT_STARTED, [
+    const res = await this.database.query(SQL_MARK_OPERATION_ATTEMPT_STARTED, [
       params.operationId,
       params.leaseToken,
     ]);
+    if (res.rowCount !== 1) {
+      throw new SocialOperationFenceLostError(
+        'Operation lease or fencing was lost before provider attempt started.',
+      );
+    }
   }
 
   public async claimNextDueSocialAccountRevocationJob(params: {
@@ -502,11 +508,16 @@ export class PostgresSocialPersistenceAdapter implements SocialPersistencePort {
     readonly leaseToken: string;
     readonly now: string;
   }): Promise<void> {
-    await this.database.query(SQL_MARK_REVOCATION_ATTEMPT_STARTED, [
+    const res = await this.database.query(SQL_MARK_REVOCATION_ATTEMPT_STARTED, [
       params.jobId,
       params.leaseToken,
       params.now,
     ]);
+    if (res.rowCount !== 1) {
+      throw new SocialOperationFenceLostError(
+        'Revocation job lease or fencing was lost before provider attempt started.',
+      );
+    }
   }
 
   public async completeSocialAccountRevocationJobAtomic(params: {
@@ -517,7 +528,14 @@ export class PostgresSocialPersistenceAdapter implements SocialPersistencePort {
     readonly now: string;
   }): Promise<void> {
     await this.database.withTransaction(async (tx) => {
-      await tx.query(SQL_COMPLETE_REVOCATION_JOB, [params.jobId, params.leaseToken, params.now]);
+      const jobRes = await tx.query(SQL_COMPLETE_REVOCATION_JOB, [
+        params.jobId,
+        params.leaseToken,
+        params.now,
+      ]);
+      if (jobRes.rowCount !== 1) {
+        throw new SocialOperationFenceLostError('Revocation job lease was lost during completion');
+      }
       await tx.query(SQL_UPDATE_EXTERNAL_REVOCATION_RESULT, [
         params.workspaceId,
         params.accountId,
@@ -537,13 +555,18 @@ export class PostgresSocialPersistenceAdapter implements SocialPersistencePort {
     readonly now: string;
   }): Promise<void> {
     await this.database.withTransaction(async (tx) => {
-      await tx.query(SQL_FAIL_REVOCATION_JOB, [
+      const jobRes = await tx.query(SQL_FAIL_REVOCATION_JOB, [
         params.jobId,
         params.leaseToken,
         params.errorCode,
         params.errorMessage,
         params.now,
       ]);
+      if (jobRes.rowCount !== 1) {
+        throw new SocialOperationFenceLostError(
+          'Revocation job lease was lost during failure recording',
+        );
+      }
       await tx.query(SQL_UPDATE_EXTERNAL_REVOCATION_RESULT, [
         params.workspaceId,
         params.accountId,

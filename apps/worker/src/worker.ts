@@ -223,14 +223,25 @@ export async function runWorker(deps: WorkerDependencies): Promise<void> {
             adapters: deps.socialAdapters,
             enabled: true,
             socialKillSwitchActive: deps.socialConfig?.socialKillSwitchActive,
+            revocationTimeoutMs: deps.socialConfig?.threadsHttpTimeoutMs,
             clock: { now: () => new Date() },
           },
         );
         if (revokeResult.processedCount > 0) {
           hadWork = true;
         }
-      } catch {
-        // Individual maintenance errors handled within use case; worker continues loop
+      } catch (err: unknown) {
+        // Record structured secret-safe observation without logging payloads, URLs, tokens, or credentials
+        const errorName = err instanceof Error ? err.name : 'UnknownError';
+        console.error(
+          JSON.stringify({
+            level: 'error',
+            event: 'worker.social_maintenance_failure',
+            workerId,
+            errorName,
+            timestamp: new Date().toISOString(),
+          }),
+        );
       }
     }
 

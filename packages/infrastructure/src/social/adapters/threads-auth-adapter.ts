@@ -67,6 +67,16 @@ export class ThreadsSocialAuthAdapter implements SocialAuthAdapter {
     this.apiVersion = options.apiVersion ?? 'v1.0';
     this.metaGraphBaseUrl = options.metaGraphBaseUrl ?? 'https://graph.facebook.com';
     this.metaGraphVersion = options.metaGraphVersion ?? 'v21.0';
+    if (options.appAccessToken !== undefined && options.appAccessToken !== null) {
+      if (
+        typeof options.appAccessToken !== 'string' ||
+        options.appAccessToken.length === 0 ||
+        options.appAccessToken.length > 512 ||
+        hasControlCharacters(options.appAccessToken)
+      ) {
+        throw new SocialAuthExchangeError('Invalid or oversized injected appAccessToken');
+      }
+    }
     this.cachedAppAccessToken = options.appAccessToken ?? null;
     this.timeoutMs = options.timeoutMs ?? 10000;
     this.environment = options.environment ?? 'production';
@@ -104,9 +114,14 @@ export class ThreadsSocialAuthAdapter implements SocialAuthAdapter {
       throw new SocialAuthExchangeError('Invalid JSON from app access token endpoint');
     }
 
-    if (typeof data.access_token !== 'string' || data.access_token.length === 0) {
+    if (
+      typeof data.access_token !== 'string' ||
+      data.access_token.length === 0 ||
+      data.access_token.length > 512 ||
+      hasControlCharacters(data.access_token)
+    ) {
       throw new SocialAuthExchangeError(
-        'Provider omitted access_token during client_credentials flow',
+        'Invalid, oversized, or control-character access_token from app access token endpoint',
       );
     }
     this.cachedAppAccessToken = String(data.access_token);
@@ -182,23 +197,38 @@ export class ThreadsSocialAuthAdapter implements SocialAuthAdapter {
       data.expires_at !== null &&
       (typeof data.expires_at !== 'number' ||
         !Number.isSafeInteger(data.expires_at) ||
-        data.expires_at <= 0)
+        data.expires_at < 1577836800 ||
+        data.expires_at > 2147483647)
     ) {
       throw new SocialAuthExchangeError('Invalid expiry bounds in Meta debug_token response');
     }
 
+    if (!Array.isArray(data.scopes)) {
+      throw new SocialAuthExchangeError(
+        'Malformed or missing scopes array in Meta debug_token response',
+      );
+    }
+    if (data.scopes.length > 50) {
+      throw new SocialAuthExchangeError('Oversized scopes array in Meta debug_token response');
+    }
+
     const grantedScopes: string[] = [];
-    if (Array.isArray(data.scopes)) {
-      const items = data.scopes.slice(0, 50);
-      for (const scope of items) {
-        if (typeof scope === 'string' && scope.length <= 64 && !hasControlCharacters(scope)) {
-          if (
-            REQUIRED_SCOPES.includes(scope as (typeof REQUIRED_SCOPES)[number]) &&
-            !grantedScopes.includes(scope)
-          ) {
-            grantedScopes.push(scope);
-          }
-        }
+    for (const scope of data.scopes) {
+      if (
+        typeof scope !== 'string' ||
+        scope.length === 0 ||
+        scope.length > 64 ||
+        hasControlCharacters(scope)
+      ) {
+        throw new SocialAuthExchangeError(
+          'Malformed, oversized, or control-character scope item in Meta debug_token response',
+        );
+      }
+      if (
+        REQUIRED_SCOPES.includes(scope as (typeof REQUIRED_SCOPES)[number]) &&
+        !grantedScopes.includes(scope)
+      ) {
+        grantedScopes.push(scope);
       }
     }
 

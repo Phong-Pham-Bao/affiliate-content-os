@@ -9,6 +9,8 @@ import {
   generateUuidV7,
   SocialAccountNotFoundError,
   SocialAccountVersionMismatchError,
+  SocialCredentialEncryptionError,
+  SocialOperationFenceLostError,
   type DisconnectSocialAccountParams,
   type UpdateExternalRevocationResultParams,
 } from '@affiliate-content-os/application';
@@ -51,7 +53,7 @@ export async function executeDisconnectSocialAccount(
       if (existing.status === 'disconnected') {
         const mappedExisting = mapSocialAccountRow(existing);
         if (params.operationId && params.operationLeaseToken) {
-          await tx.query(SQL_COMPLETE_OPERATION, [
+          const opRes = await tx.query(SQL_COMPLETE_OPERATION, [
             params.operationId,
             params.operationLeaseToken,
             mappedExisting.version,
@@ -63,6 +65,11 @@ export async function executeDisconnectSocialAccount(
             }),
             params.now,
           ]);
+          if (opRes.rowCount !== 1) {
+            throw new SocialOperationFenceLostError(
+              'Operation lease or fencing was lost during disconnect completion',
+            );
+          }
         }
         return mappedExisting;
       }
@@ -74,7 +81,7 @@ export async function executeDisconnectSocialAccount(
     // For supported platforms, stage encrypted token material to durable revocation job before deletion
     if (params.externalRevocationSupported) {
       const revocationJobId = generateUuidV7();
-      await tx.query(
+      const insertJobRes = await tx.query(
         `INSERT INTO social_account_revocations (
            id, workspace_id, social_account_id, platform,
            encrypted_token, token_iv, token_auth_tag, encryption_key_version,
@@ -89,10 +96,21 @@ export async function executeDisconnectSocialAccount(
          WHERE c.workspace_id = $3 AND c.social_account_id = $4;`,
         [revocationJobId, params.now, params.workspaceId, params.accountId],
       );
+      if (insertJobRes.rowCount !== 1) {
+        throw new SocialCredentialEncryptionError(
+          'Failed to stage revocation job: active credentials missing or duplicate active job',
+        );
+      }
     }
 
     // Cryptographically erase / delete usable credentials
-    await tx.query(SQL_DELETE_SOCIAL_CREDENTIALS, [params.workspaceId, params.accountId]);
+    const delCredRes = await tx.query(SQL_DELETE_SOCIAL_CREDENTIALS, [
+      params.workspaceId,
+      params.accountId,
+    ]);
+    if (params.externalRevocationSupported && delCredRes.rowCount !== 1) {
+      throw new SocialCredentialEncryptionError('Failed to delete credentials during disconnect');
+    }
 
     // Audit disconnect event
     const audit = createTransactionScopedPostgresAuditAdapter(tx);
@@ -126,7 +144,7 @@ export async function executeDisconnectSocialAccount(
     const mappedAcc = mapSocialAccountRow(updateRes.rows[0]!);
 
     if (params.operationId && params.operationLeaseToken) {
-      await tx.query(SQL_COMPLETE_OPERATION, [
+      const opRes = await tx.query(SQL_COMPLETE_OPERATION, [
         params.operationId,
         params.operationLeaseToken,
         mappedAcc.version,
@@ -138,6 +156,11 @@ export async function executeDisconnectSocialAccount(
         }),
         params.now,
       ]);
+      if (opRes.rowCount !== 1) {
+        throw new SocialOperationFenceLostError(
+          'Operation lease or fencing was lost during disconnect completion',
+        );
+      }
     }
 
     return mappedAcc;

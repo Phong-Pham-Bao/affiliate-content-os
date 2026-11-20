@@ -327,4 +327,135 @@ describe('Meta debug_token contract tests for ThreadsSocialAuthAdapter', () => {
       expect(url).not.toContain('/me/permissions');
     }
   });
+
+  it('rejects oversized scopes array (>50 items) from Meta debug_token response', async () => {
+    const oversizedScopes = Array.from({ length: 51 }, (_, i) => `scope_${i}`);
+    const mockTransport: HttpTransport = {
+      fetch: vi.fn().mockImplementation(async (req) => {
+        if (req.url.includes('/me?'))
+          return { status: 200, headers: {}, body: JSON.stringify({ id: 'u1' }) };
+        return {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            data: {
+              app_id: 'threads-app-123',
+              user_id: 'u1',
+              is_valid: true,
+              scopes: oversizedScopes,
+            },
+          }),
+        };
+      }),
+    };
+    const adapter = new ThreadsSocialAuthAdapter({ ...baseOptions, transport: mockTransport });
+    await expect(adapter.inspectCurrentAccount({ accessToken: 'tok' })).rejects.toThrow(
+      'Oversized scopes array in Meta debug_token response',
+    );
+  });
+
+  it('rejects malformed, empty, oversized, or control-character scope items from Meta debug_token response', async () => {
+    const testCases = [
+      ['threads_basic', 12345], // non-string
+      ['threads_basic', ''], // empty string
+      ['threads_basic', 'a'.repeat(65)], // oversized >64
+      ['threads_basic', 'bad\u0000scope'], // control character
+    ];
+
+    for (const scopes of testCases) {
+      const mockTransport: HttpTransport = {
+        fetch: vi.fn().mockImplementation(async (req) => {
+          if (req.url.includes('/me?'))
+            return { status: 200, headers: {}, body: JSON.stringify({ id: 'u1' }) };
+          return {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              data: {
+                app_id: 'threads-app-123',
+                user_id: 'u1',
+                is_valid: true,
+                scopes,
+              },
+            }),
+          };
+        }),
+      };
+      const adapter = new ThreadsSocialAuthAdapter({ ...baseOptions, transport: mockTransport });
+      await expect(adapter.inspectCurrentAccount({ accessToken: 'tok' })).rejects.toThrow(
+        'Malformed, oversized, or control-character scope item in Meta debug_token response',
+      );
+    }
+  });
+
+  it('rejects far-future expiry (>2147483647 or >5 years) from Meta debug_token response', async () => {
+    const mockTransport: HttpTransport = {
+      fetch: vi.fn().mockImplementation(async (req) => {
+        if (req.url.includes('/me?'))
+          return { status: 200, headers: {}, body: JSON.stringify({ id: 'u1' }) };
+        return {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            data: {
+              app_id: 'threads-app-123',
+              user_id: 'u1',
+              is_valid: true,
+              scopes: ['threads_basic'],
+              expires_at: 2200000000,
+            },
+          }),
+        };
+      }),
+    };
+    const adapter = new ThreadsSocialAuthAdapter({ ...baseOptions, transport: mockTransport });
+    await expect(adapter.inspectCurrentAccount({ accessToken: 'tok' })).rejects.toThrow(
+      'Invalid expiry bounds in Meta debug_token response',
+    );
+  });
+
+  it('rejects oversized or control-character app access tokens (injected and client_credentials)', async () => {
+    // 1. Injected app token with control characters
+    expect(
+      () =>
+        new ThreadsSocialAuthAdapter({
+          ...baseOptions,
+          appAccessToken: 'bad\r\ntoken',
+        }),
+    ).toThrow('Invalid or oversized injected appAccessToken');
+
+    // 2. Injected app token exceeding 512 characters
+    expect(
+      () =>
+        new ThreadsSocialAuthAdapter({
+          ...baseOptions,
+          appAccessToken: 'x'.repeat(513),
+        }),
+    ).toThrow('Invalid or oversized injected appAccessToken');
+
+    // 3. Fetched app token from client_credentials endpoint with control characters or oversized
+    const mockTransportBadAppToken: HttpTransport = {
+      fetch: vi.fn().mockImplementation(async (req) => {
+        if (req.url.includes('/me?')) {
+          return { status: 200, headers: {}, body: JSON.stringify({ id: 'u1' }) };
+        }
+        if (req.url.includes('client_credentials')) {
+          return {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ access_token: 'bad\u0007token' }),
+          };
+        }
+        return { status: 200, headers: {}, body: '{}' };
+      }),
+    };
+    const adapter = new ThreadsSocialAuthAdapter({
+      ...baseOptions,
+      appAccessToken: undefined,
+      transport: mockTransportBadAppToken,
+    });
+    await expect(adapter.inspectCurrentAccount({ accessToken: 'tok' })).rejects.toThrow(
+      'Invalid, oversized, or control-character access_token from app access token endpoint',
+    );
+  });
 });

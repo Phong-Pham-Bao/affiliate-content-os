@@ -9,14 +9,18 @@ import {
 import { authorizeWorkspaceAction } from '../authorize-workspace-action.js';
 import type { WorkspaceAuthorizationPort } from '../ports.js';
 import {
+  SocialAccountDisconnectedError,
   SocialAccountNotFoundError,
+  SocialAccountReauthRequiredError,
   SocialAuthNotConfiguredError,
+  SocialAuthOutcomeUnknownError,
   SocialAuthRateLimitError,
   SocialAuthTerminalError,
   SocialCredentialEncryptionError,
   SocialKillSwitchActiveError,
   SocialPlatformUnsupportedError,
 } from './errors.js';
+import { calculateRefreshLeaseDurationSeconds } from './lease-budget.js';
 import type {
   ClaimedSocialAccountRefresh,
   InspectAccountResult,
@@ -143,6 +147,26 @@ export async function executeClaimedSocialAccountRefresh(
     newAccessToken = refreshRes.accessToken;
     tokenExpiresInSeconds = refreshRes.tokenExpiresInSeconds;
   } catch (err: unknown) {
+    if (err instanceof SocialAuthOutcomeUnknownError) {
+      // Special-case SocialAuthOutcomeUnknownError thrown by refreshToken():
+      // Atomically fence the refresh claim and set account to reauth_required state
+      await deps.persistence.recordFailedSocialAccountRefreshAtomic({
+        workspaceId: params.workspaceId,
+        accountId: params.accountId,
+        expectedAccountVersion: params.claim.claimedAccountVersion,
+        expectedLeaseToken: params.claim.refreshLeaseToken,
+        derivedStatus: 'reauth_required',
+        statusReason: 'reauth_required',
+        nextRefreshAt: null,
+        reauthRequiredAt: now.toISOString(),
+        now: now.toISOString(),
+        actorUserId: params.actorUserId,
+        auditContext: params.auditContext,
+      });
+      // Do not return HTTP 200 degraded success. Propagate so idempotency operation is terminally failed with OUTCOME_UNKNOWN.
+      throw err;
+    }
+
     const isRateLimit = err instanceof SocialAuthRateLimitError;
     const isAuthTerminal = err instanceof SocialAuthTerminalError;
 
@@ -341,9 +365,23 @@ export async function refreshSocialAccount(
   const now = deps.clock.now();
   const claimToken = command.claimToken ?? crypto.randomUUID();
 
-  // Derive lease duration: provider timeout plus margin, min 120s
-  const providerTimeoutMs = deps.threadsHttpTimeoutMs ?? 15000;
-  const leaseDurationSeconds = Math.max(120, Math.ceil((providerTimeoutMs * 2 + 30000) / 1000));
+  // 0. Proactively verify account status - if reauth is required, reject immediately!
+  const existing = await deps.persistence.findSocialAccountById({
+    workspaceId: command.workspaceId,
+    accountId: command.accountId,
+  });
+  if (!existing) throw new SocialAccountNotFoundError();
+  if (existing.status === 'reauth_required') {
+    throw new SocialAccountReauthRequiredError(
+      'Social account requires reauthorization. Please reconnect the account.',
+    );
+  }
+  if (existing.status === 'disconnected') {
+    throw new SocialAccountDisconnectedError('Social account is disconnected.');
+  }
+
+  // Derive unified lease duration using shared worst-case lease budget helper
+  const leaseDurationSeconds = calculateRefreshLeaseDurationSeconds(deps.threadsHttpTimeoutMs);
 
   // 1. Claim account for refresh (atomic exclusive claim, enforcing earliest_refresh_at)
   const claimed = await deps.persistence.claimSocialAccountForRefresh({
@@ -355,11 +393,6 @@ export async function refreshSocialAccount(
   });
 
   if (!claimed) {
-    const existing = await deps.persistence.findSocialAccountById({
-      workspaceId: command.workspaceId,
-      accountId: command.accountId,
-    });
-    if (!existing) throw new SocialAccountNotFoundError();
     return { account: existing, refreshed: false };
   }
 

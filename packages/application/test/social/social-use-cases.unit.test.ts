@@ -17,6 +17,7 @@ import {
   OAuthTransactionExpiredError,
   OAuthTransactionNotFoundError,
   OAuthTransactionReplayedError,
+  SocialAccountReauthRequiredError,
   SocialAuthNotConfiguredError,
   SocialPlatformUnsupportedError,
   WorkspaceAccessDeniedError,
@@ -875,6 +876,7 @@ describe('Social Application Use Cases', () => {
       const authPort = createMockAuthPort();
       const claim = createClaim();
 
+      vi.mocked(persistence.findSocialAccountById).mockResolvedValue(initialAccount);
       vi.mocked(persistence.claimSocialAccountForRefresh).mockResolvedValue(claim);
       vi.mocked(persistence.completeSocialAccountRefreshAtomic).mockImplementation(
         async (params) => ({
@@ -929,6 +931,7 @@ describe('Social Application Use Cases', () => {
       const authPort = createMockAuthPort();
       const claim = createClaim();
 
+      vi.mocked(persistence.findSocialAccountById).mockResolvedValue(initialAccount);
       vi.mocked(persistence.claimSocialAccountForRefresh).mockResolvedValue(claim);
       vi.mocked(persistence.completeSocialAccountRefreshAtomic).mockImplementation(
         async (params) => ({
@@ -984,6 +987,7 @@ describe('Social Application Use Cases', () => {
       const authPort = createMockAuthPort();
       const claim = createClaim();
 
+      vi.mocked(persistence.findSocialAccountById).mockResolvedValue(initialAccount);
       vi.mocked(persistence.claimSocialAccountForRefresh).mockResolvedValue(claim);
       vi.mocked(persistence.completeSocialAccountRefreshAtomic).mockImplementation(
         async (params) => ({
@@ -1036,6 +1040,7 @@ describe('Social Application Use Cases', () => {
       const authPort = createMockAuthPort();
       const claim = createClaim();
 
+      vi.mocked(persistence.findSocialAccountById).mockResolvedValue(initialAccount);
       vi.mocked(persistence.claimSocialAccountForRefresh).mockResolvedValue(claim);
       vi.mocked(persistence.recordFailedSocialAccountRefreshAtomic).mockImplementation(
         async (params) => ({
@@ -1093,6 +1098,7 @@ describe('Social Application Use Cases', () => {
       const authPort = createMockAuthPort();
       const claim = createClaim();
 
+      vi.mocked(persistence.findSocialAccountById).mockResolvedValue(initialAccount);
       vi.mocked(persistence.claimSocialAccountForRefresh).mockResolvedValue(claim);
       vi.mocked(persistence.completeSocialAccountRefreshAtomic).mockImplementation(
         async (params) => ({
@@ -1145,6 +1151,43 @@ describe('Social Application Use Cases', () => {
           statusReason: 'missing_grants',
         }),
       );
+    });
+
+    it('immediately rejects with SocialAccountReauthRequiredError when account is already in reauth_required state', async () => {
+      const persistence = createMockPersistence();
+      const authPort = createMockAuthPort();
+
+      vi.mocked(persistence.findSocialAccountById).mockResolvedValue({
+        ...initialAccount,
+        status: 'reauth_required',
+      });
+
+      const mockAdapter: SocialAuthAdapter = {
+        platform: 'threads',
+        supportsRefresh: true,
+        supportsRevocation: false,
+        createAuthorizationUrl: vi.fn(),
+        exchangeCode: vi.fn(),
+        refreshToken: vi.fn(),
+      };
+
+      await expect(
+        refreshSocialAccount(
+          { workspaceId: wsId, accountId, actorUserId: ownerUserId },
+          {
+            persistence,
+            protector: mockProtector,
+            adapters: new Map([['threads', mockAdapter]]),
+            workspaceAuthorization: authPort,
+            enabled: true,
+            appReviewStatus: 'approved',
+            clock: { now: () => mockNow },
+          },
+        ),
+      ).rejects.toThrow(SocialAccountReauthRequiredError);
+
+      expect(mockAdapter.refreshToken).not.toHaveBeenCalled();
+      expect(persistence.claimSocialAccountForRefresh).not.toHaveBeenCalled();
     });
   });
 });

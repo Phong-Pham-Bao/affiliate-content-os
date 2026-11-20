@@ -1,6 +1,7 @@
 ﻿import crypto from 'node:crypto';
 import type { SocialPlatform } from '@affiliate-content-os/domain';
 import { classifyOperationSafeError } from './errors.js';
+import { calculateRevocationLeaseDurationSeconds, withTimeout } from './lease-budget.js';
 import type {
   SocialAuthAdapter,
   SocialCredentialProtectorPort,
@@ -19,6 +20,7 @@ export interface ProcessDueRevocationsDependencies {
   readonly adapters: ReadonlyMap<SocialPlatform, SocialAuthAdapter>;
   readonly enabled: boolean;
   readonly socialKillSwitchActive?: boolean | undefined;
+  readonly revocationTimeoutMs?: number | undefined;
   readonly clock: { now(): Date };
 }
 
@@ -40,7 +42,9 @@ export async function processDueSocialAccountRevocations(
   }
 
   const maxBatch = command.maxBatchSize ?? 5;
-  const leaseDurationSeconds = command.leaseDurationSeconds ?? 60;
+  const leaseDurationSeconds =
+    command.leaseDurationSeconds ??
+    calculateRevocationLeaseDurationSeconds(deps.revocationTimeoutMs);
   let processedCount = 0;
   let succeededCount = 0;
   let failedCount = 0;
@@ -140,9 +144,14 @@ export async function processDueSocialAccountRevocations(
       continue;
     }
 
-    // 3. Call provider revocation OUTSIDE database transaction
+    // 3. Call provider revocation OUTSIDE database transaction with bounded timeout
+    const timeoutMs = deps.revocationTimeoutMs ?? 10000;
     try {
-      const res = await adapter.revokeToken(decryptedAccessToken);
+      const res = await withTimeout(
+        adapter.revokeToken(decryptedAccessToken),
+        timeoutMs,
+        'Provider revocation request timed out',
+      );
       if (res.revoked) {
         if (typeof deps.persistence.completeSocialAccountRevocationJobAtomic === 'function') {
           await deps.persistence.completeSocialAccountRevocationJobAtomic({

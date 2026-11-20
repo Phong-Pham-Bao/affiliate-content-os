@@ -293,6 +293,9 @@ export const SQL_FAIL_REVOCATION_JOB = `
   UPDATE social_account_revocations
   SET status = 'failed',
       phase = 'terminal',
+      encrypted_token = '\\x'::bytea,
+      token_iv = '\\x000000000000000000000000'::bytea,
+      token_auth_tag = '\\x00000000000000000000000000000000'::bytea,
       error_code = $3,
       error_message = $4,
       completed_at = $5,

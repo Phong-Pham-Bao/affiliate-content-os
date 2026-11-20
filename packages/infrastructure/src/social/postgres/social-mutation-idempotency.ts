@@ -10,8 +10,9 @@ import {
   classifyOperationSafeError,
   generateUuidV7,
   IdempotencyKeyReusedError,
+  reconstructOperationSafeError,
   SocialAccountNotFoundError,
-  SocialAuthOutcomeUnknownError,
+  SocialOperationFenceLostError,
   type SocialIdempotencyInput,
   type SocialMutationIdempotencyResult,
 } from '@affiliate-content-os/application';
@@ -128,20 +129,8 @@ export async function executeSocialAccountMutationWithIdempotency(
       } else if (op.status === 'completed') {
         return { kind: 'completed' as const, opId: op.id };
       } else if (op.status === 'failed') {
-        // Reclaim failed operation on retry with fresh lease token
-        const newLeaseToken = generateUuidV7();
-        const newLeaseExpiresAt = new Date(
-          Date.parse(now) + leaseDurationSeconds * 1000,
-        ).toISOString();
-        await tx.query(
-          `UPDATE social_account_operations
-           SET status = 'pending', phase = 'claimed', lease_token = $2, lease_expires_at = $3,
-               status_code = NULL, error_code = NULL, error_message = NULL,
-               completed_at = NULL
-           WHERE id = $1`,
-          [op.id, newLeaseToken, newLeaseExpiresAt],
-        );
-        return { kind: 'claimed' as const, opId: op.id, leaseToken: newLeaseToken };
+        // Terminal failed operation is replayed, never reclaimed!
+        return { kind: 'failed' as const, opId: op.id, errorCode: op.error_code };
       } else if (op.status === 'pending') {
         const isLeaseExpired = Date.parse(String(op.lease_expires_at)) <= Date.parse(now);
         if (!isLeaseExpired) {
@@ -167,7 +156,7 @@ export async function executeSocialAccountMutationWithIdempotency(
              WHERE workspace_id = $2 AND id = $3 AND status <> 'disconnected'`,
             [now, params.workspaceId, params.accountId],
           );
-          return { kind: 'outcome_unknown' as const, opId: op.id };
+          return { kind: 'failed' as const, opId: op.id, errorCode: 'OUTCOME_UNKNOWN' };
         }
         // Safe to reclaim pre-call work with fresh lease token
         const newLeaseToken = generateUuidV7();
@@ -247,10 +236,8 @@ export async function executeSocialAccountMutationWithIdempotency(
     return { kind: 'claimed' as const, opId: operationId, leaseToken };
   });
 
-  if (claimResult.kind === 'outcome_unknown') {
-    throw new SocialAuthOutcomeUnknownError(
-      'Provider attempt started previously but outcome is unknown. Reauthorization is required.',
-    );
+  if (claimResult.kind === 'failed') {
+    throw reconstructOperationSafeError(claimResult.errorCode);
   }
 
   // If already completed: reload authoritative account state from database
@@ -272,7 +259,7 @@ export async function executeSocialAccountMutationWithIdempotency(
     for (let attempt = 0; attempt < 20; attempt++) {
       await delayMs(50);
       const checkRes = await database.query<OperationRow>(
-        `SELECT id, status, request_hash, expires_at
+        `SELECT id, status, error_code, request_hash, expires_at
          FROM social_account_operations
          WHERE id = $1`,
         [claimResult.opId],
@@ -290,6 +277,9 @@ export async function executeSocialAccountMutationWithIdempotency(
             replayed: true,
             account,
           };
+        }
+        if (op.status === 'failed') {
+          throw reconstructOperationSafeError(op.error_code);
         }
       }
     }
@@ -320,7 +310,7 @@ export async function executeSocialAccountMutationWithIdempotency(
 
   // Phase 3: Ensure completion in social_account_operations and idempotency_keys
   await database.withTransaction(async (tx) => {
-    await tx.query(SQL_COMPLETE_OPERATION, [
+    const compRes = await tx.query(SQL_COMPLETE_OPERATION, [
       claimedOp.operationId,
       claimedOp.leaseToken,
       account.version,
@@ -332,6 +322,11 @@ export async function executeSocialAccountMutationWithIdempotency(
       }),
       now,
     ]);
+    if (compRes.rowCount !== 1) {
+      throw new SocialOperationFenceLostError(
+        'Operation lease or fencing was lost during completion',
+      );
+    }
 
     const expiresAt = new Date(Date.parse(now) + 86400 * 1000).toISOString();
     await insertIdempotencyRecord(tx, {

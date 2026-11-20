@@ -1,6 +1,9 @@
 import crypto from 'node:crypto';
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import { refreshSocialAccount } from '@affiliate-content-os/application';
+import {
+  calculateRefreshLeaseDurationSeconds,
+  refreshSocialAccount,
+} from '@affiliate-content-os/application';
 import { requireAuthenticatedSession } from '../auth/session-auth.js';
 import { extractSocialIdempotencyKey } from './authorize-handler.js';
 import { extractSocialAuditContext, validateSocialMutationOrigin } from './helpers.js';
@@ -41,8 +44,9 @@ export async function handleRefreshSocialAccount(
   const routeKey = `POST /api/v1/workspaces/:workspaceId/social-accounts/:accountId/refresh`;
   const now = (deps.clock?.now() ?? new Date()).toISOString();
 
-  const providerTimeoutMs = deps.socialConfig.threadsHttpTimeoutMs ?? 15000;
-  const leaseDurationSeconds = Math.max(180, Math.ceil((providerTimeoutMs * 2 + 30000) / 1000));
+  const leaseDurationSeconds = calculateRefreshLeaseDurationSeconds(
+    deps.socialConfig.threadsHttpTimeoutMs,
+  );
 
   const executeRefresh = async (claimedOp?: {
     readonly operationId: string;

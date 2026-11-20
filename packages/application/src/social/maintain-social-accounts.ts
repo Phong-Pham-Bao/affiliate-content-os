@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import type { SocialPlatform } from '@affiliate-content-os/domain';
+import { calculateRefreshLeaseDurationSeconds } from './lease-budget.js';
 import { executeClaimedSocialAccountRefresh } from './refresh-social-account.js';
 import type {
   SocialAuthAdapter,
@@ -48,7 +49,8 @@ export async function maintainDueSocialAccounts(
   }
 
   const maxBatch = command.maxBatchSize ?? 10;
-  const leaseDurationSeconds = command.leaseDurationSeconds ?? 120;
+  const leaseDurationSeconds =
+    command.leaseDurationSeconds ?? calculateRefreshLeaseDurationSeconds(deps.threadsHttpTimeoutMs);
   let processedCount = 0;
   let claimedCount = 0;
   let refreshedCount = 0;

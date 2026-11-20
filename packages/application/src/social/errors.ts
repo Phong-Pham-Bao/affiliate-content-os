@@ -162,10 +162,38 @@ export class SocialAuthOutcomeUnknownError extends Error {
   }
 }
 
+export class SocialOperationFenceLostError extends Error {
+  public override readonly name = 'SocialOperationFenceLostError';
+  constructor(message = 'Operation lease or fencing was lost to a concurrent process.') {
+    super(message);
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export class SocialAccountReauthRequiredError extends Error {
+  public override readonly name = 'SocialAccountReauthRequiredError';
+  constructor(message = 'Social account requires reauthorization. Please reconnect the account.') {
+    super(message);
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
 export function classifyOperationSafeError(err: unknown): {
   readonly errorCode: string;
   readonly errorMessage: string;
 } {
+  if (err instanceof SocialOperationFenceLostError) {
+    return {
+      errorCode: 'FENCE_LOST',
+      errorMessage: 'Operation lease or fencing was lost to a concurrent process.',
+    };
+  }
+  if (err instanceof SocialAccountReauthRequiredError) {
+    return {
+      errorCode: 'REAUTH_REQUIRED',
+      errorMessage: 'Social account requires reauthorization. Please reconnect the account.',
+    };
+  }
   if (err instanceof SocialAccountVersionMismatchError) {
     return {
       errorCode: 'VERSION_MISMATCH',
@@ -218,4 +246,41 @@ export function classifyOperationSafeError(err: unknown): {
     errorCode: 'INTERNAL_ERROR',
     errorMessage: 'An internal error occurred during the social account operation.',
   };
+}
+
+export function reconstructOperationSafeError(errorCode: string | null | undefined): Error {
+  switch (errorCode) {
+    case 'OUTCOME_UNKNOWN':
+      return new SocialAuthOutcomeUnknownError(
+        'Provider request timed out before outcome could be established safely. Reauthorization is required.',
+      );
+    case 'REAUTH_REQUIRED':
+      return new SocialAccountReauthRequiredError(
+        'Social account requires reauthorization. Please reconnect the account.',
+      );
+    case 'FENCE_LOST':
+      return new SocialOperationFenceLostError(
+        'Operation lease or fencing was lost to a concurrent process.',
+      );
+    case 'VERSION_MISMATCH':
+      return new SocialAccountVersionMismatchError(
+        'Social account version changed concurrently. Please retry.',
+      );
+    case 'NOT_FOUND':
+      return new SocialAccountNotFoundError('Social account was not found in this workspace.');
+    case 'RATE_LIMITED':
+      return new SocialAuthRateLimitError('Provider rate limit exceeded. Please retry later.');
+    case 'TERMINAL_AUTH_ERROR':
+      return new SocialAuthTerminalError('Provider authorization is invalid, revoked, or expired.');
+    case 'CRYPTO_ERROR':
+      return new SocialCredentialEncryptionError('Failed to process encrypted credentials.');
+    case 'PLATFORM_UNSUPPORTED':
+      return new SocialPlatformUnsupportedError('The requested social platform is not supported.');
+    case 'KILL_SWITCH_ACTIVE':
+      return new SocialKillSwitchActiveError(
+        'Social operations are temporarily disabled by administrative policy.',
+      );
+    default:
+      return new Error('An internal error occurred during the social account operation.');
+  }
 }

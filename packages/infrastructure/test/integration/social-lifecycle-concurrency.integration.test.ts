@@ -369,21 +369,13 @@ describe('Social Lifecycle Concurrency & Barriers Integration', () => {
     const now = new Date().toISOString();
 
     let mutationExecutionCount = 0;
-    const executeMutation = async (claimedOp?: { operationId: string; leaseToken: string }) => {
+    const executeMutation = async () => {
       mutationExecutionCount++;
       // Real database mutation: update social_accounts version
       await pool.query(
         `UPDATE social_accounts SET version = version + 1, updated_at = NOW() WHERE id = $1`,
         [account.id],
       );
-      if (claimedOp) {
-        await pool.query(
-          `UPDATE social_account_operations
-           SET status = 'completed', phase = 'terminal', resource_version = $2, completed_at = NOW()
-           WHERE id = $1`,
-          [claimedOp.operationId, account.version + 1],
-        );
-      }
       const updated = await adapter.findSocialAccountById({
         workspaceId: wsId,
         accountId: account.id,

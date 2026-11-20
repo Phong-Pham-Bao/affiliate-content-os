@@ -10,6 +10,7 @@ import {
   SocialAccountDisconnectedError,
   SocialAccountMismatchError,
   SocialAccountNotFoundError,
+  SocialAccountReauthRequiredError,
   SocialAccountVersionMismatchError,
   SocialAuthExchangeError,
   SocialAuthNotConfiguredError,
@@ -17,6 +18,7 @@ import {
   SocialAuthRateLimitError,
   SocialCredentialEncryptionError,
   SocialKillSwitchActiveError,
+  SocialOperationFenceLostError,
   SocialPlatformUnsupportedError,
 } from '@affiliate-content-os/application';
 
@@ -41,6 +43,20 @@ export const SOCIAL_PROBLEM_SPECS: Record<string, ProblemSpec> = {
     type: 'https://affiliate-content-os.example/problems/precondition-failed',
     title: 'Precondition Failed',
     detail: 'Account version has changed or precondition failed.',
+  },
+  SOCIAL_OPERATION_FENCE_LOST: {
+    status: 409,
+    code: 'FENCE_LOST',
+    type: 'https://affiliate-content-os.example/problems/conflict',
+    title: 'Conflict',
+    detail: 'Operation lease or fencing was lost to a concurrent process.',
+  },
+  SOCIAL_ACCOUNT_REAUTH_REQUIRED: {
+    status: 409,
+    code: 'REAUTH_REQUIRED',
+    type: 'https://affiliate-content-os.example/problems/reauth-required',
+    title: 'Reauthorization Required',
+    detail: 'Social account requires reauthorization. Please reconnect the account.',
   },
   SOCIAL_ACCOUNT_MISMATCH: {
     status: 409,
@@ -160,6 +176,15 @@ export function resolveSocialProblemSpec(error: unknown): ProblemSpec | null {
     name === 'SocialAccountVersionMismatchError'
   ) {
     return SOCIAL_PROBLEM_SPECS['SOCIAL_ACCOUNT_VERSION_MISMATCH']!;
+  }
+  if (error instanceof SocialOperationFenceLostError || name === 'SocialOperationFenceLostError') {
+    return SOCIAL_PROBLEM_SPECS['SOCIAL_OPERATION_FENCE_LOST']!;
+  }
+  if (
+    error instanceof SocialAccountReauthRequiredError ||
+    name === 'SocialAccountReauthRequiredError'
+  ) {
+    return SOCIAL_PROBLEM_SPECS['SOCIAL_ACCOUNT_REAUTH_REQUIRED']!;
   }
   if (error instanceof SocialAccountMismatchError || name === 'SocialAccountMismatchError') {
     return SOCIAL_PROBLEM_SPECS['SOCIAL_ACCOUNT_MISMATCH']!;

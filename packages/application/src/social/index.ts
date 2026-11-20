@@ -50,6 +50,12 @@ export {
 } from './disconnect-social-account.js';
 
 export {
+  calculateRefreshLeaseDurationSeconds,
+  calculateRevocationLeaseDurationSeconds,
+  withTimeout,
+} from './lease-budget.js';
+
+export {
   maintainDueSocialAccounts,
   type MaintainDueSocialAccountsCommand,
   type MaintainDueSocialAccountsDependencies,
@@ -83,7 +89,10 @@ export {
   SocialAuthTerminalError,
   SocialCredentialEncryptionError,
   SocialKillSwitchActiveError,
+  SocialOperationFenceLostError,
+  SocialAccountReauthRequiredError,
   SocialPlatformUnsupportedError,
+  reconstructOperationSafeError,
 } from './errors.js';
 
 export {

@@ -9,6 +9,7 @@ import {
 import {
   generateUuidV7,
   SocialAccountVersionMismatchError,
+  SocialOperationFenceLostError,
   type ClaimedSocialAccountRefresh,
   type ClaimNextDueSocialAccountParams,
   type ClaimSocialAccountForRefreshParams,
@@ -161,7 +162,7 @@ export async function executeCompleteSocialAccountRefresh(
     const mappedAcc = mapSocialAccountRow(accRes.rows[0]!);
 
     if (params.operationId && params.operationLeaseToken) {
-      await tx.query(SQL_COMPLETE_OPERATION, [
+      const opRes = await tx.query(SQL_COMPLETE_OPERATION, [
         params.operationId,
         params.operationLeaseToken,
         mappedAcc.version,
@@ -173,6 +174,11 @@ export async function executeCompleteSocialAccountRefresh(
         }),
         params.now,
       ]);
+      if (opRes.rowCount !== 1) {
+        throw new SocialOperationFenceLostError(
+          'Operation lease or fencing was lost during refresh completion',
+        );
+      }
     }
 
     if (params.actorUserId) {
@@ -228,7 +234,7 @@ export async function executeRecordFailedSocialAccountRefresh(
     const mappedAcc = mapSocialAccountRow(accRes.rows[0]!);
 
     if (params.operationId && params.operationLeaseToken) {
-      await tx.query(SQL_COMPLETE_OPERATION, [
+      const opRes = await tx.query(SQL_COMPLETE_OPERATION, [
         params.operationId,
         params.operationLeaseToken,
         mappedAcc.version,
@@ -240,6 +246,11 @@ export async function executeRecordFailedSocialAccountRefresh(
         }),
         params.now,
       ]);
+      if (opRes.rowCount !== 1) {
+        throw new SocialOperationFenceLostError(
+          'Operation lease or fencing was lost during refresh completion',
+        );
+      }
     }
 
     return mappedAcc;
