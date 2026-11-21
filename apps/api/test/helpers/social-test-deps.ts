@@ -148,7 +148,12 @@ export function createTestSocialDeps(options?: {
     socialKillSwitchActive: false,
     threadsConnectionKillSwitchActive: false,
     threadsRefreshKillSwitchActive: false,
+    threadsPublishKillSwitchActive: false,
     socialMaintenanceEnabled: false,
+    publicationWorkerPollingIntervalMs: 2000,
+    publicationWorkerLeaseDurationSeconds: 30,
+    minScheduleLeadTimeSeconds: 60,
+    maxScheduleHorizonDays: 90,
     ...options?.socialConfigOverrides,
   };
 
