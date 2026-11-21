@@ -1,7 +1,8 @@
 # Sprint 4 — Social Connections and Publishing Plan
 
-Status: In progress; Product Owner approved on 2026-11-18. Checkpoint A was
-completed and approved by Codex on 2026-11-18 (`STATUS: APPROVED`).
+Status: In progress; Product Owner approved on 2026-11-18. Checkpoints A and B
+are complete and approved by Codex (`STATUS: APPROVED`): Checkpoint A on
+2026-11-18 and Checkpoint B on 2026-11-21.
 
 ## 1. Outcome
 
@@ -45,6 +46,9 @@ Status: Complete and Codex-approved on 2026-11-18 after
 - No real platform publishing.
 
 ### Checkpoint B — Threads account lifecycle (`TASK-017`)
+
+Status: Complete and Codex-approved on 2026-11-21 after
+`TASK-017-REMEDIATION-01` through `TASK-017-REMEDIATION-05`.
 
 - Official Threads OAuth/token/identity adapter behind the Checkpoint A ports.
 - Capability discovery and freshness, reconnect, refresh, disconnect/revoke,
