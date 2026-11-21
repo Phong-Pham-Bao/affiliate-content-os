@@ -50,6 +50,7 @@ export * from './catalog/index.js';
 export * from './analysis/index.js';
 export * from './workforce/index.js';
 export * from './social/index.js';
+export * from './publication/index.js';
 export {
   resolveVerifiedIdentity,
   type ResolveVerifiedIdentityCommand,

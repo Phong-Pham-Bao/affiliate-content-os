@@ -134,7 +134,12 @@ export function getRedactedSocialConfigMetadata(
     socialKillSwitchActive: config.socialKillSwitchActive,
     threadsConnectionKillSwitchActive: config.threadsConnectionKillSwitchActive,
     threadsRefreshKillSwitchActive: config.threadsRefreshKillSwitchActive,
+    threadsPublishKillSwitchActive: config.threadsPublishKillSwitchActive,
     socialMaintenanceEnabled: config.socialMaintenanceEnabled,
+    publicationWorkerPollingIntervalMs: config.publicationWorkerPollingIntervalMs,
+    publicationWorkerLeaseDurationSeconds: config.publicationWorkerLeaseDurationSeconds,
+    minScheduleLeadTimeSeconds: config.minScheduleLeadTimeSeconds,
+    maxScheduleHorizonDays: config.maxScheduleHorizonDays,
   };
 
   return Object.freeze(result);

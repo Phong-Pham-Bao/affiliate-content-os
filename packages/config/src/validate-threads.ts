@@ -32,6 +32,7 @@ export interface ValidatedThreadsConfig {
   readonly socialKillSwitchActive: boolean;
   readonly threadsConnectionKillSwitchActive: boolean;
   readonly threadsRefreshKillSwitchActive: boolean;
+  readonly threadsPublishKillSwitchActive: boolean;
 }
 
 function parseBoolean(
@@ -116,6 +117,12 @@ export function validateThreadsConfig(
   const threadsRefreshKillSwitchActive = parseBoolean(
     rawEnv['THREADS_REFRESH_KILL_SWITCH_ACTIVE'],
     'THREADS_REFRESH_KILL_SWITCH_ACTIVE',
+    false,
+    issues,
+  );
+  const threadsPublishKillSwitchActive = parseBoolean(
+    rawEnv['THREADS_PUBLISH_KILL_SWITCH_ACTIVE'],
+    'THREADS_PUBLISH_KILL_SWITCH_ACTIVE',
     false,
     issues,
   );
@@ -233,5 +240,6 @@ export function validateThreadsConfig(
     socialKillSwitchActive,
     threadsConnectionKillSwitchActive,
     threadsRefreshKillSwitchActive,
+    threadsPublishKillSwitchActive,
   };
 }

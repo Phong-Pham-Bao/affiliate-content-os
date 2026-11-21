@@ -58,6 +58,12 @@
       "import": "./dist/social/index.js",
       "default": "./dist/social/index.js"
     },
+    "./publication": {
+      "types": "./src/publication/index.ts",
+      "development": "./src/publication/index.ts",
+      "import": "./dist/publication/index.js",
+      "default": "./dist/publication/index.js"
+    },
     "./testing": {
       "types": "./src/testing/index.ts",
       "development": "./src/testing/index.ts",

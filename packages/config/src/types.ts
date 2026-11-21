@@ -163,6 +163,11 @@ export const DEFAULT_CAPABILITY_FRESHNESS_MAX_AGE_SECONDS = 7 * 24 * 3600;
 export const ALLOWED_THREADS_APP_REVIEW_STATUSES = ['development', 'approved'] as const;
 export type ThreadsAppReviewStatus = (typeof ALLOWED_THREADS_APP_REVIEW_STATUSES)[number];
 
+export const DEFAULT_PUBLICATION_WORKER_POLLING_INTERVAL_MS = 2000;
+export const DEFAULT_PUBLICATION_WORKER_LEASE_DURATION_SECONDS = 30;
+export const DEFAULT_MIN_SCHEDULE_LEAD_TIME_SECONDS = 60;
+export const DEFAULT_MAX_SCHEDULE_HORIZON_DAYS = 90;
+
 export interface SocialConfig {
   readonly enabled: boolean;
   readonly fakeAdapterEnabled: boolean;
@@ -186,7 +191,12 @@ export interface SocialConfig {
   readonly socialKillSwitchActive: boolean;
   readonly threadsConnectionKillSwitchActive: boolean;
   readonly threadsRefreshKillSwitchActive: boolean;
+  readonly threadsPublishKillSwitchActive: boolean;
   readonly socialMaintenanceEnabled: boolean;
+  readonly publicationWorkerPollingIntervalMs: number;
+  readonly publicationWorkerLeaseDurationSeconds: number;
+  readonly minScheduleLeadTimeSeconds: number;
+  readonly maxScheduleHorizonDays: number;
 }
 
 export interface RedactedSocialConfigMetadata {
@@ -212,7 +222,12 @@ export interface RedactedSocialConfigMetadata {
   readonly socialKillSwitchActive: boolean;
   readonly threadsConnectionKillSwitchActive: boolean;
   readonly threadsRefreshKillSwitchActive: boolean;
+  readonly threadsPublishKillSwitchActive: boolean;
   readonly socialMaintenanceEnabled: boolean;
+  readonly publicationWorkerPollingIntervalMs: number;
+  readonly publicationWorkerLeaseDurationSeconds: number;
+  readonly minScheduleLeadTimeSeconds: number;
+  readonly maxScheduleHorizonDays: number;
 }
 
 export type RawEnvironment = Record<string, string | undefined>;

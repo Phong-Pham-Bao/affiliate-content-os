@@ -1,6 +1,10 @@
 import { ConfigurationError, type ConfigurationIssue } from './errors.js';
 import {
   ALLOWED_SOCIAL_KEY_PROVIDERS,
+  DEFAULT_MAX_SCHEDULE_HORIZON_DAYS,
+  DEFAULT_MIN_SCHEDULE_LEAD_TIME_SECONDS,
+  DEFAULT_PUBLICATION_WORKER_LEASE_DURATION_SECONDS,
+  DEFAULT_PUBLICATION_WORKER_POLLING_INTERVAL_MS,
   DEFAULT_SOCIAL_CALLBACK_RESULT_TTL_SECONDS,
   DEFAULT_SOCIAL_TRANSACTION_TTL_SECONDS,
   type NodeEnv,
@@ -184,6 +188,42 @@ export function loadSocialConfig(rawEnv: RawEnvironment, nodeEnv?: NodeEnv): Soc
     issues,
   );
 
+  const publicationWorkerPollingIntervalMs = parseBoundedInteger(
+    rawEnv['PUBLICATION_WORKER_POLLING_INTERVAL_MS'],
+    'PUBLICATION_WORKER_POLLING_INTERVAL_MS',
+    100,
+    60000,
+    DEFAULT_PUBLICATION_WORKER_POLLING_INTERVAL_MS,
+    issues,
+  );
+
+  const publicationWorkerLeaseDurationSeconds = parseBoundedInteger(
+    rawEnv['PUBLICATION_WORKER_LEASE_DURATION_SECONDS'],
+    'PUBLICATION_WORKER_LEASE_DURATION_SECONDS',
+    10,
+    300,
+    DEFAULT_PUBLICATION_WORKER_LEASE_DURATION_SECONDS,
+    issues,
+  );
+
+  const minScheduleLeadTimeSeconds = parseBoundedInteger(
+    rawEnv['MIN_SCHEDULE_LEAD_TIME_SECONDS'],
+    'MIN_SCHEDULE_LEAD_TIME_SECONDS',
+    0,
+    3600,
+    DEFAULT_MIN_SCHEDULE_LEAD_TIME_SECONDS,
+    issues,
+  );
+
+  const maxScheduleHorizonDays = parseBoundedInteger(
+    rawEnv['MAX_SCHEDULE_HORIZON_DAYS'],
+    'MAX_SCHEDULE_HORIZON_DAYS',
+    1,
+    365,
+    DEFAULT_MAX_SCHEDULE_HORIZON_DAYS,
+    issues,
+  );
+
   const threadsConfig = validateThreadsConfig(rawEnv, nodeEnv, enabled, issues);
 
   if (issues.length > 0) {
@@ -199,6 +239,10 @@ export function loadSocialConfig(rawEnv: RawEnvironment, nodeEnv?: NodeEnv): Soc
     transactionTtlSeconds,
     callbackResultTtlSeconds,
     socialMaintenanceEnabled,
+    publicationWorkerPollingIntervalMs,
+    publicationWorkerLeaseDurationSeconds,
+    minScheduleLeadTimeSeconds,
+    maxScheduleHorizonDays,
     ...threadsConfig,
   });
 }
