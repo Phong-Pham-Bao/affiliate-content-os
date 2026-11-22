@@ -26,6 +26,7 @@ import {
   ThreadsSocialAuthAdapter,
   PostgresSocialPersistenceAdapter,
 } from '@affiliate-content-os/infrastructure/social';
+import { PostgresPublicationPersistenceAdapter } from '@affiliate-content-os/infrastructure/publication';
 import type { SocialPlatform } from '@affiliate-content-os/domain';
 import {
   SystemClock,
@@ -64,6 +65,7 @@ async function main(): Promise<void> {
   const analysisAdapter = new PostgresAnalysisAdapter(database.pool!);
   const workforceAdapter = new PostgresWorkforceAdapter(database.pool!);
   const socialPersistence = new PostgresSocialPersistenceAdapter(database);
+  const publicationPersistence = new PostgresPublicationPersistenceAdapter(database);
   const socialProtector =
     socialConfig.enabled && socialConfig.credentialEncryptionKeyBase64Url
       ? new LocalSocialCredentialProtector(
@@ -125,6 +127,7 @@ async function main(): Promise<void> {
     analysisAdapter,
     workforceAdapter,
     socialPersistence,
+    publicationPersistence,
     socialProtector,
     socialAdapters,
     clock,
@@ -145,6 +148,7 @@ async function main(): Promise<void> {
       analysis: providers.analysisProvider,
       workforce: providers.workforceProvider,
       social: providers.socialProvider,
+      publication: providers.publicationProvider,
     });
     const meta = getRedactedConfigMetadata(config);
     const dbMeta = getRedactedDatabaseMetadata(databaseConfig);

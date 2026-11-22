@@ -65,4 +65,6 @@ export {
   handleCancelPublication,
 } from './handlers.js';
 
+export { buildOpenApiPublicationPaths, buildOpenApiPublicationComponents } from './openapi.js';
+
 export { createPublicationRoutes } from './routes.js';

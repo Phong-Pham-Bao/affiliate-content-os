@@ -12,6 +12,7 @@ import type { PostgresCatalogAdapter } from '@affiliate-content-os/infrastructur
 import type { PostgresAnalysisAdapter } from '@affiliate-content-os/infrastructure/analysis';
 import type { PostgresWorkforceAdapter } from '@affiliate-content-os/infrastructure/workforce';
 import type { PostgresSocialPersistenceAdapter } from '@affiliate-content-os/infrastructure/social';
+import type { PostgresPublicationPersistenceAdapter } from '@affiliate-content-os/infrastructure/publication';
 import type {
   ClockPort,
   DefaultIdGenerator,
@@ -25,6 +26,7 @@ import type { CatalogRouteDependencies } from './catalog/index.js';
 import type { AnalysisRouteDependencies } from './analysis/index.js';
 import type { WorkforceRouteDependencies } from './workforce/index.js';
 import type { SocialRouteDependencies } from './social/index.js';
+import type { PublicationRouteDependencies } from './publication/index.js';
 
 export interface RouteProvidersContext {
   readonly database: Database;
@@ -33,6 +35,7 @@ export interface RouteProvidersContext {
   readonly analysisAdapter: PostgresAnalysisAdapter;
   readonly workforceAdapter: PostgresWorkforceAdapter;
   readonly socialPersistence: PostgresSocialPersistenceAdapter;
+  readonly publicationPersistence: PostgresPublicationPersistenceAdapter;
   readonly socialProtector?: SocialCredentialProtectorPort | undefined;
   readonly socialAdapters: ReadonlyMap<SocialPlatform, SocialAuthAdapter>;
   readonly clock: ClockPort;
@@ -166,6 +169,19 @@ export function createRouteProviders(ctx: RouteProvidersContext) {
     };
   };
 
+  const publicationProvider = async (
+    signal: AbortSignal,
+  ): Promise<PublicationRouteDependencies> => {
+    const authDeps = resolvedAuthDeps ?? (await authProvider(signal));
+    return {
+      auth: authDeps,
+      publicationPersistence: ctx.publicationPersistence,
+      workspaceAuthorization: ctx.tenancyAdapter,
+      clock: ctx.clock,
+      socialConfig: ctx.socialConfig,
+    };
+  };
+
   return {
     authProvider,
     workspaceProvider,
@@ -173,5 +189,6 @@ export function createRouteProviders(ctx: RouteProvidersContext) {
     analysisProvider,
     workforceProvider,
     socialProvider,
+    publicationProvider,
   };
 }

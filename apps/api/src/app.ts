@@ -17,6 +17,7 @@ import { createCatalogRoutes, type CatalogRouteDependencies } from './catalog/in
 import { createAnalysisRoutes, type AnalysisRouteDependencies } from './analysis/index.js';
 import { createWorkforceRoutes, type WorkforceRouteDependencies } from './workforce/index.js';
 import { createSocialRoutes, type SocialRouteDependencies } from './social/index.js';
+import { createPublicationRoutes, type PublicationRouteDependencies } from './publication/index.js';
 
 export interface CreateAppOptions {
   readonly config?: AppConfig | undefined;
@@ -26,6 +27,7 @@ export interface CreateAppOptions {
   readonly analysis?: AnalysisRouteDependencies | undefined;
   readonly workforce?: WorkforceRouteDependencies | undefined;
   readonly social?: SocialRouteDependencies | undefined;
+  readonly publication?: PublicationRouteDependencies | undefined;
 }
 
 const defaultDisabledAuthConfig: AuthConfig = Object.freeze({
@@ -93,6 +95,10 @@ export function createApp(options?: CreateAppOptions): FastifyInstance {
 
   if (options?.social) {
     void app.register(createSocialRoutes(options.social));
+  }
+
+  if (options?.publication) {
+    void app.register(createPublicationRoutes(options.publication));
   }
 
   return app;

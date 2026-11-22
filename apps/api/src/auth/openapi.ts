@@ -1,7 +1,9 @@
 import { buildOpenApiPaths } from './openapi-paths.js';
 import { problemDetailsJsonSchema } from './schemas.js';
+import { buildOpenApiPublicationComponents } from '../publication/openapi.js';
 
 export function buildOpenApiDocument(): Record<string, unknown> {
+  const publicationComponents = buildOpenApiPublicationComponents();
   return {
     openapi: '3.1.0',
     info: {
@@ -19,6 +21,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
     components: {
       schemas: {
         ProblemDetails: problemDetailsJsonSchema,
+        ...publicationComponents.schemas,
       },
     },
   };

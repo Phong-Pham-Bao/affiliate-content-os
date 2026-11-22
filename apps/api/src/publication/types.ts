@@ -4,7 +4,6 @@ import type {
   IdGeneratorPort,
   IdempotencyStorePort,
   PublicationPersistencePort,
-  SocialPublicationAdapter,
   WorkspaceAuthorizationPort,
 } from '@affiliate-content-os/application';
 import type {
@@ -21,7 +20,6 @@ export interface PublicationRouteDependencies {
   readonly socialConfig: SocialConfig;
   readonly publicationPersistence: PublicationPersistencePort;
   readonly workspaceAuthorization: WorkspaceAuthorizationPort;
-  readonly publicationAdapter?: SocialPublicationAdapter | undefined;
   readonly idempotencyStore?: IdempotencyStorePort | undefined;
   readonly clock?: ClockPort | undefined;
   readonly idGenerator?: IdGeneratorPort | undefined;

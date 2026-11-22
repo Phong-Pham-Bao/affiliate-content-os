@@ -346,7 +346,7 @@ async function markGated(
     params.leaseToken,
   ]);
 
-  const auditAdapter = createTransactionScopedPostgresAuditAdapter(tx as any);
+  const auditAdapter = createTransactionScopedPostgresAuditAdapter(tx);
   await auditAdapter.appendAuditEvent({
     id: parseAuditEventId(generateUuidV7()),
     workspaceId: params.workspaceId,
