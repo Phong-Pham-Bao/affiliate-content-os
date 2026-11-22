@@ -16,10 +16,16 @@ import {
   PostgresSocialPersistenceAdapter,
   ThreadsSocialAuthAdapter,
 } from '@affiliate-content-os/infrastructure/social';
+import {
+  PostgresPublicationPersistenceAdapter,
+  resolveSocialPublicationAdapter,
+} from '@affiliate-content-os/infrastructure/publication';
 import type {
+  PublicationPersistencePort,
   SocialAuthAdapter,
   SocialCredentialProtectorPort,
   SocialPersistencePort,
+  SocialPublicationAdapter,
 } from '@affiliate-content-os/application';
 import type { SocialPlatform } from '@affiliate-content-os/domain';
 import { startWorker } from './runner.js';
@@ -65,6 +71,9 @@ async function main(): Promise<void> {
   let socialPersistence: SocialPersistencePort | undefined;
   let credentialProtector: SocialCredentialProtectorPort | undefined;
   const socialAdapters = new Map<SocialPlatform, SocialAuthAdapter>();
+  const publicationPersistence: PublicationPersistencePort =
+    new PostgresPublicationPersistenceAdapter(database);
+  let publicationAdapter: SocialPublicationAdapter | undefined;
 
   if (socialConfig?.enabled) {
     socialPersistence = new PostgresSocialPersistenceAdapter(database);
@@ -103,6 +112,13 @@ async function main(): Promise<void> {
         }),
       );
     }
+
+    if (socialConfig.fakeAdapterEnabled && config.nodeEnv !== 'production') {
+      publicationAdapter = resolveSocialPublicationAdapter({
+        fakeAdapterEnabled: true,
+        environment: 'local',
+      });
+    }
   }
 
   // On Windows, child processes cannot receive POSIX signals from parent processes via kill().
@@ -128,6 +144,8 @@ async function main(): Promise<void> {
       credentialProtector,
       socialAdapters,
       socialMaintenanceEnabled: socialConfig?.socialMaintenanceEnabled,
+      publicationPersistence,
+      publicationAdapter,
       database,
     });
     console.log('Worker process stopped gracefully');

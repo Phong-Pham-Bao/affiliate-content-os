@@ -21,12 +21,15 @@ import type {
   DurableJobQueuePort,
   PersistExecutionResultTransactionPort,
   OperationPersistencePort,
+  PublicationPersistencePort,
   SocialAuthAdapter,
   SocialCredentialProtectorPort,
   SocialPersistencePort,
+  SocialPublicationAdapter,
 } from '@affiliate-content-os/application';
 import {
   maintainDueSocialAccounts,
+  processDuePublications,
   processDueSocialAccountRevocations,
 } from '@affiliate-content-os/application';
 import type { SocialPlatform } from '@affiliate-content-os/domain';
@@ -45,6 +48,8 @@ export interface WorkerDependencies {
   readonly credentialProtector?: SocialCredentialProtectorPort | undefined;
   readonly socialAdapters?: ReadonlyMap<SocialPlatform, SocialAuthAdapter> | undefined;
   readonly socialMaintenanceEnabled?: boolean | undefined;
+  readonly publicationPersistence?: PublicationPersistencePort | undefined;
+  readonly publicationAdapter?: SocialPublicationAdapter | undefined;
   readonly signal: AbortSignal;
   readonly database?: Database | undefined;
   readonly pool?: DatabasePool | undefined;
@@ -122,6 +127,13 @@ export async function runWorker(deps: WorkerDependencies): Promise<void> {
   const workerId = deps.workerId ?? `worker-${crypto.randomUUID()}`;
   const leaseDurationSeconds = deps.aiConfig?.workerLeaseDurationSeconds ?? 30;
   const pollingIntervalMs = deps.aiConfig?.workerPollingIntervalMs ?? 2000;
+  const publicationWorkerPollingIntervalMs =
+    deps.socialConfig?.publicationWorkerPollingIntervalMs ?? 2000;
+  const publicationWorkerLeaseDurationSeconds =
+    deps.socialConfig?.publicationWorkerLeaseDurationSeconds ?? 30;
+  const threadsHttpTimeoutMs = deps.socialConfig?.threadsHttpTimeoutMs ?? 10000;
+  const socialKillSwitchActive = deps.socialConfig?.socialKillSwitchActive ?? false;
+  const threadsPublishKillSwitchActive = deps.socialConfig?.threadsPublishKillSwitchActive ?? false;
 
   const pool = deps.pool ?? deps.database?.pool;
   const jobAdapter = deps.jobAdapter ?? (pool ? new PostgresJobAdapter(pool) : undefined);
@@ -182,7 +194,15 @@ export async function runWorker(deps: WorkerDependencies): Promise<void> {
     deps.socialAdapters,
   );
 
-  if (!canRunAI && !canRunMaintenance) {
+  const canRunPublications = Boolean(
+    deps.socialConfig?.enabled &&
+    deps.publicationAdapter &&
+    deps.publicationPersistence &&
+    !socialKillSwitchActive &&
+    !threadsPublishKillSwitchActive,
+  );
+
+  if (!canRunAI && !canRunMaintenance && !canRunPublications) {
     return waitInIdleHandle(deps);
   }
 
@@ -245,7 +265,42 @@ export async function runWorker(deps: WorkerDependencies): Promise<void> {
       }
     }
 
-    // 2. AI analysis / workforce jobs execution
+    // 2. Publication due execution (if enabled and fail-closed checks pass)
+    if (canRunPublications && deps.publicationPersistence && deps.publicationAdapter) {
+      try {
+        const publicationResult = await processDuePublications(
+          {
+            workerId,
+            maxBatchSize: 5,
+            leaseDurationSeconds: publicationWorkerLeaseDurationSeconds,
+          },
+          {
+            persistence: deps.publicationPersistence,
+            adapter: deps.publicationAdapter,
+            enabled: true,
+            publishKillSwitchActive: socialKillSwitchActive || threadsPublishKillSwitchActive,
+            adapterTimeoutMs: threadsHttpTimeoutMs,
+            clock: { now: () => new Date() },
+          },
+        );
+        if (publicationResult.processedCount > 0) {
+          hadWork = true;
+        }
+      } catch (err: unknown) {
+        const errorName = err instanceof Error ? err.name : 'UnknownError';
+        console.error(
+          JSON.stringify({
+            level: 'error',
+            event: 'worker.publication_failure',
+            workerId,
+            errorName,
+            timestamp: new Date().toISOString(),
+          }),
+        );
+      }
+    }
+
+    // 3. AI analysis / workforce jobs execution
     if (
       canRunAI &&
       jobAdapter &&
@@ -314,7 +369,11 @@ export async function runWorker(deps: WorkerDependencies): Promise<void> {
 
     if (deps.once) break;
     if (!hadWork) {
-      await delay(pollingIntervalMs, deps.signal);
+      const loopIntervalMs =
+        !canRunAI && !canRunMaintenance && canRunPublications
+          ? publicationWorkerPollingIntervalMs
+          : pollingIntervalMs;
+      await delay(loopIntervalMs, deps.signal);
     }
   }
 }

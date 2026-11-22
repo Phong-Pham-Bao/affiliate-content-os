@@ -6,9 +6,11 @@ import {
 } from '@affiliate-content-os/config';
 import type { Database } from '@affiliate-content-os/infrastructure/database';
 import type {
+  PublicationPersistencePort,
   SocialAuthAdapter,
   SocialCredentialProtectorPort,
   SocialPersistencePort,
+  SocialPublicationAdapter,
 } from '@affiliate-content-os/application';
 import type { SocialPlatform } from '@affiliate-content-os/domain';
 import { runWorker, type WorkerDependencies, type WorkerRuntimeHandle } from './worker.js';
@@ -27,6 +29,8 @@ export interface StartWorkerOptions {
   readonly credentialProtector?: SocialCredentialProtectorPort | undefined;
   readonly socialAdapters?: ReadonlyMap<SocialPlatform, SocialAuthAdapter> | undefined;
   readonly socialMaintenanceEnabled?: boolean | undefined;
+  readonly publicationPersistence?: PublicationPersistencePort | undefined;
+  readonly publicationAdapter?: SocialPublicationAdapter | undefined;
   readonly database: Database;
   readonly abortController?: AbortController | undefined;
   readonly installSignalHandlers?: boolean | undefined;
@@ -227,6 +231,8 @@ export async function startWorker(options: StartWorkerOptions): Promise<void> {
       credentialProtector: options.credentialProtector,
       socialAdapters: options.socialAdapters,
       socialMaintenanceEnabled: options.socialMaintenanceEnabled,
+      publicationPersistence: options.publicationPersistence,
+      publicationAdapter: options.publicationAdapter,
       database,
       signal: controller.signal,
       onStarted: handleStarted,
